@@ -1,0 +1,24 @@
+{
+  "name": "@lofify/backend",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "generate-schema": "drizzle-pgkit-migrator generate-schema --schema-dir src/db/schema --schema-file src/db/__generated__/schema.sql",
+    "create": "drizzle-pgkit-migrator create --schema-file src/db/__generated__/schema.sql --migrations-dir src/db/migrations",
+    "db:migrate": "drizzle-pgkit-migrator migrate --migrations-dir src/db/migrations up",
+    "db:migrate:list": "drizzle-pgkit-migrator migrate --migrations-dir src/db/migrations list",
+    "db:migrate:pending": "drizzle-pgkit-migrator migrate --migrations-dir src/db/migrations pending",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.45.2",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.10",
+    "drizzle-kit": "^0.31.10",
+    "drizzle-pgkit-migrator": "^0.1.1",
+    "typescript": "^5.6.2"
+  }
+}
