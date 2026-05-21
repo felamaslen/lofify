@@ -4,6 +4,28 @@
 """Restricts a numeric argument to the inclusive range [min, max]."""
 directive @constraint(min: Int!, max: Int!) on ARGUMENT_DEFINITION
 
+"""
+Container/codec to deliver. `ORIGINAL` streams the source file untouched; `AUTO_HI` and `AUTO_LO` let the server pick a sensible high- or low-bandwidth target; the remaining members pin a specific format.
+"""
+enum Format {
+  AAC
+  AUTO_HI
+  AUTO_LO
+  FLAC
+  OGG
+  ORIGINAL
+  WEBM
+}
+
+"""Playback duration of a track."""
+type Duration {
+  """
+  Human-readable form, e.g. `"05:32"` or `"1:02:14"` for tracks at least an hour long.
+  """
+  formatted: String!
+  seconds: Int!
+}
+
 """Snapshot of an ongoing or completed library scan."""
 type LibraryScan {
   """Files that failed to parse or upsert."""
@@ -26,9 +48,33 @@ type Mutation {
   noop: Void!
 }
 
+"""Boundary metadata for a `TrackConnection`."""
+type PageInfo {
+  """
+  Cursor of the last edge on the current page, or `null` for an empty page.
+  """
+  endCursor: ID
+  """True when more tracks exist after the current page in the sort order."""
+  hasNextPage: Boolean!
+  """True when more tracks exist before the current page in the sort order."""
+  hasPreviousPage: Boolean!
+  """
+  Cursor of the first edge on the current page, or `null` for an empty page.
+  """
+  startCursor: ID
+}
+
 type Query {
   """Returns the literal string `"pong"`. Useful as a liveness probe."""
   ping: String
+  """
+  Look up a single track by id. Returns `null` when no track with that id exists.
+  """
+  track(id: ID!): Track
+  """
+  List the library in Relay-cursor pagination order: by `artist`, `album`, `discNumber`, `trackNumber`, then `id` for stability. Supply exactly one of `first`/`last` and at most one of `after`/`before`.
+  """
+  tracks(after: String, before: String, first: Int, last: Int): TrackConnection
 }
 
 type Subscription {
@@ -36,6 +82,50 @@ type Subscription {
   Streams snapshots of the named scan every second until it completes. Yields no further events and closes the stream once the scan finishes or is evicted.
   """
   libraryScan(id: ID!): LibraryScan!
+}
+
+"""A single audio file in the library."""
+type Track {
+  album: String
+  artist: String
+  discNumber: Int
+  duration: Duration!
+  """
+  Container plus codec, lower-cased and space-separated, e.g. `"ogg vorbis"`, `"mp3"`, `"webm opus"`.
+  """
+  format: String!
+  id: ID!
+  title: String
+  trackNumber: Int
+  """
+  Signed URL the client should `GET` to stream this track. Re-call with different `quality`/`format` values to switch transcode targets.
+  """
+  url(
+    """Target container/codec. Defaults to `ORIGINAL` when omitted."""
+    format: Format
+    """
+    Target playback quality on an opaque 0–10 scale where higher is better.
+    """
+    quality: Int @constraint(max: 10, min: 0)
+  ): String!
+  year: String
+}
+
+"""One page of a Relay-style traversal over the track library."""
+type TrackConnection {
+  edges: [TrackEdge!]!
+  pageInfo: PageInfo!
+  """Total number of tracks in the library, ignoring pagination arguments."""
+  totalCount: Int!
+}
+
+"""A single entry in a `TrackConnection`."""
+type TrackEdge {
+  """
+  Cursor for paginating relative to this edge; equal to the track's `id`.
+  """
+  cursor: ID!
+  node: Track!
 }
 
 """

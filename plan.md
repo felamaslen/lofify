@@ -155,18 +155,18 @@ Goal: backend can trigger and observe scans.
 
 Goal: client can list and read tracks.
 
-- [ ] `Query.tracks(first, last, before, after): TrackConnection` — full
+- [x] `Query.tracks(first, last, before, after): TrackConnection` — full
       Relay connection. Sort: `artist`, `album`, `discNumber`, `trackNumber`.
-- [ ] `Query.track(id: ID!): Track`.
-- [ ] `type Track` per spec, including:
-  - [ ] `url(quality: Int @constraint(min:0,max:10), format: Format): String!`
+- [x] `Query.track(id: ID!): Track`.
+- [x] `type Track` per spec, including:
+  - [x] `url(quality: Int @constraint(min:0,max:10), format: Format): String!`
         — returns signed playback URL.
-  - [ ] `duration: Duration!` — new scalar/object type with `seconds: Int!`
+  - [x] `duration: Duration!` — new scalar/object type with `seconds: Int!`
         and `formatted: String!` (e.g. `05:32`).
-  - [ ] `format: String!` — derived from db `format` + `codec` (e.g.
+  - [x] `format: String!` — derived from db `format` + `codec` (e.g.
         `"ogg vorbis"`, `"mp3"`, `"webm opus"`).
-- [ ] `enum Format { ORIGINAL, AUTO_HI, AUTO_LO, AAC, OGG, WEBM, FLAC }`.
-- [ ] Tests cover pagination, sort order, `url` signature shape.
+- [x] `enum Format { ORIGINAL, AUTO_HI, AUTO_LO, AAC, OGG, WEBM, FLAC }`.
+- [x] Tests cover pagination, sort order, `url` signature shape.
 
 ---
 

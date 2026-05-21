@@ -3,11 +3,197 @@
  * Do not manually edit. Regenerate by running `npx grats`.
  */
 
-import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, GraphQLInt, specifiedDirectives, GraphQLObjectType, GraphQLString, GraphQLID, GraphQLBoolean } from "graphql";
+import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, GraphQLInt, specifiedDirectives, GraphQLObjectType, GraphQLString, GraphQLID, GraphQLEnumType, GraphQLList, GraphQLBoolean } from "graphql";
 import { ping as queryPingResolver, noop as mutationNoopResolver } from "./../root.js";
+import { url as trackUrlResolver } from "./../track.js";
+import { track as queryTrackResolver, tracks as queryTracksResolver } from "./../track-queries.js";
 import { libraryScan as mutationLibraryScanResolver } from "./../library-scan.js";
 import { libraryScan as subscriptionLibraryScanResolver } from "./../library-scan-subscription.js";
 export function getSchema(): GraphQLSchema {
+    const DurationType: GraphQLObjectType = new GraphQLObjectType({
+        name: "Duration",
+        description: "Playback duration of a track.",
+        fields() {
+            return {
+                formatted: {
+                    description: "Human-readable form, e.g. `\"05:32\"` or `\"1:02:14\"` for tracks at least an hour long.",
+                    name: "formatted",
+                    type: new GraphQLNonNull(GraphQLString)
+                },
+                seconds: {
+                    name: "seconds",
+                    type: new GraphQLNonNull(GraphQLInt)
+                }
+            };
+        }
+    });
+    const FormatType: GraphQLEnumType = new GraphQLEnumType({
+        description: "Container/codec to deliver. `ORIGINAL` streams the source file untouched; `AUTO_HI` and `AUTO_LO` let the server pick a sensible high- or low-bandwidth target; the remaining members pin a specific format.",
+        name: "Format",
+        values: {
+            AAC: {
+                value: "AAC"
+            },
+            AUTO_HI: {
+                value: "AUTO_HI"
+            },
+            AUTO_LO: {
+                value: "AUTO_LO"
+            },
+            FLAC: {
+                value: "FLAC"
+            },
+            OGG: {
+                value: "OGG"
+            },
+            ORIGINAL: {
+                value: "ORIGINAL"
+            },
+            WEBM: {
+                value: "WEBM"
+            }
+        }
+    });
+    const TrackType: GraphQLObjectType = new GraphQLObjectType({
+        name: "Track",
+        description: "A single audio file in the library.",
+        fields() {
+            return {
+                album: {
+                    name: "album",
+                    type: GraphQLString
+                },
+                artist: {
+                    name: "artist",
+                    type: GraphQLString
+                },
+                discNumber: {
+                    name: "discNumber",
+                    type: GraphQLInt
+                },
+                duration: {
+                    name: "duration",
+                    type: new GraphQLNonNull(DurationType)
+                },
+                format: {
+                    description: "Container plus codec, lower-cased and space-separated, e.g. `\"ogg vorbis\"`, `\"mp3\"`, `\"webm opus\"`.",
+                    name: "format",
+                    type: new GraphQLNonNull(GraphQLString)
+                },
+                id: {
+                    name: "id",
+                    type: new GraphQLNonNull(GraphQLID)
+                },
+                title: {
+                    name: "title",
+                    type: GraphQLString
+                },
+                trackNumber: {
+                    name: "trackNumber",
+                    type: GraphQLInt
+                },
+                url: {
+                    description: "Signed URL the client should `GET` to stream this track. Re-call with different `quality`/`format` values to switch transcode targets.",
+                    name: "url",
+                    type: new GraphQLNonNull(GraphQLString),
+                    args: {
+                        format: {
+                            description: "Target container/codec. Defaults to `ORIGINAL` when omitted.",
+                            type: FormatType
+                        },
+                        quality: {
+                            description: "Target playback quality on an opaque 0\u201310 scale where higher is better.",
+                            type: GraphQLInt,
+                            extensions: {
+                                grats: {
+                                    directives: [{
+                                            name: "constraint",
+                                            args: {
+                                                max: 10,
+                                                min: 0
+                                            }
+                                        }]
+                                }
+                            }
+                        }
+                    },
+                    resolve(source, args) {
+                        return trackUrlResolver(source, args.quality, args.format);
+                    }
+                },
+                year: {
+                    name: "year",
+                    type: GraphQLString
+                }
+            };
+        }
+    });
+    const TrackEdgeType: GraphQLObjectType = new GraphQLObjectType({
+        name: "TrackEdge",
+        description: "A single entry in a `TrackConnection`.",
+        fields() {
+            return {
+                cursor: {
+                    description: "Cursor for paginating relative to this edge; equal to the track's `id`.",
+                    name: "cursor",
+                    type: new GraphQLNonNull(GraphQLID)
+                },
+                node: {
+                    name: "node",
+                    type: new GraphQLNonNull(TrackType)
+                }
+            };
+        }
+    });
+    const PageInfoType: GraphQLObjectType = new GraphQLObjectType({
+        name: "PageInfo",
+        description: "Boundary metadata for a `TrackConnection`.",
+        fields() {
+            return {
+                endCursor: {
+                    description: "Cursor of the last edge on the current page, or `null` for an empty page.",
+                    name: "endCursor",
+                    type: GraphQLID
+                },
+                hasNextPage: {
+                    description: "True when more tracks exist after the current page in the sort order.",
+                    name: "hasNextPage",
+                    type: new GraphQLNonNull(GraphQLBoolean)
+                },
+                hasPreviousPage: {
+                    description: "True when more tracks exist before the current page in the sort order.",
+                    name: "hasPreviousPage",
+                    type: new GraphQLNonNull(GraphQLBoolean)
+                },
+                startCursor: {
+                    description: "Cursor of the first edge on the current page, or `null` for an empty page.",
+                    name: "startCursor",
+                    type: GraphQLID
+                }
+            };
+        }
+    });
+    const TrackConnectionType: GraphQLObjectType = new GraphQLObjectType({
+        name: "TrackConnection",
+        description: "One page of a Relay-style traversal over the track library.",
+        fields() {
+            return {
+                edges: {
+                    name: "edges",
+                    type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(TrackEdgeType)))
+                },
+                pageInfo: {
+                    name: "pageInfo",
+                    type: new GraphQLNonNull(PageInfoType)
+                },
+                totalCount: {
+                    description: "Total number of tracks in the library, ignoring pagination arguments.",
+                    name: "totalCount",
+                    type: new GraphQLNonNull(GraphQLInt)
+                }
+            };
+        }
+    });
     const QueryType: GraphQLObjectType = new GraphQLObjectType({
         name: "Query",
         fields() {
@@ -18,6 +204,41 @@ export function getSchema(): GraphQLSchema {
                     type: GraphQLString,
                     resolve() {
                         return queryPingResolver();
+                    }
+                },
+                track: {
+                    description: "Look up a single track by id. Returns `null` when no track with that id exists.",
+                    name: "track",
+                    type: TrackType,
+                    args: {
+                        id: {
+                            type: new GraphQLNonNull(GraphQLID)
+                        }
+                    },
+                    resolve(_source, args) {
+                        return queryTrackResolver(args.id);
+                    }
+                },
+                tracks: {
+                    description: "List the library in Relay-cursor pagination order: by `artist`, `album`, `discNumber`, `trackNumber`, then `id` for stability. Supply exactly one of `first`/`last` and at most one of `after`/`before`.",
+                    name: "tracks",
+                    type: TrackConnectionType,
+                    args: {
+                        after: {
+                            type: GraphQLString
+                        },
+                        before: {
+                            type: GraphQLString
+                        },
+                        first: {
+                            type: GraphQLInt
+                        },
+                        last: {
+                            type: GraphQLInt
+                        }
+                    },
+                    resolve(_source, args) {
+                        return queryTracksResolver(args.first, args.last, args.after, args.before);
                     }
                 }
             };
@@ -125,6 +346,6 @@ export function getSchema(): GraphQLSchema {
         query: QueryType,
         mutation: MutationType,
         subscription: SubscriptionType,
-        types: [LibraryScanType, MutationType, QueryType, SubscriptionType, VoidType]
+        types: [FormatType, DurationType, LibraryScanType, MutationType, PageInfoType, QueryType, SubscriptionType, TrackType, TrackConnectionType, TrackEdgeType, VoidType]
     });
 }
