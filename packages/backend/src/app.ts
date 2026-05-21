@@ -1,7 +1,9 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import { ApolloServer } from '@apollo/server';
 import fastifyApollo, { fastifyApolloDrainPlugin } from '@as-integrations/fastify';
+import { env } from './env.js';
 import { buildSchema } from './graphql/index.js';
+import { watchLibrary } from './scanner/watch.js';
 
 /** Build the Fastify app with all routes wired but no listener bound. */
 export async function buildApp(): Promise<FastifyInstance> {
@@ -27,6 +29,11 @@ export async function buildApp(): Promise<FastifyInstance> {
     req.raw.on('close', () => {
       reply.raw.end();
     });
+  });
+
+  const watcher = watchLibrary(env.LIBRARY_PATH);
+  app.addHook('onClose', async () => {
+    await watcher.close();
   });
 
   return app;

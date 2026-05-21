@@ -7,27 +7,12 @@ endpoint, the library scanner, and the database schema + migrations.
 
 ```
 src/
-  index.ts          Entrypoint: boots Fastify on BACKEND_HOST:BACKEND_PORT.
-  app.ts            buildApp(): Fastify with /healthz, /graphql,
-                    /graphql/stream. No listener bound — used by tests.
-  instrument.ts     OpenTelemetry SDK bootstrap. Side-effect module
-                    preloaded via `tsx --import ./src/instrument.ts`
-                    so OTel installs before anything else loads.
-  env.ts            zod-parsed view of process.env. Import `env` from
-                    here rather than reading process.env directly.
-  graphql/
-    root.ts         @gqlQueryField / @gqlMutationField resolvers.
-    types.ts        Shared types (Void).
-    directives/     Directive definitions + runtime enforcement
-                    (e.g. constraint.ts for @constraint).
-    index.ts        buildSchema(): grats schema + directive wrappers.
-    __generated__/  schema.ts + schema.graphql (written by `grats`).
-  db/
-    schema/         Drizzle schema (source of truth).
-    migrations/     Plain SQL migrations.
-    __generated__/  schema.sql output of `generate-schema` (gitignored).
-  test/             Vitest behavioural tests driven by fastify.inject.
-  scanner/          Lands in chunk 4 — not yet present.
+  app.ts        buildApp(): Fastify with /healthz, /graphql,
+                /graphql/stream. No listener bound — used by tests.
+  graphql/      GraphQL schema (grats source) and resolvers.
+  db/           Drizzle schema, migrations, and shared pg pool.
+  scanner/      Library scan + chokidar watcher (in-process).
+  test/         Vitest behavioural tests driven by fastify.inject.
 ```
 
 ## Scripts
@@ -96,3 +81,5 @@ the resolver runs.
 | `BACKEND_PORT`                 | `4000`                |                      |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`  | `http://otel-lgtm:4318` | OTLP/HTTP base URL |
 | `OTEL_SERVICE_NAME`            | `lofify-backend`      |                      |
+| `DATABASE_URL`                 | _(unset)_             | Postgres connection string for the Drizzle pool. |
+| `LIBRARY_PATH`                 | _required_            | Absolute path to the music library. The chokidar watcher follows it at boot. |

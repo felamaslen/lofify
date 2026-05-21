@@ -10,8 +10,8 @@ const Schema = z.object({
   /** TCP port the HTTP server listens on. */
   BACKEND_PORT: z.coerce.number().int().positive().default(4000),
 
-  /** Absolute path to the music library root. Unset disables the file watcher. */
-  LIBRARY_PATH: z.string().optional(),
+  /** Absolute path to the music library root. */
+  LIBRARY_PATH: z.string(),
 
   /** HMAC secret used to sign and verify playback URLs. */
   PLAYBACK_SIGNING_SECRET: z.string().default('dev-secret'),
