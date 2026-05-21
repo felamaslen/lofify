@@ -4,6 +4,7 @@ import fastifyApollo, { fastifyApolloDrainPlugin } from '@as-integrations/fastif
 import { createHandler as createSseHandler } from 'graphql-sse/lib/use/fastify';
 import { env } from './env.js';
 import { buildSchema } from './graphql/index.js';
+import { startScanSchedule } from './scanner/cron.js';
 import { watchLibrary } from './scanner/watch.js';
 
 /** Build the Fastify app with all routes wired but no listener bound. */
@@ -27,7 +28,9 @@ export async function buildApp(): Promise<FastifyInstance> {
   });
 
   const watcher = watchLibrary(env.LIBRARY_PATH);
+  const stopSchedule = startScanSchedule();
   app.addHook('onClose', async () => {
+    stopSchedule();
     await watcher.close();
   });
 

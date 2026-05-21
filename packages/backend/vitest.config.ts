@@ -26,6 +26,7 @@ export default defineConfig({
     env: {
       LIBRARY_PATH: libraryPath,
       DATABASE_URL: databaseUrl,
+      SCAN_CRON: '',
     },
   },
 });

@@ -123,8 +123,9 @@ control-plane RPC.
       upsert. Started during backend boot. `LIBRARY_PATH` is required.
 - [x] DB writes use the backend's existing Drizzle connection — no
       separate pool.
-- [x] No cron inside the scanner — orchestration is external (e.g. a
-      cron job that calls the `libraryScan` mutation).
+- [x] ~~No cron inside the scanner — orchestration is external~~ Cron
+      now lives inside the backend via [`croner`](https://github.com/Hexagon/croner);
+      schedule via `SCAN_CRON` (default `0 2 * * *`), empty disables.
 
 ---
 

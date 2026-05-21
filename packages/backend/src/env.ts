@@ -16,6 +16,9 @@ const Schema = z.object({
   /** Maximum number of files the scanner parses and upserts in parallel. */
   SCAN_CONCURRENCY: z.coerce.number().int().positive().default(4),
 
+  /** Cron expression for the scheduled full library scan. Empty disables the schedule (manual `Mutation.libraryScan` still works). */
+  SCAN_CRON: z.string().default('0 2 * * *'),
+
   /** HMAC secret used to sign and verify playback URLs. */
   PLAYBACK_SIGNING_SECRET: z.string().default('dev-secret'),
 

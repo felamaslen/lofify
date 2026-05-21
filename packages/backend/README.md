@@ -85,3 +85,5 @@ the resolver runs.
 | `OTEL_SERVICE_NAME`            | `lofify-backend`      |                      |
 | `DATABASE_URL`                 | _(unset)_             | Postgres connection string for the Drizzle pool. |
 | `LIBRARY_PATH`                 | _required_            | Absolute path to the music library. The chokidar watcher follows it at boot. |
+| `SCAN_CONCURRENCY`             | `4`                   | Max files parsed and upserted in parallel by the scanner. |
+| `SCAN_CRON`                    | `0 2 * * *`           | Cron expression for the recurring full library scan. Empty disables. |
