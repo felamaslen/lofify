@@ -33,18 +33,21 @@ built yet — empty repo.
 
 Goal: empty but bootable monorepo.
 
-- [ ] `pnpm-workspace.yaml` with `packages/*`.
-- [ ] Root `package.json` with shared scripts (`lint`, `typecheck`, `test`,
+- [x] `pnpm-workspace.yaml` with `packages/*`.
+- [x] Root `package.json` with shared scripts (`lint`, `typecheck`, `test`,
       `dev`, `build`).
-- [ ] Shared TS config (`tsconfig.base.json`) + per-package extends.
-- [ ] ESLint + Prettier config at root.
-- [ ] `.gitignore`, `.editorconfig`, `.nvmrc`.
-- [ ] `Dockerfile` (multi-stage, builds backend + UI).
-- [ ] `docker-compose.dev.yml` — Postgres, otel-lgtm, backend in watch mode,
-      UI dev server, scanner in watch/dev mode.
-- [ ] `docker-compose.prod.yml` — Postgres, otel-lgtm, backend, UI (built
+- [x] Shared TS config (`tsconfig.json` + `tsconfig.build.json` which
+      excludes tests) — per-package configs extend these.
+- [x] ESLint + Prettier config at root.
+- [x] `.gitignore`, `.editorconfig`, `.tool-versions` (asdf: nodejs 24,
+      pnpm 9).
+- [x] `Dockerfile` (multi-stage: backend, ui, scanner).
+- [x] `docker-compose.dev.yml` — Postgres (host port 5433), otel-lgtm,
+      backend in watch mode, UI dev server, scanner in watch/dev mode.
+- [x] `docker-compose.prod.yml` — Postgres, otel-lgtm, backend, UI (built
       static), scanner.
-- [ ] `.env.example` documenting every env var the system reads.
+- [x] `.env.example` documenting every env var the system reads —
+      `DATABASE_URL` only (no separate `POSTGRES_*`).
 
 State after chunk: `docker compose -f docker-compose.dev.yml up` boots an
 empty stack.
