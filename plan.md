@@ -10,7 +10,7 @@ built yet — empty repo.
 ## Conventions (apply to every chunk)
 
 - **Package manager**: pnpm workspaces (monorepo).
-- **Language**: TypeScript everywhere except the scanner (Rust).
+- **Language**: TypeScript everywhere.
 - **DB schema (Drizzle, TS)**: document every column/table with JSDoc unless
   the purpose is obvious from the name. No newlines inside JSDoc comments
   except to separate paragraphs.
@@ -41,11 +41,12 @@ Goal: empty but bootable monorepo.
 - [x] ESLint + Prettier config at root.
 - [x] `.gitignore`, `.editorconfig`, `.tool-versions` (asdf: nodejs 24,
       pnpm 9).
-- [x] `Dockerfile` (multi-stage: backend, ui, scanner).
+- [x] `Dockerfile` (multi-stage: backend, ui). Scanner is part of backend.
 - [x] `docker-compose.dev.yml` — Postgres (host port 5433), otel-lgtm,
-      backend in watch mode, UI dev server, scanner in watch/dev mode.
+      backend in watch mode, UI dev server. (Scanner runs inside backend;
+      no separate service.)
 - [x] `docker-compose.prod.yml` — Postgres, otel-lgtm, backend, UI (built
-      static), scanner.
+      static).
 - [x] `.env.example` documenting every env var the system reads —
       `DATABASE_URL` only (no separate `POSTGRES_*`).
 
@@ -58,19 +59,22 @@ empty stack.
 
 Goal: Postgres reachable, Drizzle schema compiled, migrations run.
 
-- [ ] `packages/db` — Drizzle schema package.
-- [ ] Postgres enum `TrackFormat` (flac, ogg, mp3, wma, …).
-- [ ] Table `Tracks` (all columns per spec, see below).
-- [ ] Indexes on `artist`, `album`.
-- [ ] Unique index on `file`.
-- [ ] Migration runner wired to
-      [drizzle-pg-kit-migrator](https://github.com/felamaslen/drizzle-pg-kit-migrator).
-- [ ] `pnpm db:migrate` script.
+- [x] ~~`packages/db`~~ Drizzle schema lives in `packages/backend/src/db/`
+      (backend is the only TS consumer).
+- [x] ~~Postgres enum `TrackFormat`~~ stored as `text` for now; revisit
+      once the scanner is in.
+- [x] Table `Tracks` (all columns per spec, see below).
+- [x] Indexes on `artist`, `album`.
+- [x] Unique index on `file`.
+- [x] Migration runner wired to
+      [drizzle-pgkit-migrator](https://github.com/felamaslen/drizzle-pgkit-migrator).
+- [x] `pnpm db:migrate` script (delegates to `@lofify/backend`).
 
-`Tracks` columns: `id` (uuidv7 PK), `createdAt`, `updatedAt`, `scannedAt`,
-`title`, `trackNumber`, `discNumber`, `artist`, `album`, `year`, `format`
-(enum), `codec`, `bitRate` (nullable → VBR), `sampleRate`, `isLossless`,
-`file` (unique, absolute path), `sizeBytes`, `durationSeconds`.
+`Tracks` columns: `id` (uuidv7 PK, defaults to `uuidv7()` — built-in in
+PG18), `createdAt`, `updatedAt`, `scannedAt`, `title`, `trackNumber`,
+`discNumber`, `artist`, `album`, `year`, `format` (text — was planned as
+enum), `codec`, `bitRate` (nullable → VBR), `sampleRate`, `isLossless`,
+`file` (unique, absolute path), `sizeBytes` (bigint), `durationSeconds`.
 
 ---
 
@@ -93,32 +97,34 @@ Goal: GraphQL server reachable, healthcheck green, otel exporting.
 
 ---
 
-## Chunk 4 — Scanner package (Rust)
+## Chunk 4 — Scanner module (inside backend)
 
-Goal: standalone Rust binary that can scan a library and watch it.
+Goal: backend can scan a library and watch it for changes. Lives at
+`packages/backend/src/scanner/`. Runs in-process with the GraphQL server,
+so `Subscription.libraryScan` reads live in-memory progress directly — no
+control-plane RPC.
 
-- [ ] `packages/scanner` with a `package.json` exposing `build` / `start` /
-      `dev` scripts that shell into `cargo`.
-- [ ] Rust crate with two binaries (or subcommands):
-  - [ ] `scan <library-path>` — kicks off a one-shot rescan, prints a
-        scan-id, exits (background job continues in the watcher process, see
-        below) **or** runs in-process and exposes status via local IPC. Pick
-        one and document here once decided.
-  - [ ] `status <scan-id>` — returns `{ filesTotal, scannedTotal,
-        errorsTotal, errors[] }`. State lives in memory only; wiped on
-        completion.
-  - [ ] `watch <library-path>` — long-running. On add: parse + upsert. On
-        delete: remove by `file`. On change: re-parse + upsert.
-- [ ] Audio metadata parsing (symphonia or lofty) → fills every `Tracks`
-      column.
-- [ ] DB writes go through the same Postgres the backend uses (shared
-      connection string via env).
-- [ ] No cron inside scanner — orchestration is external.
-
-Open question to settle in this chunk: process model for `scan` + `status`.
-Likely a single long-running scanner daemon with a small HTTP/Unix-socket
-control plane that the backend calls into, so `status` can read live
-in-memory progress. **Update this section once decided.**
+- [ ] `scanner/runner.ts` — orchestrator. Holds a map of `scanId →
+      ScanState { filesTotal, scannedTotal, errorsTotal, errors[] }`.
+      State lives in memory only; entries are wiped some grace period
+      after completion.
+- [ ] `scanner/parse.ts` — audio metadata parsing via
+      [`music-metadata`](https://github.com/borewit/music-metadata) →
+      fills every `Tracks` column. Use `fs.stat` for `sizeBytes` and
+      mime/format detection.
+- [ ] `scanner/scan.ts` — `scanLibrary(path)`: walks the library
+      (`fast-glob` or `node:fs/promises` recursive read), parses each
+      file, upserts into `Tracks` keyed by `file`. Returns a `scanId`
+      synchronously; work runs in the background and updates the
+      in-memory `ScanState`.
+- [ ] `scanner/watch.ts` — long-running watcher via
+      [`chokidar`](https://github.com/paulmillr/chokidar). On add: parse
+      + upsert. On unlink: delete by `file`. On change: re-parse +
+      upsert. Started during backend boot when `LIBRARY_PATH` is set.
+- [ ] DB writes use the backend's existing Drizzle connection — no
+      separate pool.
+- [ ] No cron inside the scanner — orchestration is external (e.g. a
+      cron job that calls the `libraryScan` mutation).
 
 ---
 
@@ -126,8 +132,8 @@ in-memory progress. **Update this section once decided.**
 
 Goal: backend can trigger and observe scans.
 
-- [ ] `Mutation.libraryScan: LibraryScan!` — calls scanner control plane,
-      returns initial `LibraryScan`.
+- [ ] `Mutation.libraryScan: LibraryScan!` — invokes
+      `scanner.scanLibrary(LIBRARY_PATH)`, returns initial `LibraryScan`.
 - [ ] `type LibraryScan { id: ID!, scannedTotal: Int!, errorsTotal: Int!,
       filesTotal: Int! }`.
 - [ ] `Subscription.libraryScan(id: ID!): LibraryScan` over SSE on `GET
