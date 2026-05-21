@@ -13,6 +13,9 @@ const Schema = z.object({
   /** Absolute path to the music library root. */
   LIBRARY_PATH: z.string(),
 
+  /** Maximum number of files the scanner parses and upserts in parallel. */
+  SCAN_CONCURRENCY: z.coerce.number().int().positive().default(4),
+
   /** HMAC secret used to sign and verify playback URLs. */
   PLAYBACK_SIGNING_SECRET: z.string().default('dev-secret'),
 

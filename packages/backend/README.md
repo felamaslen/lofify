@@ -69,9 +69,11 @@ the resolver runs.
 ## Endpoints
 
 - `GET /healthz` — liveness probe; returns `{ "status": "ok" }`.
-- `POST /graphql` — Apollo Server over Fastify.
-- `GET /graphql/stream` — SSE endpoint (stub; full subscription wiring
-  lands in chunk 5).
+- `POST /graphql` — Apollo Server over Fastify (queries + mutations).
+- `POST /graphql/stream` — GraphQL subscriptions over SSE via
+  [`graphql-sse`](https://github.com/enisdenjo/graphql-sse)
+  (distinct-connections mode). Send a `subscription` operation with
+  `Accept: text/event-stream`.
 
 ## Env
 

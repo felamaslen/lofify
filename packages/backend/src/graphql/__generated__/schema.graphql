@@ -4,7 +4,24 @@
 """Restricts a numeric argument to the inclusive range [min, max]."""
 directive @constraint(min: Int!, max: Int!) on ARGUMENT_DEFINITION
 
+"""Snapshot of an ongoing or completed library scan."""
+type LibraryScan {
+  """Files that failed to parse or upsert."""
+  errorsTotal: Int!
+  """
+  Total files discovered on disk for this scan. Null until the file walk has finished — clients should render an indeterminate progress state in that case.
+  """
+  filesTotal: Int
+  id: ID!
+  """Files successfully parsed and upserted so far."""
+  scannedTotal: Int!
+}
+
 type Mutation {
+  """
+  Triggers a full scan of the configured library. Returns immediately with `filesTotal: null`; the file walk and parsing run in the background. Observe progress via `Subscription.libraryScan`.
+  """
+  libraryScan: LibraryScan!
   """Does nothing."""
   noop: Void!
 }
@@ -12,6 +29,13 @@ type Mutation {
 type Query {
   """Returns the literal string `"pong"`. Useful as a liveness probe."""
   ping: String
+}
+
+type Subscription {
+  """
+  Streams snapshots of the named scan every second until it completes. Yields no further events and closes the stream once the scan finishes or is evicted.
+  """
+  libraryScan(id: ID!): LibraryScan!
 }
 
 """

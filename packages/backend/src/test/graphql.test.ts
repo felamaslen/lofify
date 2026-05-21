@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, expect, test } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { gql, makeApp } from './inject.js';
+import gql from 'fake-tag';
+import { gqlRequest, makeApp } from './inject.js';
 
 let app: FastifyInstance;
 beforeAll(async () => {
@@ -11,12 +12,12 @@ afterAll(async () => {
 });
 
 test('Query.ping returns pong', async () => {
-  const body = await gql(app, '{ ping }');
+  const body = await gqlRequest(app, gql`{ ping }`);
   expect(body).toEqual({ data: { ping: 'pong' } });
 });
 
 test('Mutation.noop returns a Void payload', async () => {
-  const body = await gql(app, 'mutation { noop { _ } }');
+  const body = await gqlRequest(app, gql`mutation { noop { _ } }`);
   expect(body.errors).toBeUndefined();
   expect(body.data).toEqual({ noop: { _: null } });
 });

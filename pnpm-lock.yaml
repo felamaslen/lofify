@@ -77,6 +77,9 @@ importers:
       graphql:
         specifier: ^16.14.0
         version: 16.14.0
+      graphql-sse:
+        specifier: ^2.6.0
+        version: 2.6.0(graphql@16.14.0)
       grats:
         specifier: ^0.0.36
         version: 0.0.36
@@ -108,6 +111,9 @@ importers:
       drizzle-pgkit-migrator:
         specifier: ^0.1.1
         version: 0.1.1(@inquirer/prompts@5.5.0)(@opentelemetry/api@1.9.1)(@types/node@25.9.1)(@types/pg@8.20.0)(drizzle-kit@0.31.10)(pg-query-stream@4.10.3(pg@8.21.0))(typescript@5.9.3)
+      fake-tag:
+        specifier: ^5.0.0
+        version: 5.0.0
       tsx:
         specifier: ^4.22.3
         version: 4.22.3
@@ -2172,6 +2178,10 @@ packages:
     resolution: {integrity: sha512-hMQ4CX1p1izmuLYyZqLMO/qGNw10wSv9QDCPfzXfyFrOaCSSoRfqE1Kf1s5an66J5JZC62NewG+mK49jOCtQew==}
     engines: {node: '>=4'}
 
+  fake-tag@5.0.0:
+    resolution: {integrity: sha512-NMXlFIKCobSTcJvt80ehRjD49BwQNt/k+UDPw+rSDHH6aWO7I37rGGKKLH9NkMsBTsgOVERoI7aTCBPrmfOdrA==}
+    engines: {node: ^14.17.0 || ^16.0.0 || >= 18.0.0}
+
   fast-decode-uri-component@1.0.1:
     resolution: {integrity: sha512-WKgKWg5eUxvRZGwW8FvfbaH7AXSh2cL+3j5fMGzUMCxWBJ3dV3a7Wz8y2f/uQ0e3B6WmodD3oS54jTQ9HVTIIg==}
 
@@ -2328,6 +2338,12 @@ packages:
 
   graceful-fs@4.2.11:
     resolution: {integrity: sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==}
+
+  graphql-sse@2.6.0:
+    resolution: {integrity: sha512-BXT5Rjv9UFunjQsmN9WWEIq+TFNhgYibgwo1xkXLxzguQVyOd6paJ4v5DlL9K5QplS0w74bhF+aUiqaGXZBaug==}
+    engines: {node: '>=12'}
+    peerDependencies:
+      graphql: '>=0.11 <=16'
 
   graphql@16.14.0:
     resolution: {integrity: sha512-BBvQ/406p+4CZbTpCbVPSxfzrZrbnuWSP1ELYgyS6B+hNeKzgrdB4JczCa5VZUBQrDa9hUngm0KnexY6pJRN5Q==}
@@ -5672,6 +5688,8 @@ snapshots:
       iconv-lite: 0.4.24
       tmp: 0.0.33
 
+  fake-tag@5.0.0: {}
+
   fast-decode-uri-component@1.0.1: {}
 
   fast-deep-equal@3.1.3: {}
@@ -5864,6 +5882,10 @@ snapshots:
   gopd@1.2.0: {}
 
   graceful-fs@4.2.11: {}
+
+  graphql-sse@2.6.0(graphql@16.14.0):
+    dependencies:
+      graphql: 16.14.0
 
   graphql@16.14.0: {}
 

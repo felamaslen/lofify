@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events';
 import { v4 as uuidv4 } from 'uuid';
 
 export type ScanError = {
@@ -7,7 +8,8 @@ export type ScanError = {
 
 export type ScanState = {
   id: string;
-  filesTotal: number;
+  /** Null until the file walk has finished; clients should show an indeterminate progress state while null. */
+  filesTotal: number | null;
   scannedTotal: number;
   errorsTotal: number;
   errors: ScanError[];
@@ -17,18 +19,27 @@ export type ScanState = {
 const GRACE_MS = 60_000;
 
 const scans = new Map<string, ScanState>();
+const events = new EventEmitter();
 
-/** Register a fresh scan and return its mutable in-memory state. */
+let activeScanId: string | null = null;
+
+/** Register a fresh scan and return its mutable in-memory state. At most one scan may be active at a time; throws a `PRECONDITION_FAILED` GraphQL error when another scan is in progress. */
 export function createScan(): ScanState {
+  if (activeScanId !== null) {
+    throw Object.assign(new Error(`Scan already in progress`), {
+      extensions: { code: 'PRECONDITION_FAILED' },
+    });
+  }
   const state: ScanState = {
     id: uuidv4(),
-    filesTotal: 0,
+    filesTotal: null,
     scannedTotal: 0,
     errorsTotal: 0,
     errors: [],
     completedAt: null,
   };
   scans.set(state.id, state);
+  activeScanId = state.id;
   return state;
 }
 
@@ -53,7 +64,20 @@ export function completeScan(id: string): void {
   const state = scans.get(id);
   if (!state) return;
   state.completedAt = Date.now();
+  if (activeScanId === id) activeScanId = null;
+  notifyScanUpdate(id);
   setTimeout(() => {
     scans.delete(id);
   }, GRACE_MS).unref();
+}
+
+/** Notify subscribers that the named scan's state has changed (filesTotal discovered, progress, completion). */
+export function notifyScanUpdate(id: string): void {
+  events.emit(id);
+}
+
+/** Subscribe to update events for a single scan. Returns an unsubscribe function. */
+export function onScanUpdate(id: string, listener: () => void): () => void {
+  events.on(id, listener);
+  return () => events.off(id, listener);
 }

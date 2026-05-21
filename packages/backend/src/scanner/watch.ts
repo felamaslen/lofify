@@ -1,8 +1,7 @@
 import chokidar, { type FSWatcher } from 'chokidar';
 import { logger } from '../logger.js';
+import { AUDIO_EXTENSION_RE } from './audio-extensions.js';
 import { deleteTrackByFile, upsertTrack } from './scan.js';
-
-const AUDIO_EXTENSIONS_RE = /\.(mp3|flac|ogg|oga|opus|m4a|aac|wav|wma|webm)$/i;
 
 /** Start a chokidar watcher over `root`. Add/change events upsert the affected track; unlink deletes it. Non-audio files are ignored. Caller must `close()` the returned watcher on shutdown. */
 export function watchLibrary(root: string): FSWatcher {
@@ -16,7 +15,7 @@ export function watchLibrary(root: string): FSWatcher {
   });
 
   const onUpsert = (file: string, kind: 'add' | 'change') => {
-    if (!AUDIO_EXTENSIONS_RE.test(file)) return;
+    if (!AUDIO_EXTENSION_RE.test(file)) return;
     upsertTrack(file).catch((err) => {
       logger.error(
         `scanner watch ${kind} failed for ${file}: ${
@@ -29,7 +28,7 @@ export function watchLibrary(root: string): FSWatcher {
   watcher.on('add', (file) => onUpsert(file, 'add'));
   watcher.on('change', (file) => onUpsert(file, 'change'));
   watcher.on('unlink', (file) => {
-    if (!AUDIO_EXTENSIONS_RE.test(file)) return;
+    if (!AUDIO_EXTENSION_RE.test(file)) return;
     deleteTrackByFile(file).catch((err) => {
       logger.error(
         `scanner watch unlink failed for ${file}: ${

@@ -104,26 +104,26 @@ Goal: backend can scan a library and watch it for changes. Lives at
 so `Subscription.libraryScan` reads live in-memory progress directly — no
 control-plane RPC.
 
-- [ ] `scanner/runner.ts` — orchestrator. Holds a map of `scanId →
+- [x] `scanner/runner.ts` — orchestrator. Holds a map of `scanId →
       ScanState { filesTotal, scannedTotal, errorsTotal, errors[] }`.
       State lives in memory only; entries are wiped some grace period
       after completion.
-- [ ] `scanner/parse.ts` — audio metadata parsing via
+- [x] `scanner/parse.ts` — audio metadata parsing via
       [`music-metadata`](https://github.com/borewit/music-metadata) →
       fills every `Tracks` column. Use `fs.stat` for `sizeBytes` and
       mime/format detection.
-- [ ] `scanner/scan.ts` — `scanLibrary(path)`: walks the library
+- [x] `scanner/scan.ts` — `scanLibrary(path)`: walks the library
       (`fast-glob` or `node:fs/promises` recursive read), parses each
       file, upserts into `Tracks` keyed by `file`. Returns a `scanId`
       synchronously; work runs in the background and updates the
       in-memory `ScanState`.
-- [ ] `scanner/watch.ts` — long-running watcher via
+- [x] `scanner/watch.ts` — long-running watcher via
       [`chokidar`](https://github.com/paulmillr/chokidar). On add: parse
       + upsert. On unlink: delete by `file`. On change: re-parse +
-      upsert. Started during backend boot when `LIBRARY_PATH` is set.
-- [ ] DB writes use the backend's existing Drizzle connection — no
+      upsert. Started during backend boot. `LIBRARY_PATH` is required.
+- [x] DB writes use the backend's existing Drizzle connection — no
       separate pool.
-- [ ] No cron inside the scanner — orchestration is external (e.g. a
+- [x] No cron inside the scanner — orchestration is external (e.g. a
       cron job that calls the `libraryScan` mutation).
 
 ---
@@ -132,16 +132,21 @@ control-plane RPC.
 
 Goal: backend can trigger and observe scans.
 
-- [ ] `Mutation.libraryScan: LibraryScan!` — invokes
-      `scanner.scanLibrary(LIBRARY_PATH)`, returns initial `LibraryScan`.
-- [ ] `type LibraryScan { id: ID!, scannedTotal: Int!, errorsTotal: Int!,
-      filesTotal: Int! }`.
-- [ ] `Subscription.libraryScan(id: ID!): LibraryScan` over SSE on `GET
-      /graphql/stream`. Emits every 1s while scan is in progress, completes
-      when scan finishes.
-- [ ] Behavioural tests via `fastify.inject`:
-  - [ ] Mutation returns a scan with positive `filesTotal`.
-  - [ ] SSE stream emits progress and terminates.
+- [x] `Mutation.libraryScan: LibraryScan!` — invokes
+      `scanner.scanLibrary(LIBRARY_PATH)`, returns the initial
+      `LibraryScan` synchronously with `filesTotal: null` (clients show
+      indeterminate progress until the walk finishes).
+- [x] `type LibraryScan { id: ID!, scannedTotal: Int!, errorsTotal: Int!,
+      filesTotal: Int }` (`filesTotal` nullable; null while discovery is
+      in flight).
+- [x] `Subscription.libraryScan(id: ID!): LibraryScan` over SSE on `POST
+      /graphql/stream` (graphql-sse, distinct-connections mode). Wakes
+      on each scanner update event (with a 1s heartbeat fallback);
+      completes when the scan finishes.
+- [x] Behavioural tests:
+  - [x] Mutation returns immediately with `filesTotal: null`.
+  - [x] Subscription emits progress and terminates with the final
+        `filesTotal`/`scannedTotal`.
 
 ---
 

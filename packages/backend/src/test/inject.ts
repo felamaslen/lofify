@@ -5,7 +5,7 @@ export async function makeApp(): Promise<FastifyInstance> {
   return buildApp();
 }
 
-export async function gql(
+export async function gqlRequest(
   app: FastifyInstance,
   query: string,
   variables?: Record<string, unknown>,

@@ -3,8 +3,10 @@
  * Do not manually edit. Regenerate by running `npx grats`.
  */
 
-import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, GraphQLInt, specifiedDirectives, GraphQLObjectType, GraphQLString, GraphQLBoolean } from "graphql";
+import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, GraphQLInt, specifiedDirectives, GraphQLObjectType, GraphQLString, GraphQLID, GraphQLBoolean } from "graphql";
 import { ping as queryPingResolver, noop as mutationNoopResolver } from "./../root.js";
+import { libraryScan as mutationLibraryScanResolver } from "./../library-scan.js";
+import { libraryScan as subscriptionLibraryScanResolver } from "./../library-scan-subscription.js";
 export function getSchema(): GraphQLSchema {
     const QueryType: GraphQLObjectType = new GraphQLObjectType({
         name: "Query",
@@ -17,6 +19,33 @@ export function getSchema(): GraphQLSchema {
                     resolve() {
                         return queryPingResolver();
                     }
+                }
+            };
+        }
+    });
+    const LibraryScanType: GraphQLObjectType = new GraphQLObjectType({
+        name: "LibraryScan",
+        description: "Snapshot of an ongoing or completed library scan.",
+        fields() {
+            return {
+                errorsTotal: {
+                    description: "Files that failed to parse or upsert.",
+                    name: "errorsTotal",
+                    type: new GraphQLNonNull(GraphQLInt)
+                },
+                filesTotal: {
+                    description: "Total files discovered on disk for this scan. Null until the file walk has finished \u2014 clients should render an indeterminate progress state in that case.",
+                    name: "filesTotal",
+                    type: GraphQLInt
+                },
+                id: {
+                    name: "id",
+                    type: new GraphQLNonNull(GraphQLID)
+                },
+                scannedTotal: {
+                    description: "Files successfully parsed and upserted so far.",
+                    name: "scannedTotal",
+                    type: new GraphQLNonNull(GraphQLInt)
                 }
             };
         }
@@ -37,12 +66,43 @@ export function getSchema(): GraphQLSchema {
         name: "Mutation",
         fields() {
             return {
+                libraryScan: {
+                    description: "Triggers a full scan of the configured library. Returns immediately with `filesTotal: null`; the file walk and parsing run in the background. Observe progress via `Subscription.libraryScan`.",
+                    name: "libraryScan",
+                    type: new GraphQLNonNull(LibraryScanType),
+                    resolve() {
+                        return mutationLibraryScanResolver();
+                    }
+                },
                 noop: {
                     description: "Does nothing.",
                     name: "noop",
                     type: new GraphQLNonNull(VoidType),
                     resolve() {
                         return mutationNoopResolver();
+                    }
+                }
+            };
+        }
+    });
+    const SubscriptionType: GraphQLObjectType = new GraphQLObjectType({
+        name: "Subscription",
+        fields() {
+            return {
+                libraryScan: {
+                    description: "Streams snapshots of the named scan every second until it completes. Yields no further events and closes the stream once the scan finishes or is evicted.",
+                    name: "libraryScan",
+                    type: new GraphQLNonNull(LibraryScanType),
+                    args: {
+                        id: {
+                            type: new GraphQLNonNull(GraphQLID)
+                        }
+                    },
+                    subscribe(_source, args) {
+                        return subscriptionLibraryScanResolver(args);
+                    },
+                    resolve(payload) {
+                        return payload;
                     }
                 }
             };
@@ -64,6 +124,7 @@ export function getSchema(): GraphQLSchema {
             })],
         query: QueryType,
         mutation: MutationType,
-        types: [MutationType, QueryType, VoidType]
+        subscription: SubscriptionType,
+        types: [LibraryScanType, MutationType, QueryType, SubscriptionType, VoidType]
     });
 }
