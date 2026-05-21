@@ -1,9 +1,6 @@
-import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
-import { PassThrough } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
-import { parseStream } from 'music-metadata';
+import { parseFile } from 'music-metadata';
 import { SpanStatusCode, trace } from '@opentelemetry/api';
 import type { NewTrack } from '../db/schema/index.js';
 
@@ -16,7 +13,7 @@ export async function parseTrack(file: string): Promise<ParsedTrack> {
   return tracer.startActiveSpan('scanner.parseTrack', async (span) => {
     span.setAttribute('scanner.file', file);
     try {
-      const [metadata, st] = await Promise.all([parseContent(file), stat(file)]);
+      const [metadata, st] = await Promise.all([parseFile(file), stat(file)]);
       const { common, format } = metadata;
 
       const container =
@@ -48,11 +45,3 @@ export async function parseTrack(file: string): Promise<ParsedTrack> {
   });
 }
 
-async function parseContent(file: string) {
-  const pass = new PassThrough();
-  const [metadata] = await Promise.all([
-    parseStream(pass),
-    pipeline(createReadStream(file), pass),
-  ]);
-  return metadata;
-}
