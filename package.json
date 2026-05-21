@@ -13,8 +13,10 @@
     "test": "pnpm -r --parallel test",
     "dev": "pnpm -r --parallel dev",
     "build": "pnpm -r build",
+    "codegen": "pnpm -r --parallel codegen",
+    "db:generate": "pnpm --filter @lofify/backend db:generate",
     "db:migrate": "pnpm --filter @lofify/backend db:migrate",
-    "db:create": "pnpm --filter @lofify/backend generate-schema && pnpm --filter @lofify/backend create",
+    "db:migrate:create": "pnpm --filter @lofify/backend db:generate && pnpm --filter @lofify/backend db:migrate:create",
     "format": "prettier --write ."
   },
   "devDependencies": {

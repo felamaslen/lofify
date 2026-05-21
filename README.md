@@ -44,8 +44,10 @@ pnpm db:migrate          # apply migrations
 | `test`           | Per-package test runner                            |
 | `dev`            | Watch-mode dev across every package                |
 | `build`          | Production build                                   |
+| `codegen`        | Run all code generators across every package       |
+| `db:generate`    | Drizzle schema → `schema.sql`                      |
 | `db:migrate`     | Apply pending Postgres migrations                  |
-| `db:create`      | Generate `schema.sql` + diff a new migration       |
+| `db:migrate:create` | Regenerate `schema.sql` + write a new migration |
 | `format`         | Prettier write                                     |
 
 ## Config

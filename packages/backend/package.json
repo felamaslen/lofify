@@ -4,8 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "generate-schema": "drizzle-pgkit-migrator generate-schema --schema-dir src/db/schema --schema-file src/db/__generated__/schema.sql",
-    "create": "drizzle-pgkit-migrator create --schema-file src/db/__generated__/schema.sql --migrations-dir src/db/migrations",
+    "codegen": "pnpm db:generate",
+    "db:generate": "drizzle-pgkit-migrator generate-schema --schema-dir src/db/schema --schema-file src/db/__generated__/schema.sql",
+    "db:migrate:create": "drizzle-pgkit-migrator create --schema-file src/db/__generated__/schema.sql --migrations-dir src/db/migrations",
     "db:migrate": "drizzle-pgkit-migrator migrate --migrations-dir src/db/migrations up",
     "db:migrate:list": "drizzle-pgkit-migrator migrate --migrations-dir src/db/migrations list",
     "db:migrate:pending": "drizzle-pgkit-migrator migrate --migrations-dir src/db/migrations pending",

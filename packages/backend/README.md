@@ -22,9 +22,10 @@ arrive in later chunks; see [`../../plan.md`](../../plan.md).
 
 | Script               | What it does                                          |
 | -------------------- | ----------------------------------------------------- |
-| `generate-schema`    | Drizzle schema → `src/db/__generated__/schema.sql`    |
-| `create`             | Diff schema vs. applied migrations, write new SQL     |
+| `codegen`            | Run all code generators (currently just `db:generate`) |
+| `db:generate`        | Drizzle schema → `src/db/__generated__/schema.sql`    |
 | `db:migrate`         | Apply pending migrations                              |
+| `db:migrate:create`  | Diff schema vs. applied migrations, write new SQL     |
 | `db:migrate:list`    | Show migration history                                |
 | `db:migrate:pending` | Show pending migrations                               |
 | `typecheck`          | `tsc --noEmit`                                        |
@@ -32,8 +33,8 @@ arrive in later chunks; see [`../../plan.md`](../../plan.md).
 ## Adding a migration
 
 ```sh
-pnpm generate-schema
-pnpm create --name <descriptive_name>
+pnpm db:generate
+pnpm db:migrate:create --name <descriptive_name>
 pnpm db:migrate
 ```
 
