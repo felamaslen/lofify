@@ -30,11 +30,11 @@ services:
       DATABASE_URL: ${DATABASE_URL}
       BACKEND_HOST: 0.0.0.0
       BACKEND_PORT: 4000
+      LIBRARY_PATH: /music
       PLAYBACK_SIGNING_SECRET: ${PLAYBACK_SIGNING_SECRET}
       TRANSCODE_MAX_PARALLEL: ${TRANSCODE_MAX_PARALLEL:-2}
       TRANSCODE_CACHE_MAX_BYTES: ${TRANSCODE_CACHE_MAX_BYTES:-1073741824}
       TRANSCODE_CACHE_TTL_SECONDS: ${TRANSCODE_CACHE_TTL_SECONDS:-3600}
-      SCANNER_CONTROL_URL: http://scanner:7000
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-lgtm:4318
       OTEL_SERVICE_NAME: lofify-backend
     ports:
@@ -55,21 +55,6 @@ services:
       - '8080:80'
     depends_on:
       - backend
-
-  scanner:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: scanner
-    restart: unless-stopped
-    environment:
-      DATABASE_URL: ${DATABASE_URL}
-      LIBRARY_PATH: /music
-    volumes:
-      - ${LIBRARY_PATH}:/music:ro
-    depends_on:
-      postgres:
-        condition: service_healthy
 
 volumes:
   postgres-data:

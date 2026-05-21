@@ -22,16 +22,6 @@ RUN pnpm --filter "./packages/backend..." build || true
 FROM deps AS ui-build
 RUN pnpm --filter "./packages/ui..." build || true
 
-# ---------- scanner build (rust) ----------
-FROM rust:1.82-slim-bookworm AS scanner-build
-WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      pkg-config libssl-dev ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-COPY packages/scanner ./packages/scanner
-WORKDIR /app/packages/scanner
-RUN cargo build --release || true
-
 # ---------- backend runtime ----------
 FROM node:24-bookworm-slim AS backend
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -47,12 +37,3 @@ CMD ["node", "packages/backend/dist/index.js"]
 FROM nginx:1.27-alpine AS ui
 COPY --from=ui-build /app/packages/ui/dist /usr/share/nginx/html
 EXPOSE 80
-
-# ---------- scanner runtime ----------
-FROM debian:bookworm-slim AS scanner
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-COPY --from=scanner-build /app/packages/scanner/target/release/scanner /usr/local/bin/scanner
-EXPOSE 7000
-CMD ["scanner"]
