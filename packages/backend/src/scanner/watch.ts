@@ -1,7 +1,31 @@
 import chokidar, { type FSWatcher } from 'chokidar';
+import { SpanStatusCode, trace, type Span } from '@opentelemetry/api';
 import { logger } from '../logger.js';
 import { AUDIO_EXTENSION_RE } from './audio-extensions.js';
 import { deleteTrackByFile, upsertTrack } from './scan.js';
+
+const tracer = trace.getTracer('lofify.scanner');
+
+function recordError(span: Span, err: unknown) {
+  const error = err instanceof Error ? err : new Error(String(err));
+  span.recordException(error);
+  span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+}
+
+function withSpan(name: string, file: string, work: (span: Span) => Promise<void>): void {
+  tracer.startActiveSpan(name, { attributes: { 'scanner.file': file } }, (span) => {
+    work(span)
+      .catch((err) => {
+        recordError(span, err);
+        const error = err instanceof Error ? err : undefined;
+        logger.error(
+          `${name} failed for ${file}: ${err instanceof Error ? err.message : String(err)}`,
+          { stack: error?.stack },
+        );
+      })
+      .finally(() => span.end());
+  });
+}
 
 /** Start a chokidar watcher over `root`. Add/change events upsert the affected track; unlink deletes it. Non-audio files are ignored. Caller must `close()` the returned watcher on shutdown. */
 export function watchLibrary(root: string): FSWatcher {
@@ -16,12 +40,9 @@ export function watchLibrary(root: string): FSWatcher {
 
   const onUpsert = (file: string, kind: 'add' | 'change') => {
     if (!AUDIO_EXTENSION_RE.test(file)) return;
-    upsertTrack(file).catch((err) => {
-      logger.error(
-        `scanner watch ${kind} failed for ${file}: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
+    withSpan(`scanner.watch.${kind}`, file, async () => {
+      logger.info('[watch] Upserting file', { file });
+      await upsertTrack(file);
     });
   };
 
@@ -29,16 +50,19 @@ export function watchLibrary(root: string): FSWatcher {
   watcher.on('change', (file) => onUpsert(file, 'change'));
   watcher.on('unlink', (file) => {
     if (!AUDIO_EXTENSION_RE.test(file)) return;
-    deleteTrackByFile(file).catch((err) => {
-      logger.error(
-        `scanner watch unlink failed for ${file}: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
+    withSpan('scanner.watch.unlink', file, async () => {
+      logger.info('[watch] Deleting file', { file });
+      await deleteTrackByFile(file);
     });
   });
   watcher.on('error', (err) => {
-    logger.error(`scanner watch error: ${err instanceof Error ? err.message : String(err)}`);
+    tracer.startActiveSpan('scanner.watch.error', (span) => {
+      recordError(span, err);
+      span.end();
+    });
+    logger.error(`scanner watch error: ${err instanceof Error ? err.message : String(err)}`, {
+      stack: (err as Error).stack,
+    });
   });
 
   return watcher;
