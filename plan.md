@@ -82,17 +82,17 @@ enum), `codec`, `bitRate` (nullable → VBR), `sampleRate`, `isLossless`,
 
 Goal: GraphQL server reachable, healthcheck green, otel exporting.
 
-- [ ] `packages/backend` — fastify app.
-- [ ] grats configured; generated schema checked in or built on prepare.
-- [ ] Apollo server wired into fastify at `POST /graphql`.
-- [ ] SSE endpoint stub at `GET /graphql/stream` (used later for
+- [x] `packages/backend` — fastify app.
+- [x] grats configured; generated schema checked in or built on prepare.
+- [x] Apollo server wired into fastify at `POST /graphql`.
+- [x] SSE endpoint stub at `GET /graphql/stream` (used later for
       subscriptions).
-- [ ] Healthcheck `GET /healthz`.
-- [ ] OpenTelemetry SDK initialised; OTLP exporter pointing at otel-lgtm.
-- [ ] `Void` type defined.
-- [ ] `@gqlDirective` infrastructure for `@constraint(min, max)` — directive
+- [x] Healthcheck `GET /healthz`.
+- [x] OpenTelemetry SDK initialised; OTLP exporter pointing at otel-lgtm.
+- [x] `Void` type defined.
+- [x] `@gqlDirective` infrastructure for `@constraint(min, max)` — directive
       defined and enforced at resolver entry.
-- [ ] Test harness: fastify built without `listen`, `fastify.inject` helper
+- [x] Test harness: fastify built without `listen`, `fastify.inject` helper
       exposed for tests.
 
 ---

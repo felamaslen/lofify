@@ -4,22 +4,45 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "codegen": "pnpm db:generate",
+    "codegen": "pnpm db:generate && pnpm gql:generate",
     "db:generate": "drizzle-pgkit-migrator generate-schema --schema-dir src/db/schema --schema-file src/db/__generated__/schema.sql",
     "db:migrate:create": "drizzle-pgkit-migrator create --schema-file src/db/__generated__/schema.sql --migrations-dir src/db/migrations",
     "db:migrate": "drizzle-pgkit-migrator migrate --migrations-dir src/db/migrations up",
     "db:migrate:list": "drizzle-pgkit-migrator migrate --migrations-dir src/db/migrations list",
     "db:migrate:pending": "drizzle-pgkit-migrator migrate --migrations-dir src/db/migrations pending",
+    "gql:generate": "grats",
+    "dev": "tsx watch --import ./src/instrument.ts src/index.ts",
+    "start": "tsx --import ./src/instrument.ts src/index.ts",
+    "test": "vitest run",
+    "lint": "eslint src",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@apollo/server": "^5.5.1",
+    "@as-integrations/fastify": "^3.1.0",
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/auto-instrumentations-node": "^0.76.0",
+    "@opentelemetry/exporter-logs-otlp-http": "^0.218.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.218.0",
+    "@opentelemetry/resources": "^2.7.1",
+    "@opentelemetry/sdk-logs": "^0.218.0",
+    "@opentelemetry/sdk-node": "^0.218.0",
+    "@opentelemetry/semantic-conventions": "^1.41.1",
     "drizzle-orm": "^0.45.2",
-    "pg": "^8.13.1"
+    "fastify": "^5.8.5",
+    "graphql": "^16.14.0",
+    "grats": "^0.0.36",
+    "pg": "^8.13.1",
+    "winston": "^3.19.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@types/node": "^25.9.1",
     "@types/pg": "^8.11.10",
     "drizzle-kit": "^0.31.10",
     "drizzle-pgkit-migrator": "^0.1.1",
-    "typescript": "^5.6.2"
+    "tsx": "^4.22.3",
+    "typescript": "^5.6.2",
+    "vitest": "^4.1.7"
   }
 }

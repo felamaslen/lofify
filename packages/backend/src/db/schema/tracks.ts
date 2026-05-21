@@ -33,10 +33,7 @@ export const tracks = pgTable(
     artist: text('artist'),
     album: text('album'),
     year: text('year'),
-    /**
-     * Container format of the source file (e.g. flac, ogg, mp3, wma). Stored
-     * as text for now; a Postgres enum may replace this later.
-     */
+    /** Container format of the source file (e.g. flac, ogg, mp3, wma). */
     format: text('format').notNull(),
     codec: text('codec').notNull(),
     /** Null implies VBR. */

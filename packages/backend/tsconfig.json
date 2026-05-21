@@ -1,4 +1,13 @@
 {
   "extends": "../../tsconfig.json",
+  "grats": {
+    "tsSchema": "src/graphql/__generated__/schema.ts",
+    "graphqlSchema": "src/graphql/__generated__/schema.graphql",
+    "importModuleSpecifierEnding": ".js",
+    "nullableByDefault": false
+  },
+  "compilerOptions": {
+    "types": ["node"]
+  },
   "include": ["src"]
 }
