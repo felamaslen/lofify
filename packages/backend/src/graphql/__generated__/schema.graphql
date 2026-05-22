@@ -115,6 +115,12 @@ type Track {
   """
   format: String!
   id: ID!
+  """Whether the source file is a lossless format (flac, alac, wav, etc.)."""
+  isLossless: Boolean!
+  """
+  Source codec of the file on disk, lower-cased, e.g. `"flac"`, `"alac"`, `"mp3"`, `"opus"`.
+  """
+  sourceFormat: String!
   title: String
   trackNumber: Int
   """

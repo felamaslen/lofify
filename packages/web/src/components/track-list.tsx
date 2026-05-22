@@ -16,6 +16,8 @@ const TrackListRowDocument = graphql(`
     artist
     album
     year
+    sourceFormat
+    isLossless
     duration {
       seconds
       formatted
@@ -52,7 +54,7 @@ const ROW_HEIGHT = 36;
 const HOVER_PREFETCH_MS = 200;
 
 const COLS =
-  'grid grid-cols-[40px_60px_minmax(0,2fr)_80px_minmax(0,1.2fr)_minmax(0,1.4fr)_80px] items-center gap-3 px-4';
+  'grid grid-cols-[40px_60px_minmax(0,2fr)_80px_minmax(0,1.2fr)_minmax(0,1.4fr)_80px_64px] items-center gap-3 px-4';
 
 export function TrackList() {
   const { quality, play, current } = usePlayer();
@@ -153,6 +155,7 @@ export function TrackList() {
         <span>Artist</span>
         <span>Album</span>
         <span>Year</span>
+        <span className="text-right">Source</span>
       </div>
       <div ref={scrollRef} className="relative overflow-y-auto">
         <div
@@ -180,6 +183,7 @@ export function TrackList() {
                 className={cn(
                   COLS,
                   'cursor-pointer text-sm hover:bg-accent/40',
+                  t.isLossless && 'shadow-[inset_3px_0_0_0] shadow-amber-400',
                   active && 'bg-primary/15 text-primary-foreground',
                 )}
                 style={{
@@ -193,11 +197,25 @@ export function TrackList() {
               >
                 <span className="text-muted-foreground tabular-nums">{t.discNumber ?? ''}</span>
                 <span className="text-muted-foreground tabular-nums">{t.trackNumber ?? ''}</span>
-                <span className="truncate">{t.title ?? '(untitled)'}</span>
+                <span className={cn('truncate', t.isLossless && 'font-medium')}>
+                  {t.title ?? '(untitled)'}
+                </span>
                 <span className="tabular-nums text-muted-foreground">{t.duration.formatted}</span>
                 <span className="truncate text-muted-foreground">{t.artist ?? ''}</span>
                 <span className="truncate text-muted-foreground">{t.album ?? ''}</span>
                 <span className="text-muted-foreground tabular-nums">{t.year ?? ''}</span>
+                <span className="flex justify-end">
+                  <span
+                    className={cn(
+                      'rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide',
+                      t.isLossless
+                        ? 'border-primary/30 bg-primary/10 text-primary'
+                        : 'border-border bg-muted/40 text-muted-foreground',
+                    )}
+                  >
+                    {t.sourceFormat}
+                  </span>
+                </span>
               </div>
             );
           })}

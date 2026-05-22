@@ -320,17 +320,30 @@ export type CreatePlayerError =
   | { kind: 'probe-failed' }
   | { kind: 'direct-fetch-failed' };
 
+/** Resolved delivery format, as inferred from the probe's `Content-Type`. Anything we don't recognise falls back to `null` so the UI just hides the badge. */
+export type ActualFormat = 'flac' | 'opus' | 'mp3' | null;
+
+function actualFormatFromContentType(contentType: string): ActualFormat {
+  const ct = contentType.toLowerCase();
+  if (ct.startsWith('audio/flac') || ct.startsWith('audio/x-flac')) return 'flac';
+  if (ct.startsWith('audio/mp4')) return 'opus';
+  if (ct.startsWith('audio/mpeg')) return 'mp3';
+  return null;
+}
+
 export type CreatePlayerOptions = {
   /** Called when the player can't satisfy the request. The caller is expected to surface this to the user (e.g. a toast). */
   onError?: (err: CreatePlayerError) => void;
 };
+
+export type CreatePlayerResult = { player: Player; actualFormat: ActualFormat };
 
 export async function createPlayer(
   audio: HTMLAudioElement,
   url: string,
   accept: string,
   options: CreatePlayerOptions = {},
-): Promise<Player | null> {
+): Promise<CreatePlayerResult | null> {
   const meta = await probe(url, accept);
   if (!meta) {
     options.onError?.({ kind: 'probe-failed' });
@@ -350,7 +363,10 @@ export async function createPlayer(
       options.onError?.({ kind: 'direct-fetch-failed' });
       return null;
     }
-    return new DirectPlayer(audio, blobUrl);
+    return {
+      player: new DirectPlayer(audio, blobUrl),
+      actualFormat: actualFormatFromContentType(meta.contentType),
+    };
   }
 
   // Chunked mode — required to use MSE.
@@ -374,16 +390,19 @@ export async function createPlayer(
   }
   const sourceBuffer = mediaSource.addSourceBuffer(meta.contentType);
 
-  return new MsePlayer(
-    audio,
-    url,
-    accept,
-    mediaSource,
-    sourceBuffer,
-    blobUrl,
-    meta.segmentCount,
-    meta.segmentDuration,
-    meta.readyChunks,
-    meta.contentType.startsWith('audio/mpeg'),
-  );
+  return {
+    player: new MsePlayer(
+      audio,
+      url,
+      accept,
+      mediaSource,
+      sourceBuffer,
+      blobUrl,
+      meta.segmentCount,
+      meta.segmentDuration,
+      meta.readyChunks,
+      meta.contentType.startsWith('audio/mpeg'),
+    ),
+    actualFormat: actualFormatFromContentType(meta.contentType),
+  };
 }

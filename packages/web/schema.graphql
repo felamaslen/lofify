@@ -89,13 +89,13 @@ type Subscription {
   """
   libraryScan(id: ID!): LibraryScan!
   """
-  Stream progress snapshots of the transcode that backs a given `(trackId, quality, format)` playback stream. `format` is the MIME the client requests via the `Accept` header on `/play/...` — `audio/webm` or `audio/mpeg`; passthrough (`audio/flac` on a flac source) yields a single `isDone: true` snapshot.
+  Stream progress snapshots of the transcode that backs a given `(trackId, quality, Accept)` playback stream. Pass the same `Accept` header value the client will send to `/play/...` — the server resolves it to the same transcode job key, so the subscription observes the actual encoder the player is consuming.
   
-  Emits at most once per second while the transcode is running, then yields a final snapshot when it finishes.
+  Emits at most once per second while the transcode is running, then yields a final snapshot when it finishes. Passthrough streams (`audio/flac` accepted on a flac source) yield a single `isDone: true` snapshot.
   """
   transcodeProgress(
     """
-    The exact value the client will send in the `Accept` header on `/play/...` (e.g. `audio/webm` or `audio/mpeg`). Wildcards or comma-separated lists aren't honoured here — pass the concrete container you intend to consume.
+    The exact value the client will send in the `Accept` header on `/play/...` — may be a comma-separated list. Defaults to `audio/mp4` if omitted.
     """
     acceptHeaderValue: String
     """One of `low`, `medium`, `high`."""
@@ -115,6 +115,12 @@ type Track {
   """
   format: String!
   id: ID!
+  """Whether the source file is a lossless format (flac, alac, wav, etc.)."""
+  isLossless: Boolean!
+  """
+  Source codec of the file on disk, lower-cased, e.g. `"flac"`, `"alac"`, `"mp3"`, `"opus"`.
+  """
+  sourceFormat: String!
   title: String
   trackNumber: Int
   """

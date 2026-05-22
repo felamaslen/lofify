@@ -24,7 +24,12 @@ import {
 } from '../lib/capabilities.ts';
 import { graphql, type ResultOf } from '../lib/gql.ts';
 import { gqlRequest } from '../lib/gql-request.ts';
-import { createPlayer, type CreatePlayerError, type Player as MsePlayer } from '../lib/mse.ts';
+import {
+  type ActualFormat,
+  createPlayer,
+  type CreatePlayerError,
+  type Player as MsePlayer,
+} from '../lib/mse.ts';
 import { subscribe } from '../lib/sse-client.ts';
 
 export const TrackByIdDocument = graphql(
@@ -52,7 +57,7 @@ const TranscodeProgressDocument = graphql(`
 
 type TrackNode = NonNullable<ResultOf<typeof TrackByIdDocument>['track']>;
 
-export type { Format, Quality };
+export type { ActualFormat, Format, Quality };
 
 const QUALITY_STORAGE_KEY = 'lofify.player.quality';
 const QUALITY_VALUES: readonly Quality[] = ['max', 'high', 'medium', 'low'];
@@ -132,6 +137,8 @@ type PlayerCtx = {
   format: Format;
   formatAvailability: Record<Format, boolean>;
   setFormat: (f: Format) => void;
+  /** Format actually being delivered by the server for the current track, as resolved from the probe response. `null` between track changes or when no track is loaded. */
+  actualFormat: ActualFormat;
   error: PlayerError | null;
   dismissError: () => void;
   play: (id: string) => void;
@@ -175,6 +182,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const [quality, setQualityState] = useState<Quality>(loadStoredQuality);
   const [format, setFormatState] = useState<Format>(loadStoredFormat);
   const [error, setError] = useState<PlayerError | null>(null);
+  const [actualFormat, setActualFormat] = useState<ActualFormat>(null);
   const setQuality = useCallback((q: Quality) => {
     setQualityState(q);
     if (typeof window !== 'undefined') {
@@ -264,6 +272,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       setPositionSeconds(0);
       setBufferedRanges([]);
       setReadySeconds(0);
+      setActualFormat(null);
       const audio = audioRef.current;
       if (!audio) return;
       playerRef.current?.dispose();
@@ -297,11 +306,12 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
           },
         },
       );
-      const player = await createPlayer(audio, resolvePlaybackUrl(track.url), accept, {
+      const created = await createPlayer(audio, resolvePlaybackUrl(track.url), accept, {
         onError: (err) => setError({ message: errorMessageFor(err) }),
       });
-      if (!player) return;
-      playerRef.current = player;
+      if (!created) return;
+      playerRef.current = created.player;
+      setActualFormat(created.actualFormat);
       audio.currentTime = 0;
       await audio.play().catch(() => undefined);
       prefetchNext(track.id);
@@ -379,6 +389,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         mp3: isFormatAvailable('mp3'),
       },
       setFormat,
+      actualFormat,
       error,
       dismissError,
       play: (id) => void playTrack(id),
@@ -397,6 +408,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       setQuality,
       format,
       setFormat,
+      actualFormat,
       error,
       dismissError,
       playTrack,

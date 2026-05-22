@@ -4,6 +4,7 @@ import { useMemo } from 'react';
 
 import { graphql } from '../lib/gql.ts';
 import { usePlayer } from '../state/player.tsx';
+import { PlaybackFormatBadge } from './playback-format-badge.tsx';
 import { Button } from './ui/button.tsx';
 import { Slider } from './ui/slider.tsx';
 
@@ -46,7 +47,7 @@ export function PlaybackBar() {
   const pendingStart = readySeconds > 0 && readySeconds < total ? readySeconds : null;
 
   return (
-    <div className="grid grid-cols-[auto_1fr_auto] items-center gap-4 border-t border-border bg-card/60 px-4 py-3 backdrop-blur">
+    <div className="relative grid grid-cols-[auto_1fr_auto] items-center gap-4 border-t border-border bg-card/60 px-4 py-3 backdrop-blur">
       <div className="flex items-center gap-1">
         <Button
           variant="ghost"
@@ -109,6 +110,9 @@ export function PlaybackBar() {
           className="flex-1"
         />
         <span className="w-10">{meta?.duration.formatted ?? '00:00'}</span>
+      </div>
+      <div className="absolute bottom-0 left-1/2 -translate-x-1/2">
+        <PlaybackFormatBadge />
       </div>
     </div>
   );

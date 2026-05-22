@@ -109,6 +109,16 @@ export function getSchema(): GraphQLSchema {
                     name: "id",
                     type: new GraphQLNonNull(GraphQLID)
                 },
+                isLossless: {
+                    description: "Whether the source file is a lossless format (flac, alac, wav, etc.).",
+                    name: "isLossless",
+                    type: new GraphQLNonNull(GraphQLBoolean)
+                },
+                sourceFormat: {
+                    description: "Source codec of the file on disk, lower-cased, e.g. `\"flac\"`, `\"alac\"`, `\"mp3\"`, `\"opus\"`.",
+                    name: "sourceFormat",
+                    type: new GraphQLNonNull(GraphQLString)
+                },
                 title: {
                     name: "title",
                     type: GraphQLString
