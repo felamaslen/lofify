@@ -66,5 +66,23 @@ export default [
       globals: { ...globals.browser },
     },
   },
+  {
+    files: ['**/*.test.{ts,tsx}', '**/test/**/*.{ts,tsx}'],
+    languageOptions: {
+      globals: {
+        afterAll: 'readonly',
+        afterEach: 'readonly',
+        beforeAll: 'readonly',
+        beforeEach: 'readonly',
+        describe: 'readonly',
+        expect: 'readonly',
+        it: 'readonly',
+        suite: 'readonly',
+        test: 'readonly',
+        vi: 'readonly',
+        vitest: 'readonly',
+      },
+    },
+  },
   prettier,
 ];

@@ -1,24 +1,27 @@
-import gql from 'fake-tag';
-import type { FastifyInstance } from 'fastify';
-import { afterAll, beforeAll, expect, test } from 'vitest';
+import { app } from '../app.js';
+import { graphql } from './gql.js';
+import { gqlRequest } from './inject.js';
 
-import { gqlRequest, makeApp } from './inject.js';
+const PingQuery = graphql(`
+  query Ping {
+    ping
+  }
+`);
 
-let app: FastifyInstance;
-beforeAll(async () => {
-  app = await makeApp();
-});
-afterAll(async () => {
-  await app.close();
-});
+const NoopMutation = graphql(`
+  mutation Noop {
+    noop {
+      _
+    }
+  }
+`);
 
 test('Query.ping returns pong', async () => {
-  const body = await gqlRequest(app, gql`{ ping }`);
+  const body = await gqlRequest(app).query(PingQuery);
   expect(body).toEqual({ data: { ping: 'pong' } });
 });
 
 test('Mutation.noop returns a Void payload', async () => {
-  const body = await gqlRequest(app, gql`mutation { noop { _ } }`);
-  expect(body.errors).toBeUndefined();
-  expect(body.data).toEqual({ noop: { _: null } });
+  const { data } = await gqlRequest(app).mutate(NoopMutation).expectNoErrors();
+  expect(data).toEqual({ noop: { _: null } });
 });

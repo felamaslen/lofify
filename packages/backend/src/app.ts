@@ -17,8 +17,7 @@ const SCHEMA_SDL_PATH = fileURLToPath(
   new URL('./graphql/__generated__/schema.graphql', import.meta.url),
 );
 
-/** Build the Fastify app with all routes wired but no listener bound. */
-export async function buildApp(): Promise<FastifyInstance> {
+async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
 
   const allow = env.CORS_ALLOW_ORIGINS.split(',')
@@ -62,3 +61,6 @@ export async function buildApp(): Promise<FastifyInstance> {
 
   return app;
 }
+
+/** The Fastify app with every route wired. Built once at module load; importers share the same instance. */
+export const app: FastifyInstance = await buildApp();

@@ -1,15 +1,4 @@
-import type { FastifyInstance } from 'fastify';
-import { afterAll, beforeAll, expect, test } from 'vitest';
-
-import { makeApp } from './inject.js';
-
-let app: FastifyInstance;
-beforeAll(async () => {
-  app = await makeApp();
-});
-afterAll(async () => {
-  await app.close();
-});
+import { app } from '../app.js';
 
 test('GET /healthz returns ok', async () => {
   const res = await app.inject({ method: 'GET', url: '/healthz' });

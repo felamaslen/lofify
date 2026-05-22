@@ -2,12 +2,9 @@ import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import type { FastifyInstance } from 'fastify';
-import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
-
+import { app } from '../app.js';
 import { db } from '../db/client.js';
 import { tracks } from '../db/schema/index.js';
-import { makeApp } from '../test/inject.js';
 import { signPlaybackUrl } from './sign.js';
 import { _resetTranscodeCache } from './transcode.js';
 
@@ -20,16 +17,6 @@ const fixturesDir = path.join(
 
 const SAMPLE_MP3 = path.join(fixturesDir, 'sample.mp3');
 const SAMPLE_FLAC = path.join(fixturesDir, 'sample.flac');
-
-let app: FastifyInstance;
-
-beforeAll(async () => {
-  app = await makeApp();
-});
-
-afterAll(async () => {
-  await app.close();
-});
 
 beforeEach(async () => {
   await db.delete(tracks);

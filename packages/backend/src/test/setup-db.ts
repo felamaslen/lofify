@@ -24,3 +24,8 @@ await admin.end();
 
 target.pathname = `/${workerDb}`;
 process.env.DATABASE_URL = target.toString();
+
+const { app } = await import('../app.js');
+afterAll(async () => {
+  await app.close();
+});

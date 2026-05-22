@@ -2,36 +2,17 @@ import { copyFile, readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import gql from 'fake-tag';
-import type { FastifyInstance } from 'fastify';
-import { type Client, createClient } from 'graphql-sse';
-import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from 'vitest';
-
+import { app } from '../app.js';
 import { db } from '../db/client.js';
 import { tracks } from '../db/schema/index.js';
 import { env } from '../env.js';
-import { gqlRequest, makeApp } from '../test/inject.js';
+import { graphql, type ResultOf } from '../test/gql.js';
+import { gqlRequest } from '../test/inject.js';
 
 const fixturesDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   '../scanner/__fixtures__',
 );
-
-let app: FastifyInstance;
-let sseClient: Client;
-
-beforeAll(async () => {
-  app = await makeApp();
-  await app.listen({ port: 0, host: '127.0.0.1' });
-  const addr = app.server.address();
-  if (!addr || typeof addr === 'string') throw new Error('no address');
-  sseClient = createClient({ url: `http://127.0.0.1:${addr.port}/graphql/stream` });
-});
-
-afterAll(async () => {
-  sseClient.dispose();
-  await app.close();
-});
 
 async function clearLibrary() {
   for (const entry of await readdir(env.LIBRARY_PATH)) {
@@ -52,15 +33,8 @@ afterEach(async () => {
   await db.delete(tracks);
 });
 
-type LibraryScanFrame = {
-  id: string;
-  filesTotal: number | null;
-  scannedTotal: number;
-  errorsTotal: number;
-};
-
-const LIBRARY_SCAN_MUTATION = gql`
-  mutation {
+const LibraryScanStartMutation = graphql(`
+  mutation LibraryScanStart {
     libraryScanStart {
       id
       filesTotal
@@ -68,10 +42,10 @@ const LIBRARY_SCAN_MUTATION = gql`
       errorsTotal
     }
   }
-`;
+`);
 
-const LIBRARY_SCAN_SUBSCRIPTION = gql`
-  subscription ($id: ID!) {
+const LibraryScanSubscription = graphql(`
+  subscription LibraryScan($id: ID!) {
     libraryScan(id: $id) {
       id
       filesTotal
@@ -79,22 +53,17 @@ const LIBRARY_SCAN_SUBSCRIPTION = gql`
       errorsTotal
     }
   }
-`;
+`);
 
-async function drainScanStream(scanId: string): Promise<LibraryScanFrame[]> {
-  const frames: LibraryScanFrame[] = [];
-  await new Promise<void>((resolve, reject) => {
-    sseClient.subscribe<{ libraryScan: LibraryScanFrame }>(
-      { query: LIBRARY_SCAN_SUBSCRIPTION, variables: { id: scanId } },
-      {
-        next: (msg) => {
-          if (msg.data?.libraryScan) frames.push(msg.data.libraryScan);
-        },
-        error: reject,
-        complete: resolve,
-      },
-    );
-  });
+type Frame = NonNullable<ResultOf<typeof LibraryScanSubscription>>['libraryScan'];
+
+async function drainScanStream(scanId: string): Promise<Frame[]> {
+  const frames: Frame[] = [];
+  for await (const event of gqlRequest(app)
+    .subscribe(LibraryScanSubscription)
+    .variables({ id: scanId })) {
+    if (event.data?.libraryScan) frames.push(event.data.libraryScan);
+  }
   return frames;
 }
 
@@ -102,9 +71,10 @@ test('Mutation.libraryScanStart returns immediately with filesTotal: null', asyn
   await copyFile(path.join(fixturesDir, 'sample.mp3'), path.join(env.LIBRARY_PATH, 'one.mp3'));
   await copyFile(path.join(fixturesDir, 'sample.flac'), path.join(env.LIBRARY_PATH, 'two.flac'));
 
-  const body = await gqlRequest(app, LIBRARY_SCAN_MUTATION);
-  expect(body.errors).toBeUndefined();
-  const scan = (body.data as { libraryScanStart: LibraryScanFrame }).libraryScanStart;
+  const { data } = await gqlRequest(app)
+    .mutate(LibraryScanStartMutation)
+    .expectNoErrors();
+  const scan = data.libraryScanStart;
   expect(typeof scan.id).toBe('string');
   expect(scan.filesTotal).toBeNull();
   expect(scan.scannedTotal).toBe(0);
@@ -116,9 +86,10 @@ test('Mutation.libraryScanStart returns immediately with filesTotal: null', asyn
 test('Subscription.libraryScan emits progress and terminates', async () => {
   await copyFile(path.join(fixturesDir, 'sample.mp3'), path.join(env.LIBRARY_PATH, 'one.mp3'));
 
-  const body = await gqlRequest(app, LIBRARY_SCAN_MUTATION);
-  expect(body.errors).toBeUndefined();
-  const { id, filesTotal } = (body.data as { libraryScanStart: LibraryScanFrame }).libraryScanStart;
+  const { data } = await gqlRequest(app)
+    .mutate(LibraryScanStartMutation)
+    .expectNoErrors();
+  const { id, filesTotal } = data.libraryScanStart;
   expect(filesTotal).toBeNull();
 
   const frames = await drainScanStream(id);

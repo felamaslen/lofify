@@ -1,8 +1,9 @@
-import { defineConfig } from 'vitest/config';
-import { createRequire } from 'node:module';
 import { mkdtempSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+
+import { defineConfig } from 'vitest/config';
 
 const require = createRequire(import.meta.url);
 const graphqlEntry = require.resolve('graphql');
@@ -21,6 +22,7 @@ export default defineConfig({
   test: {
     include: ['src/**/*.test.ts'],
     silent: 'passed-only',
+    globals: true,
     globalSetup: ['src/test/global-setup.ts'],
     setupFiles: ['src/test/setup-db.ts'],
     env: {

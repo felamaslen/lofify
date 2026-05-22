@@ -7,7 +7,7 @@
     "nullableByDefault": false
   },
   "compilerOptions": {
-    "types": ["node"],
+    "types": ["node", "vitest/globals"],
     "plugins": [
       {
         "name": "@0no-co/graphqlsp",
