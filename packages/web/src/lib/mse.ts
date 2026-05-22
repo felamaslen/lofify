@@ -55,6 +55,8 @@ class MsePlayer implements Player {
     private segmentCount: number,
     private segmentDuration: number,
     initialReadyChunks: number,
+    /** When true, set `timestampOffset = segIndex * segmentDuration` before each append. Required for raw mp3 chunks (each one starts at PTS 0 thanks to `-reset_timestamps 1` on the muxer); without it, out-of-order appends — i.e. any seek to an unbuffered region — land at the wrong absolute time and seeking silently fails. fMP4/opus DASH segments carry correct absolute PTS, so they stay at offset 0. */
+    private appendAtSegmentOffset: boolean,
   ) {
     this.readyChunks = initialReadyChunks;
     sourceBuffer.addEventListener('updateend', this.onUpdateEnd);
@@ -212,6 +214,9 @@ class MsePlayer implements Player {
     if (!next) return;
     this.appendingSegIndex = next.segIndex;
     try {
+      if (this.appendAtSegmentOffset) {
+        this.sourceBuffer.timestampOffset = next.segIndex * this.segmentDuration;
+      }
       this.sourceBuffer.appendBuffer(next.data.buffer as ArrayBuffer);
       this.loaded.add(next.segIndex);
       if (next.segIndex === 0) this.initAppended = true;
@@ -379,5 +384,6 @@ export async function createPlayer(
     meta.segmentCount,
     meta.segmentDuration,
     meta.readyChunks,
+    meta.contentType.startsWith('audio/mpeg'),
   );
 }
