@@ -10,6 +10,7 @@ import {
 } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { gqlRequest } from '../lib/gql-request.ts';
+import { resolvePlaybackUrl } from '../lib/playback-url.ts';
 import { TrackByIdQuery, TracksQuery } from '../lib/queries.ts';
 import type { ResultOf, VariablesOf } from '../lib/gql.ts';
 
@@ -76,7 +77,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     setPositionSeconds(0);
     const audio = audioRef.current;
     if (!audio) return;
-    audio.src = track.url;
+    audio.src = resolvePlaybackUrl(track.url);
     audio.currentTime = 0;
     await audio.play().catch(() => undefined);
   }, []);
