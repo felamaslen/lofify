@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef } from 'react';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { useEffect, useMemo, useRef } from 'react';
+
 import { gqlRequest } from '../lib/gql-request.ts';
 import { TracksQuery } from '../lib/queries.ts';
 import { cn } from '../lib/utils.ts';

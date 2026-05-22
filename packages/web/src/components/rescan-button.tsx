@@ -1,15 +1,16 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Loader2, RefreshCw } from 'lucide-react';
-import { Button } from './ui/button.tsx';
-import { Progress } from './ui/progress.tsx';
+import { useCallback, useEffect, useRef, useState } from 'react';
+
+import type { ResultOf } from '../lib/gql.ts';
 import { gqlRequest } from '../lib/gql-request.ts';
 import {
   LibraryScanSubscription,
   StartLibraryScanMutation,
 } from '../lib/queries.ts';
 import { subscribe } from '../lib/sse-client.ts';
-import type { ResultOf } from '../lib/gql.ts';
+import { Button } from './ui/button.tsx';
+import { Progress } from './ui/progress.tsx';
 
 type Snapshot = ResultOf<typeof LibraryScanSubscription>['libraryScan'];
 

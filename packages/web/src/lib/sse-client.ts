@@ -1,6 +1,6 @@
-import { createClient, type Client } from 'graphql-sse';
-import { print } from 'graphql';
 import type { TadaDocumentNode } from 'gql.tada';
+import { print } from 'graphql';
+import { type Client,createClient } from 'graphql-sse';
 
 const STREAM_URL =
   import.meta.env.VITE_GRAPHQL_STREAM_URL ?? '/graphql/stream';

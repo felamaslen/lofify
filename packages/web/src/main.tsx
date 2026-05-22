@@ -1,5 +1,6 @@
-import { StrictMode } from 'react';
-import { createRoot } from 'react-dom/client';
+import './styles.css';
+
+import { QueryClientProvider } from '@tanstack/react-query';
 import {
   createRootRoute,
   createRoute,
@@ -7,11 +8,12 @@ import {
   Outlet,
   RouterProvider,
 } from '@tanstack/react-router';
-import { QueryClientProvider } from '@tanstack/react-query';
+import { StrictMode } from 'react';
+import { createRoot } from 'react-dom/client';
+
 import { queryClient } from './lib/query-client.ts';
 import { Home } from './routes/home.tsx';
 import { PlayerProvider } from './state/player.tsx';
-import './styles.css';
 
 const rootRoute = createRootRoute({ component: () => <Outlet /> });
 

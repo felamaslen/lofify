@@ -1,5 +1,5 @@
-import { print } from 'graphql';
 import type { TadaDocumentNode } from 'gql.tada';
+import { print } from 'graphql';
 
 const GRAPHQL_URL = import.meta.env.VITE_GRAPHQL_URL ?? '/graphql';
 

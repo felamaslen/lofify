@@ -1,3 +1,4 @@
+import { type Format,usePlayer } from '../state/player.tsx';
 import {
   Select,
   SelectContent,
@@ -5,7 +6,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from './ui/select.tsx';
-import { usePlayer, type Format } from '../state/player.tsx';
 
 const CHOICES: { value: Format; label: string }[] = [
   { value: 'AUTO_HI', label: 'Auto (hi)' },

@@ -1,8 +1,9 @@
-import { useMemo } from 'react';
 import { Pause, Play, SkipBack, SkipForward } from 'lucide-react';
+import { useMemo } from 'react';
+
+import { usePlayer } from '../state/player.tsx';
 import { Button } from './ui/button.tsx';
 import { Slider } from './ui/slider.tsx';
-import { usePlayer } from '../state/player.tsx';
 
 function fmt(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));

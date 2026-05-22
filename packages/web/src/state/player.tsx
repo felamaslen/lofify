@@ -1,18 +1,19 @@
+import { useQueryClient } from '@tanstack/react-query';
 import {
   createContext,
+  type ReactNode,
   useCallback,
   useContext,
   useEffect,
   useMemo,
   useRef,
   useState,
-  type ReactNode,
 } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+
+import type { ResultOf, VariablesOf } from '../lib/gql.ts';
 import { gqlRequest } from '../lib/gql-request.ts';
 import { resolvePlaybackUrl } from '../lib/playback-url.ts';
 import { TrackByIdQuery, TracksQuery } from '../lib/queries.ts';
-import type { ResultOf, VariablesOf } from '../lib/gql.ts';
 
 type TrackNode = NonNullable<ResultOf<typeof TrackByIdQuery>['track']>;
 
