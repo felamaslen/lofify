@@ -45,3 +45,22 @@
       sans-serif;
   }
 }
+
+/* Barber-pole stripe scroll for the seek bar's "still encoding" overlay. The 135° diagonal stripes use an 8px period; the horizontal projection of that period is 8/sin(45°) ≈ 11.3137px, so shifting background-position-x by that amount completes one seamless loop. */
+@keyframes lofify-pending-stripes {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: 11.3137px 0;
+  }
+}
+
+.lofify-pending-stripes {
+  background-image: repeating-linear-gradient(
+    135deg,
+    color-mix(in oklab, currentColor 30%, transparent) 0 4px,
+    transparent 4px 8px
+  );
+  animation: lofify-pending-stripes 1.2s linear infinite;
+}

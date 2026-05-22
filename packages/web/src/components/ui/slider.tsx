@@ -4,14 +4,14 @@ import * as React from 'react';
 import { cn } from '../../lib/utils.ts';
 
 type SliderProps = React.ComponentPropsWithoutRef<typeof SliderPrimitive.Root> & {
-  /** Range drawn as a pale wash behind everything else — e.g. "the server has these seconds ready to serve". */
-  availableEnd?: number;
-  /** Ranges drawn slightly darker on top of `availableEnd` — e.g. "I've downloaded these seconds". Same units as `min`/`max`. */
+  /** Ranges drawn slightly darker behind the active range — e.g. "I've downloaded these seconds". Same units as `min`/`max`. */
   bufferedRanges?: ReadonlyArray<{ start: number; end: number }>;
+  /** Start of a "pending / not yet available" region drawn as diagonal stripes from this value to `max`. Used to indicate the un-encoded tail of a transcoded track. Same units as `min`/`max`. */
+  pendingStart?: number;
 };
 
 export const Slider = React.forwardRef<React.ElementRef<typeof SliderPrimitive.Root>, SliderProps>(
-  ({ className, availableEnd, bufferedRanges, min = 0, max = 100, ...props }, ref) => {
+  ({ className, bufferedRanges, pendingStart, min = 0, max = 100, ...props }, ref) => {
     const lo = min as number;
     const hi = max as number;
     const span = hi - lo || 1;
@@ -24,11 +24,15 @@ export const Slider = React.forwardRef<React.ElementRef<typeof SliderPrimitive.R
         className={cn('relative flex w-full touch-none select-none items-center', className)}
         {...props}
       >
-        <SliderPrimitive.Track className="relative h-1.5 w-full grow overflow-hidden rounded-full bg-secondary">
-          {availableEnd != null && availableEnd > lo && (
+        <SliderPrimitive.Track className="relative h-1.5 w-full grow overflow-hidden rounded-full bg-secondary cursor-pointer">
+          {pendingStart != null && pendingStart < hi && (
             <div
-              className="pointer-events-none absolute h-full bg-primary/15"
-              style={{ left: `0%`, width: `${pct(Math.min(availableEnd, hi))}%` }}
+              className="lofify-pending-stripes pointer-events-none absolute h-full cursor-not-allowed"
+              style={{
+                left: `${pct(Math.max(pendingStart, lo))}%`,
+                width: `${(((hi - Math.max(pendingStart, lo)) / span) * 100).toFixed(3)}%`,
+                color: 'var(--muted-foreground, currentColor)',
+              }}
             />
           )}
           {bufferedRanges?.map((r, i) => (

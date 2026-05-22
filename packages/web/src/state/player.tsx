@@ -1,4 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query';
+import { readFragment } from 'gql.tada';
 import {
   createContext,
   type ReactNode,
@@ -33,8 +34,8 @@ export const TrackByIdDocument = graphql(
 const TranscodeProgressDocument = graphql(`
   subscription TranscodeProgress($trackId: ID!, $format: Format, $quality: Int) {
     transcodeProgress(trackId: $trackId, format: $format, quality: $quality) {
-      secondsTranscoded
-      bytesTranscoded
+      readyChunks
+      chunkDurationSeconds
       isDone
     }
   }
@@ -86,8 +87,8 @@ type PlayerCtx = {
   isPlaying: boolean;
   positionSeconds: number;
   bufferedRanges: BufferedRange[];
-  /** Seconds of audio the server has finished transcoding for the current track. The client may safely seek anywhere in `[0, transcodedSeconds]`. */
-  transcodedSeconds: number;
+  /** Seconds of the current track the server has finished encoding (derived from the `transcodeProgress` subscription). Seeks past this are rejected; the UI uses it to overlay a "still encoding" stripe on the unloaded tail of the seek bar. Equals the total duration once the transcode is done, and is `0` while we're still waiting for the first progress event. For passthrough playback the subscription emits `isDone: true` immediately with `readyChunks: 0`, leaving this at the track's duration. */
+  readySeconds: number;
   format: Format;
   setFormat: (f: Format) => void;
   play: (id: string) => void;
@@ -102,7 +103,8 @@ const Ctx = createContext<PlayerCtx | null>(null);
 function singletonAudio(): HTMLAudioElement | null {
   if (typeof window === 'undefined') return null;
   const el = new Audio();
-  el.preload = 'none';
+  // `preload='none'` can cause Chrome to detach a freshly-set MediaSource blob URL before `play()` fires, transitioning the MediaSource to `closed` and rejecting subsequent `appendBuffer` calls with "this SourceBuffer has been removed". `'metadata'` keeps the attachment live without preloading the actual audio data.
+  el.preload = 'metadata';
   return el;
 }
 
@@ -114,13 +116,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [positionSeconds, setPositionSeconds] = useState(0);
   const [bufferedRanges, setBufferedRanges] = useState<BufferedRange[]>([]);
-  const [transcodeProgress, setTranscodeProgress] = useState({
-    secondsTranscoded: 0,
-    bytesTranscoded: 0,
-    isDone: false,
-  });
-  const transcodeProgressRef = useRef(transcodeProgress);
-  transcodeProgressRef.current = transcodeProgress;
+  const [readySeconds, setReadySeconds] = useState(0);
+  const readySecondsRef = useRef(0);
+  readySecondsRef.current = readySeconds;
   const [format, setFormatState] = useState<Format>(loadStoredFormat);
   const setFormat = useCallback((f: Format) => {
     setFormatState(f);
@@ -167,7 +165,6 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     const audio = audioRef.current;
     if (!audio) return;
     const onEnded = () => {
-      console.log('onEnded -> next');
       setIsPlaying(false);
       nextRef.current();
     };
@@ -206,18 +203,29 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       setCurrent(track);
       setPositionSeconds(0);
       setBufferedRanges([]);
-      setTranscodeProgress({ secondsTranscoded: 0, bytesTranscoded: 0, isDone: false });
+      setReadySeconds(0);
       const audio = audioRef.current;
       if (!audio) return;
       playerRef.current?.dispose();
       playerRef.current = null;
       transcodeUnsubRef.current?.();
+      const meta = readFragment(PlaybackBarDocument, track);
+      const totalSeconds = meta.duration.seconds;
       transcodeUnsubRef.current = subscribe(
         TranscodeProgressDocument,
         { trackId: track.id, format, quality: null },
         {
           next: (data) => {
-            if (data.transcodeProgress) setTranscodeProgress(data.transcodeProgress);
+            const p = data.transcodeProgress;
+            if (!p) return;
+            // For passthrough the server emits `isDone: true` with `readyChunks: 0` once — treat that as "everything is ready" so the seek bar isn't permanently clamped.
+            const ready =
+              p.isDone && p.readyChunks === 0
+                ? totalSeconds
+                : p.readyChunks * p.chunkDurationSeconds;
+            const clamped = Math.min(ready, totalSeconds);
+            setReadySeconds(clamped);
+            playerRef.current?.setReadyChunks(p.readyChunks);
           },
           error: () => {
             transcodeUnsubRef.current = null;
@@ -240,7 +248,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     async (id: string) => {
       const data = await queryClient.fetchQuery({
         queryKey: ['track', id, format],
-        queryFn: ({ signal }) => gqlRequest(TrackByIdDocument, { id, format, quality: null }, signal),
+        queryFn: ({ signal }) =>
+          gqlRequest(TrackByIdDocument, { id, format, quality: null }, signal),
       });
       if (data.track) await loadTrack(data.track);
     },
@@ -258,13 +267,11 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     const audio = audioRef.current;
     const player = playerRef.current;
     if (!audio || !player) return;
-    const { secondsTranscoded, bytesTranscoded } = transcodeProgressRef.current;
-    // Clamp to the transcoded region — seeking past it would strand MSE in
-    // unbuffered territory; the UI is also responsible for disabling such clicks.
-    const target = secondsTranscoded > 0 ? Math.min(seconds, secondsTranscoded) : seconds;
-    const bytesPerSecond = secondsTranscoded > 0 ? bytesTranscoded / secondsTranscoded : 0;
+    // Clamp to the ready cursor so the UI can't strand MSE on an un-encoded chunk; the playback bar already prevents the user dragging past it but a programmatic seek (e.g. next-track auto-resume) might still try.
+    const ready = readySecondsRef.current;
+    const target = ready > 0 ? Math.min(seconds, ready) : seconds;
     setPositionSeconds(target);
-    await player.seekTo(target, bytesPerSecond);
+    await player.seekTo(target);
     await audio.play().catch(() => undefined);
   }, []);
 
@@ -298,7 +305,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       isPlaying,
       positionSeconds,
       bufferedRanges,
-      transcodedSeconds: transcodeProgress.secondsTranscoded,
+      readySeconds,
       format,
       setFormat,
       play: (id) => void playTrack(id),
@@ -312,8 +319,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       isPlaying,
       positionSeconds,
       bufferedRanges,
-      transcodeProgress.secondsTranscoded,
+      readySeconds,
       format,
+      setFormat,
       playTrack,
       togglePlay,
       next,
