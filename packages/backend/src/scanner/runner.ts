@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import { v4 as uuidv4 } from 'uuid';
 
 export type ScanError = {
+  err: unknown;
   file: string;
   message: string;
 };
@@ -48,12 +49,26 @@ export function getScan(id: string): ScanState | undefined {
   return scans.get(id);
 }
 
+/** Return the active scan if one is in progress, otherwise the most recent scan still within its post-completion grace period. Returns undefined when neither exists. */
+export function getLatestScan(): ScanState | undefined {
+  if (activeScanId !== null) return scans.get(activeScanId) ?? undefined;
+  let latest: ScanState | undefined;
+  for (const state of scans.values()) {
+    if (state.completedAt == null) continue;
+    if (!latest || (state.completedAt ?? 0) > (latest.completedAt ?? 0)) {
+      latest = state;
+    }
+  }
+  return latest;
+}
+
 /** Append an error to the scan's error list and increment its error counter. No-op if the scan id is unknown. */
 export function recordScanError(id: string, file: string, err: unknown): void {
   const state = scans.get(id);
   if (!state) return;
   state.errorsTotal += 1;
   state.errors.push({
+    err,
     file,
     message: err instanceof Error ? err.message : String(err),
   });

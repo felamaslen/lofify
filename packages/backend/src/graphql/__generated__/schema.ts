@@ -3,13 +3,49 @@
  * Do not manually edit. Regenerate by running `npx grats`.
  */
 
-import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, GraphQLInt, specifiedDirectives, GraphQLObjectType, GraphQLString, GraphQLID, GraphQLEnumType, GraphQLList, GraphQLBoolean } from "graphql";
+import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, GraphQLInt, specifiedDirectives, GraphQLObjectType, GraphQLString, GraphQLID, GraphQLBoolean, GraphQLEnumType, GraphQLList } from "graphql";
+import { libraryScan as queryLibraryScanResolver, libraryScanStart as mutationLibraryScanStartResolver, libraryScanSubscription as subscriptionLibraryScanResolver } from "./../library-scan.js";
 import { ping as queryPingResolver, noop as mutationNoopResolver } from "./../root.js";
 import { url as trackUrlResolver } from "./../track.js";
 import { track as queryTrackResolver, tracks as queryTracksResolver } from "./../track-queries.js";
-import { libraryScan as mutationLibraryScanResolver } from "./../library-scan.js";
-import { libraryScan as subscriptionLibraryScanResolver } from "./../library-scan-subscription.js";
 export function getSchema(): GraphQLSchema {
+    const LibraryScanType: GraphQLObjectType = new GraphQLObjectType({
+        name: "LibraryScan",
+        description: "Snapshot of an ongoing or completed library scan.",
+        fields() {
+            return {
+                errorMessage: {
+                    description: "Human-readable summary of errors encountered, or null when no errors have been recorded.",
+                    name: "errorMessage",
+                    type: GraphQLString
+                },
+                errorsTotal: {
+                    description: "Files that failed to parse or upsert.",
+                    name: "errorsTotal",
+                    type: new GraphQLNonNull(GraphQLInt)
+                },
+                filesTotal: {
+                    description: "Total files discovered on disk for this scan. Null until the file walk has finished \u2014 clients should render an indeterminate progress state in that case.",
+                    name: "filesTotal",
+                    type: GraphQLInt
+                },
+                id: {
+                    name: "id",
+                    type: new GraphQLNonNull(GraphQLID)
+                },
+                isCompleted: {
+                    description: "True once the scan has finished (successfully or not).",
+                    name: "isCompleted",
+                    type: new GraphQLNonNull(GraphQLBoolean)
+                },
+                scannedTotal: {
+                    description: "Files successfully parsed and upserted so far.",
+                    name: "scannedTotal",
+                    type: new GraphQLNonNull(GraphQLInt)
+                }
+            };
+        }
+    });
     const DurationType: GraphQLObjectType = new GraphQLObjectType({
         name: "Duration",
         description: "A length of time, expressed in whole seconds.",
@@ -198,6 +234,14 @@ export function getSchema(): GraphQLSchema {
         name: "Query",
         fields() {
             return {
+                libraryScan: {
+                    description: "The current library scan, if one is in progress or recently completed within the server's grace window. Null when no scan has run recently.",
+                    name: "libraryScan",
+                    type: LibraryScanType,
+                    resolve() {
+                        return queryLibraryScanResolver();
+                    }
+                },
                 ping: {
                     description: "Returns the literal string `\"pong\"`. Useful as a liveness probe.",
                     name: "ping",
@@ -244,33 +288,6 @@ export function getSchema(): GraphQLSchema {
             };
         }
     });
-    const LibraryScanType: GraphQLObjectType = new GraphQLObjectType({
-        name: "LibraryScan",
-        description: "Snapshot of an ongoing or completed library scan.",
-        fields() {
-            return {
-                errorsTotal: {
-                    description: "Files that failed to parse or upsert.",
-                    name: "errorsTotal",
-                    type: new GraphQLNonNull(GraphQLInt)
-                },
-                filesTotal: {
-                    description: "Total files discovered on disk for this scan. Null until the file walk has finished \u2014 clients should render an indeterminate progress state in that case.",
-                    name: "filesTotal",
-                    type: GraphQLInt
-                },
-                id: {
-                    name: "id",
-                    type: new GraphQLNonNull(GraphQLID)
-                },
-                scannedTotal: {
-                    description: "Files successfully parsed and upserted so far.",
-                    name: "scannedTotal",
-                    type: new GraphQLNonNull(GraphQLInt)
-                }
-            };
-        }
-    });
     const VoidType: GraphQLObjectType = new GraphQLObjectType({
         name: "Void",
         description: "Empty payload returned by mutations that have nothing meaningful to report.",
@@ -287,12 +304,12 @@ export function getSchema(): GraphQLSchema {
         name: "Mutation",
         fields() {
             return {
-                libraryScan: {
+                libraryScanStart: {
                     description: "Triggers a full scan of the configured library. Returns immediately with `filesTotal: null`; the file walk and parsing run in the background. Observe progress via `Subscription.libraryScan`.",
-                    name: "libraryScan",
+                    name: "libraryScanStart",
                     type: new GraphQLNonNull(LibraryScanType),
                     resolve() {
-                        return mutationLibraryScanResolver();
+                        return mutationLibraryScanStartResolver();
                     }
                 },
                 noop: {

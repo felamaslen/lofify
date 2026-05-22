@@ -84,6 +84,10 @@ export function scanLibrary(root: string): ScanState {
       await upsertTrack(file);
       state.scannedTotal += 1;
     } catch (err) {
+      logger.error(
+        `scanner: failed to upsert ${file}: ${err instanceof Error ? err.message : String(err)}`,
+        { stack: (err as Error)?.stack },
+      );
       recordScanError(state.id, file, err);
       span.recordException(err as Error);
     }

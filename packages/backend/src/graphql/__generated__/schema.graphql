@@ -28,6 +28,10 @@ type Duration {
 
 """Snapshot of an ongoing or completed library scan."""
 type LibraryScan {
+  """
+  Human-readable summary of errors encountered, or null when no errors have been recorded.
+  """
+  errorMessage: String
   """Files that failed to parse or upsert."""
   errorsTotal: Int!
   """
@@ -35,6 +39,8 @@ type LibraryScan {
   """
   filesTotal: Int
   id: ID!
+  """True once the scan has finished (successfully or not)."""
+  isCompleted: Boolean!
   """Files successfully parsed and upserted so far."""
   scannedTotal: Int!
 }
@@ -43,7 +49,7 @@ type Mutation {
   """
   Triggers a full scan of the configured library. Returns immediately with `filesTotal: null`; the file walk and parsing run in the background. Observe progress via `Subscription.libraryScan`.
   """
-  libraryScan: LibraryScan!
+  libraryScanStart: LibraryScan!
   """Does nothing."""
   noop: Void!
 }
@@ -65,6 +71,10 @@ type PageInfo {
 }
 
 type Query {
+  """
+  The current library scan, if one is in progress or recently completed within the server's grace window. Null when no scan has run recently.
+  """
+  libraryScan: LibraryScan
   """Returns the literal string `"pong"`. Useful as a liveness probe."""
   ping: String
   """
