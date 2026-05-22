@@ -47,9 +47,13 @@ export function contentTypeFor(format: string, codec: string): string {
   }
 }
 
-type ResolvedTarget = { kind: 'passthrough' } | { kind: 'transcode'; target: TranscodeTarget };
+export type ResolvedTarget = { kind: 'passthrough' } | { kind: 'transcode'; target: TranscodeTarget };
 
-function resolveTarget(track: DbTrack, opts: ParsedOptions): ResolvedTarget {
+export function transcodeCacheKey(trackId: string, target: TranscodeTarget): string {
+  return `${trackId}:${target.format}:${target.codec}:${target.quality ?? 'auto'}`;
+}
+
+export function resolveTarget(track: DbTrack, opts: ParsedOptions): ResolvedTarget {
   const sourceFormat = track.format.toLowerCase();
   const sourceCodec = track.codec.toLowerCase();
   const requested: RequestedFormat = opts.format ?? 'original';
@@ -320,8 +324,7 @@ export async function registerPlaybackRoute(app: FastifyInstance): Promise<void>
       if (resolved.kind === 'passthrough') {
         return sendPassthrough(req, reply, track);
       }
-      const cacheKey = `${track.id}:${resolved.target.format}:${resolved.target.codec}:${resolved.target.quality ?? 'auto'}`;
-      return sendTranscode(req, reply, track, resolved.target, cacheKey);
+      return sendTranscode(req, reply, track, resolved.target, transcodeCacheKey(track.id, resolved.target));
     },
   );
 }

@@ -14,6 +14,8 @@ export type Entry = {
   key: string;
   chunks: Buffer[];
   bytes: number;
+  /** Seconds of audio that ffmpeg has finished encoding, parsed from its stderr `time=` progress reports. Lags `bytes` slightly because ffmpeg reports progress in batches. */
+  transcodedSeconds: number;
   done: boolean;
   error: Error | null;
   lastAccess: number;
@@ -60,6 +62,7 @@ export function getOrStartTranscode(
     key,
     chunks: [],
     bytes: 0,
+    transcodedSeconds: 0,
     done: false,
     error: null,
     lastAccess: Date.now(),

@@ -3,11 +3,12 @@
  * Do not manually edit. Regenerate by running `npx grats`.
  */
 
-import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, GraphQLInt, specifiedDirectives, GraphQLObjectType, GraphQLString, GraphQLID, GraphQLBoolean, GraphQLEnumType, GraphQLList } from "graphql";
+import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, GraphQLInt, specifiedDirectives, GraphQLObjectType, GraphQLString, GraphQLID, GraphQLBoolean, GraphQLEnumType, GraphQLList, GraphQLFloat } from "graphql";
 import { libraryScan as queryLibraryScanResolver, libraryScanStart as mutationLibraryScanStartResolver, libraryScanSubscription as subscriptionLibraryScanResolver } from "./../library-scan.js";
 import { ping as queryPingResolver, noop as mutationNoopResolver } from "./../root.js";
 import { url as trackUrlResolver } from "./../track.js";
 import { track as queryTrackResolver, tracks as queryTracksResolver } from "./../track-queries.js";
+import { transcodeProgressSubscription as subscriptionTranscodeProgressResolver } from "./../transcode-progress.js";
 export function getSchema(): GraphQLSchema {
     const LibraryScanType: GraphQLObjectType = new GraphQLObjectType({
         name: "LibraryScan",
@@ -323,6 +324,29 @@ export function getSchema(): GraphQLSchema {
             };
         }
     });
+    const TranscodeProgressType: GraphQLObjectType = new GraphQLObjectType({
+        name: "TranscodeProgress",
+        description: "Snapshot of how much of a transcoded playback stream the server has produced so far. Lets the client distinguish \"the server has these bytes ready to serve\" from \"I've downloaded these bytes\" \u2014 useful for seek-bar indicators and for clamping seeks to the transcoded region.",
+        fields() {
+            return {
+                bytesTranscoded: {
+                    description: "Bytes produced by the transcoder so far. Combined with `secondsTranscoded` this gives an average bytes-per-second the client can use to estimate the byte offset for a seek target.",
+                    name: "bytesTranscoded",
+                    type: new GraphQLNonNull(GraphQLInt)
+                },
+                isDone: {
+                    description: "True once transcoding has finished (successfully or not). After this the snapshot is final.",
+                    name: "isDone",
+                    type: new GraphQLNonNull(GraphQLBoolean)
+                },
+                secondsTranscoded: {
+                    description: "Seconds of audio the server has finished transcoding. Zero when no transcode is running (e.g. passthrough playback).",
+                    name: "secondsTranscoded",
+                    type: new GraphQLNonNull(GraphQLFloat)
+                }
+            };
+        }
+    });
     const SubscriptionType: GraphQLObjectType = new GraphQLObjectType({
         name: "Subscription",
         fields() {
@@ -338,6 +362,28 @@ export function getSchema(): GraphQLSchema {
                     },
                     subscribe(_source, args) {
                         return subscriptionLibraryScanResolver(args);
+                    },
+                    resolve(payload) {
+                        return payload;
+                    }
+                },
+                transcodeProgress: {
+                    description: "Stream progress snapshots of the transcode that backs a given `(trackId, format, quality)` playback URL. Emits at most once per second while the transcode is running, then yields a final snapshot when it finishes. The subscription kicks off the transcode if it isn't already running, so subscribing before fetching the playback URL is fine.",
+                    name: "transcodeProgress",
+                    type: new GraphQLNonNull(TranscodeProgressType),
+                    args: {
+                        format: {
+                            type: FormatType
+                        },
+                        quality: {
+                            type: GraphQLInt
+                        },
+                        trackId: {
+                            type: new GraphQLNonNull(GraphQLID)
+                        }
+                    },
+                    subscribe(_source, args) {
+                        return subscriptionTranscodeProgressResolver(args);
                     },
                     resolve(payload) {
                         return payload;
@@ -363,6 +409,6 @@ export function getSchema(): GraphQLSchema {
         query: QueryType,
         mutation: MutationType,
         subscription: SubscriptionType,
-        types: [FormatType, DurationType, LibraryScanType, MutationType, PageInfoType, QueryType, SubscriptionType, TrackType, TrackConnectionType, TrackEdgeType, VoidType]
+        types: [FormatType, DurationType, LibraryScanType, MutationType, PageInfoType, QueryType, SubscriptionType, TrackType, TrackConnectionType, TrackEdgeType, TranscodeProgressType, VoidType]
     });
 }

@@ -84,10 +84,29 @@ export async function runFfmpeg(
       try {
         await new Promise<void>((resolve, reject) => {
           const args = ffmpegArgs(source, target);
-          const proc = spawn('ffmpeg', ['-hide_banner', '-loglevel', 'error', ...args]);
+          // `-progress pipe:2` writes machine-parseable progress lines
+          // (`out_time_us=N`, `progress=continue|end`, …) onto stderr so we
+          // can track how many seconds of audio have been encoded so far.
+          const proc = spawn('ffmpeg', [
+            '-hide_banner',
+            '-loglevel',
+            'error',
+            '-progress',
+            'pipe:2',
+            ...args,
+          ]);
           let stderr = '';
           proc.stderr.on('data', (chunk: Buffer) => {
-            stderr += chunk.toString();
+            const text = chunk.toString();
+            stderr += text;
+            const match = /(?:^|\n)out_time_us=(\d+)/g;
+            let m: RegExpExecArray | null;
+            let latest: number | null = null;
+            while ((m = match.exec(text)) !== null) latest = Number(m[1]);
+            if (latest != null && Number.isFinite(latest)) {
+              entry.transcodedSeconds = latest / 1_000_000;
+              entry.emitter.emit('progress');
+            }
           });
 
           const emit = (chunk: Buffer): void => {
