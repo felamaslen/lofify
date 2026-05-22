@@ -153,6 +153,15 @@ async function sendPassthrough(
   return reply.send(createReadStream(track.file));
 }
 
+/** Copy headers added via `reply.header()` (e.g. by the CORS plugin) onto the raw response. Without this, hijacking drops anything plugins set on the Fastify reply, since `reply.send()` is what normally flushes them. */
+function flushReplyHeadersToRaw(reply: FastifyReply, raw: ServerResponse): void {
+  const headers = reply.getHeaders();
+  for (const [name, value] of Object.entries(headers)) {
+    if (value === undefined) continue;
+    raw.setHeader(name, value as string | number | readonly string[]);
+  }
+}
+
 async function streamEntryToRaw(
   raw: ServerResponse,
   entry: Entry,
@@ -251,6 +260,7 @@ async function sendTranscode(
     reply.code(206);
     reply.hijack();
     const raw = reply.raw;
+    flushReplyHeadersToRaw(reply, raw);
     raw.statusCode = 206;
     raw.setHeader('Content-Type', contentType);
     raw.setHeader('Accept-Ranges', 'bytes');
@@ -263,6 +273,7 @@ async function sendTranscode(
   reply.code(200);
   reply.hijack();
   const raw = reply.raw;
+  flushReplyHeadersToRaw(reply, raw);
   raw.setHeader('Content-Type', contentType);
   raw.setHeader('Accept-Ranges', 'bytes');
   await streamEntryToRaw(raw, entry, 0, null);

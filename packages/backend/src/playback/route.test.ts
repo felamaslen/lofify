@@ -168,7 +168,11 @@ test('transcode — no range streams the full body as 200', async () => {
   });
   const url = signPlaybackUrl(id, { quality: null, format: 'ogg' });
 
-  const pending = app.inject({ method: 'GET', url });
+  const pending = app.inject({
+    method: 'GET',
+    url,
+    headers: { origin: 'http://localhost:5173' },
+  });
   await fake.waitForStart();
   fake.emit('hello');
   fake.emit('world');
@@ -179,6 +183,7 @@ test('transcode — no range streams the full body as 200', async () => {
   expect(res.headers['content-type']).toBe('audio/ogg; codecs=vorbis');
   expect(res.headers['accept-ranges']).toBe('bytes');
   expect(res.headers['content-range']).toBeUndefined();
+  expect(res.headers['access-control-allow-origin']).toBe('http://localhost:5173');
   expect(res.rawPayload.toString()).toBe('helloworld');
 });
 
@@ -192,7 +197,11 @@ test('transcode — Range: bytes=0- returns 206 with full known range once done'
   });
   const url = signPlaybackUrl(id, { quality: null, format: 'ogg' });
 
-  const pending = app.inject({ method: 'GET', url, headers: { range: 'bytes=0-' } });
+  const pending = app.inject({
+    method: 'GET',
+    url,
+    headers: { range: 'bytes=0-', origin: 'http://localhost:5173' },
+  });
   await fake.waitForStart();
   const body = Buffer.alloc(1000, 0x42);
   fake.emit(body);
@@ -204,6 +213,7 @@ test('transcode — Range: bytes=0- returns 206 with full known range once done'
   expect(res.headers['accept-ranges']).toBe('bytes');
   expect(res.headers['content-range']).toBe('bytes 0-999/1000');
   expect(res.headers['content-length']).toBe('1000');
+  expect(res.headers['access-control-allow-origin']).toBe('http://localhost:5173');
   expect(res.rawPayload.equals(body)).toBe(true);
 });
 
@@ -217,7 +227,11 @@ test('transcode — Range: bytes=0- mid-transcode returns 206 with unknown total
   });
   const url = signPlaybackUrl(id, { quality: null, format: 'ogg' });
 
-  const pending = app.inject({ method: 'GET', url, headers: { range: 'bytes=0-' } });
+  const pending = app.inject({
+    method: 'GET',
+    url,
+    headers: { range: 'bytes=0-', origin: 'http://localhost:5173' },
+  });
   await fake.waitForStart();
 
   const body = Buffer.alloc(256 * 1024, 0x37);
@@ -227,6 +241,7 @@ test('transcode — Range: bytes=0- mid-transcode returns 206 with unknown total
   expect(res.statusCode).toBe(206);
   expect(res.headers['content-range']).toBe(`bytes 0-${body.length - 1}/*`);
   expect(res.headers['content-length']).toBe(String(body.length));
+  expect(res.headers['access-control-allow-origin']).toBe('http://localhost:5173');
   expect(res.rawPayload.equals(body)).toBe(true);
 
   fake.finish();
@@ -252,11 +267,12 @@ test('transcode — seek into already-transcoded area serves 206 immediately', a
   const seek = await app.inject({
     method: 'GET',
     url,
-    headers: { range: 'bytes=500-700' },
+    headers: { range: 'bytes=500-700', origin: 'http://localhost:5173' },
   });
   expect(seek.statusCode).toBe(206);
   expect(seek.headers['content-range']).toBe('bytes 500-700/*');
   expect(seek.headers['content-length']).toBe('201');
+  expect(seek.headers['access-control-allow-origin']).toBe('http://localhost:5173');
   expect(seek.rawPayload.equals(body.subarray(500, 701))).toBe(true);
 
   fake.finish();
@@ -282,7 +298,7 @@ test('transcode — seek into not-yet-transcoded area waits for the bytes', asyn
   const seek = app.inject({
     method: 'GET',
     url,
-    headers: { range: 'bytes=500-700' },
+    headers: { range: 'bytes=500-700', origin: 'http://localhost:5173' },
   });
   let settled = false;
   void seek.then(() => {
@@ -298,6 +314,7 @@ test('transcode — seek into not-yet-transcoded area waits for the bytes', asyn
   expect(res.statusCode).toBe(206);
   expect(res.headers['content-range']).toBe('bytes 500-700/*');
   expect(res.headers['content-length']).toBe('201');
+  expect(res.headers['access-control-allow-origin']).toBe('http://localhost:5173');
   const full = Buffer.concat([head, tail]);
   expect(res.rawPayload.equals(full.subarray(500, 701))).toBe(true);
 
