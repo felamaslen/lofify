@@ -117,6 +117,12 @@ importers:
         specifier: ^4.4.3
         version: 4.4.3
     devDependencies:
+      '@0no-co/graphqlsp':
+        specifier: ^1.12.0
+        version: 1.15.4(graphql@16.14.0)(typescript@5.9.3)
+      '@graphql-typed-document-node/core':
+        specifier: ^3.2.0
+        version: 3.2.0(graphql@16.14.0)
       '@types/node':
         specifier: ^25.9.1
         version: 25.9.1
@@ -132,9 +138,9 @@ importers:
       drizzle-pgkit-migrator:
         specifier: ^0.1.1
         version: 0.1.1(@inquirer/prompts@5.5.0)(@opentelemetry/api@1.9.1)(@types/node@25.9.1)(@types/pg@8.20.0)(drizzle-kit@0.31.10)(pg-query-stream@4.10.3(pg@8.21.0))(typescript@5.9.3)
-      fake-tag:
-        specifier: ^5.0.0
-        version: 5.0.0
+      gql.tada:
+        specifier: ^1.8.0
+        version: 1.9.2(graphql@16.14.0)(typescript@5.9.3)
       tsx:
         specifier: ^4.22.3
         version: 4.22.3
@@ -3061,10 +3067,6 @@ packages:
   external-editor@3.1.0:
     resolution: {integrity: sha512-hMQ4CX1p1izmuLYyZqLMO/qGNw10wSv9QDCPfzXfyFrOaCSSoRfqE1Kf1s5an66J5JZC62NewG+mK49jOCtQew==}
     engines: {node: '>=4'}
-
-  fake-tag@5.0.0:
-    resolution: {integrity: sha512-NMXlFIKCobSTcJvt80ehRjD49BwQNt/k+UDPw+rSDHH6aWO7I37rGGKKLH9NkMsBTsgOVERoI7aTCBPrmfOdrA==}
-    engines: {node: ^14.17.0 || ^16.0.0 || >= 18.0.0}
 
   fast-decode-uri-component@1.0.1:
     resolution: {integrity: sha512-WKgKWg5eUxvRZGwW8FvfbaH7AXSh2cL+3j5fMGzUMCxWBJ3dV3a7Wz8y2f/uQ0e3B6WmodD3oS54jTQ9HVTIIg==}
@@ -7650,8 +7652,6 @@ snapshots:
       chardet: 0.7.0
       iconv-lite: 0.4.24
       tmp: 0.0.33
-
-  fake-tag@5.0.0: {}
 
   fast-decode-uri-component@1.0.1: {}
 

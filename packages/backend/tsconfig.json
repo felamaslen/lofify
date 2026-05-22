@@ -7,7 +7,14 @@
     "nullableByDefault": false
   },
   "compilerOptions": {
-    "types": ["node"]
+    "types": ["node"],
+    "plugins": [
+      {
+        "name": "@0no-co/graphqlsp",
+        "schema": "./src/graphql/__generated__/schema.graphql",
+        "tadaOutputLocation": "./src/graphql/__generated__/tada-env.d.ts"
+      }
+    ]
   },
   "include": ["src"]
 }

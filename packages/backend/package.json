@@ -45,12 +45,14 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@0no-co/graphqlsp": "^1.12.0",
+    "@graphql-typed-document-node/core": "^3.2.0",
     "@types/node": "^25.9.1",
     "@types/pg": "^8.11.10",
     "@types/range-parser": "^1.2.7",
     "drizzle-kit": "^0.31.10",
     "drizzle-pgkit-migrator": "^0.1.1",
-    "fake-tag": "^5.0.0",
+    "gql.tada": "^1.8.0",
     "tsx": "^4.22.3",
     "typescript": "^5.6.2",
     "vitest": "^4.1.7"
