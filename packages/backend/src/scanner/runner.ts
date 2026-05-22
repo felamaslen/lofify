@@ -23,6 +23,11 @@ const GRACE_MS = 60_000;
 const scans = new Map<string, ScanState>();
 const events = new EventEmitter();
 
+/** Test util to clear in-memory scans map. Use in test setup */
+export const TEST__clearScans = () => {
+  scans.clear();
+};
+
 let activeScanId: string | null = null;
 
 /** Register a fresh scan and return its mutable in-memory state. At most one scan may be active at a time; throws a `PRECONDITION_FAILED` GraphQL error when another scan is in progress. */
