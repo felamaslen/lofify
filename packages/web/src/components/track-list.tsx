@@ -1,20 +1,22 @@
-import { useInfiniteQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useEffect, useMemo, useRef } from 'react';
 
 import { gqlRequest } from '../lib/gql-request.ts';
-import { TracksQuery } from '../lib/queries.ts';
+import { TrackByIdQuery, TracksQuery } from '../lib/queries.ts';
 import { cn } from '../lib/utils.ts';
 import { usePlayer } from '../state/player.tsx';
 
 const PAGE_SIZE = 100;
 const ROW_HEIGHT = 36;
+const HOVER_PREFETCH_MS = 200;
 
 const COLS =
   'grid grid-cols-[40px_60px_minmax(0,2fr)_80px_minmax(0,1.2fr)_minmax(0,1.4fr)_80px] items-center gap-3 px-4';
 
 export function TrackList() {
   const { format, play, current } = usePlayer();
+  const queryClient = useQueryClient();
 
   const query = useInfiniteQuery({
     queryKey: ['tracks', format],
@@ -42,6 +44,26 @@ export function TrackList() {
   );
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const onRowEnter = (id: string): void => {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    hoverTimerRef.current = setTimeout(() => {
+      hoverTimerRef.current = null;
+      void queryClient.prefetchQuery({
+        queryKey: ['track', id, format],
+        queryFn: ({ signal }) =>
+          gqlRequest(TrackByIdQuery, { id, format, quality: null }, signal),
+      });
+    }, HOVER_PREFETCH_MS);
+  };
+  const onRowLeave = (): void => {
+    if (hoverTimerRef.current) {
+      clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+  };
+
   const virtualizer = useVirtualizer({
     count: edges.length,
     getScrollElement: () => scrollRef.current,
@@ -111,6 +133,8 @@ export function TrackList() {
                 onMouseDown={(e) => {
                   if (e.detail >= 2) e.preventDefault();
                 }}
+                onMouseEnter={() => onRowEnter(t.id)}
+                onMouseLeave={onRowLeave}
                 onDoubleClick={() => play(t.id)}
                 className={cn(
                   COLS,
