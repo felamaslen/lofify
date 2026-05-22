@@ -10,10 +10,41 @@ import {
   useState,
 } from 'react';
 
-import type { ResultOf, VariablesOf } from '../lib/gql.ts';
+import { TracksQuery } from '../components/track-list.tsx';
+import { graphql, type ResultOf, type VariablesOf } from '../lib/gql.ts';
 import { gqlRequest } from '../lib/gql-request.ts';
-import { attachAudioSource } from '../lib/mse.ts';
-import { TrackByIdQuery, TracksQuery } from '../lib/queries.ts';
+import { createPlayer, type Player as MsePlayer } from '../lib/mse.ts';
+import { subscribe } from '../lib/sse-client.ts';
+
+export const TrackByIdQuery = graphql(`
+  query TrackById($id: ID!, $format: Format, $quality: Int) {
+    track(id: $id) {
+      id
+      title
+      trackNumber
+      discNumber
+      artist
+      album
+      year
+      format
+      duration {
+        seconds
+        formatted
+      }
+      url(format: $format, quality: $quality)
+    }
+  }
+`);
+
+const TranscodeProgressSubscription = graphql(`
+  subscription TranscodeProgress($trackId: ID!, $format: Format, $quality: Int) {
+    transcodeProgress(trackId: $trackId, format: $format, quality: $quality) {
+      secondsTranscoded
+      bytesTranscoded
+      isDone
+    }
+  }
+`);
 
 type TrackNode = NonNullable<ResultOf<typeof TrackByIdQuery>['track']>;
 
@@ -54,10 +85,15 @@ function loadStoredFormat(): Format {
   return 'AUTO_HI';
 }
 
+export type BufferedRange = { start: number; end: number };
+
 type PlayerCtx = {
   current: TrackNode | null;
   isPlaying: boolean;
   positionSeconds: number;
+  bufferedRanges: BufferedRange[];
+  /** Seconds of audio the server has finished transcoding for the current track. The client may safely seek anywhere in `[0, transcodedSeconds]`. */
+  transcodedSeconds: number;
   format: Format;
   setFormat: (f: Format) => void;
   play: (id: string) => void;
@@ -83,6 +119,14 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const [current, setCurrent] = useState<TrackNode | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [positionSeconds, setPositionSeconds] = useState(0);
+  const [bufferedRanges, setBufferedRanges] = useState<BufferedRange[]>([]);
+  const [transcodeProgress, setTranscodeProgress] = useState({
+    secondsTranscoded: 0,
+    bytesTranscoded: 0,
+    isDone: false,
+  });
+  const transcodeProgressRef = useRef(transcodeProgress);
+  transcodeProgressRef.current = transcodeProgress;
   const [format, setFormatState] = useState<Format>(loadStoredFormat);
   const setFormat = useCallback((f: Format) => {
     setFormatState(f);
@@ -91,7 +135,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     }
   }, []);
   const nextRef = useRef<() => void>(() => undefined);
-  const loadAbortRef = useRef<AbortController | null>(null);
+  const playerRef = useRef<MsePlayer | null>(null);
+  const transcodeUnsubRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -99,13 +144,28 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     const onPlay = () => setIsPlaying(true);
     const onPause = () => setIsPlaying(false);
     const onTime = () => setPositionSeconds(audio.currentTime);
+    const onBuffered = () => {
+      const ranges: BufferedRange[] = [];
+      for (let i = 0; i < audio.buffered.length; i++) {
+        ranges.push({ start: audio.buffered.start(i), end: audio.buffered.end(i) });
+      }
+      setBufferedRanges(ranges);
+    };
     audio.addEventListener('play', onPlay);
     audio.addEventListener('pause', onPause);
     audio.addEventListener('timeupdate', onTime);
+    audio.addEventListener('progress', onBuffered);
+    audio.addEventListener('seeked', onBuffered);
+    audio.addEventListener('loadedmetadata', onBuffered);
+    audio.addEventListener('emptied', onBuffered);
     return () => {
       audio.removeEventListener('play', onPlay);
       audio.removeEventListener('pause', onPause);
       audio.removeEventListener('timeupdate', onTime);
+      audio.removeEventListener('progress', onBuffered);
+      audio.removeEventListener('seeked', onBuffered);
+      audio.removeEventListener('loadedmetadata', onBuffered);
+      audio.removeEventListener('emptied', onBuffered);
     };
   }, []);
 
@@ -147,18 +207,35 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     async (track: TrackNode) => {
       setCurrent(track);
       setPositionSeconds(0);
+      setBufferedRanges([]);
+      setTranscodeProgress({ secondsTranscoded: 0, bytesTranscoded: 0, isDone: false });
       const audio = audioRef.current;
       if (!audio) return;
-      loadAbortRef.current?.abort();
-      const abort = new AbortController();
-      loadAbortRef.current = abort;
-      await attachAudioSource(audio, resolvePlaybackUrl(track.url), abort.signal);
-      if (abort.signal.aborted) return;
+      playerRef.current?.dispose();
+      playerRef.current = null;
+      transcodeUnsubRef.current?.();
+      transcodeUnsubRef.current = subscribe(
+        TranscodeProgressSubscription,
+        { trackId: track.id, format, quality: null },
+        {
+          next: (data) => {
+            if (data.transcodeProgress) setTranscodeProgress(data.transcodeProgress);
+          },
+          error: () => {
+            transcodeUnsubRef.current = null;
+          },
+          complete: () => {
+            transcodeUnsubRef.current = null;
+          },
+        },
+      );
+      const player = await createPlayer(audio, resolvePlaybackUrl(track.url));
+      playerRef.current = player;
       audio.currentTime = 0;
       await audio.play().catch(() => undefined);
       prefetchNext(track.id);
     },
-    [prefetchNext],
+    [prefetchNext, format],
   );
 
   const playTrack = useCallback(
@@ -179,11 +256,18 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     else audio.pause();
   }, [current]);
 
-  const seek = useCallback((seconds: number) => {
+  const seek = useCallback(async (seconds: number) => {
     const audio = audioRef.current;
-    if (!audio) return;
-    audio.currentTime = seconds;
-    setPositionSeconds(seconds);
+    const player = playerRef.current;
+    if (!audio || !player) return;
+    const { secondsTranscoded, bytesTranscoded } = transcodeProgressRef.current;
+    // Clamp to the transcoded region — seeking past it would strand MSE in
+    // unbuffered territory; the UI is also responsible for disabling such clicks.
+    const target = secondsTranscoded > 0 ? Math.min(seconds, secondsTranscoded) : seconds;
+    const bytesPerSecond = secondsTranscoded > 0 ? bytesTranscoded / secondsTranscoded : 0;
+    setPositionSeconds(target);
+    await player.seekTo(target, bytesPerSecond);
+    await audio.play().catch(() => undefined);
   }, []);
 
   const step = useCallback(
@@ -215,15 +299,29 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       current,
       isPlaying,
       positionSeconds,
+      bufferedRanges,
+      transcodedSeconds: transcodeProgress.secondsTranscoded,
       format,
       setFormat,
       play: (id) => void playTrack(id),
       togglePlay,
       next,
       previous,
-      seek,
+      seek: (s) => void seek(s),
     }),
-    [current, isPlaying, positionSeconds, format, playTrack, togglePlay, next, previous, seek],
+    [
+      current,
+      isPlaying,
+      positionSeconds,
+      bufferedRanges,
+      transcodeProgress.secondsTranscoded,
+      format,
+      playTrack,
+      togglePlay,
+      next,
+      previous,
+      seek,
+    ],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

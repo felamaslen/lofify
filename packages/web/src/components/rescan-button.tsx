@@ -3,15 +3,50 @@ import type { ResultOf } from 'gql.tada';
 import { AlertTriangle, Loader2, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { graphql } from '../lib/gql.ts';
 import { gqlRequest } from '../lib/gql-request.ts';
-import {
-  LibraryScanQuery,
-  LibraryScanSubscription,
-  StartLibraryScanMutation,
-} from '../lib/queries.ts';
 import { subscribe } from '../lib/sse-client.ts';
 import { Button } from './ui/button.tsx';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip.tsx';
+
+const LibraryScanQuery = graphql(`
+  query LibraryScanCurrent {
+    libraryScan {
+      id
+      filesTotal
+      scannedTotal
+      errorsTotal
+      isCompleted
+      errorMessage
+    }
+  }
+`);
+
+const StartLibraryScanMutation = graphql(`
+  mutation StartLibraryScan {
+    libraryScanStart {
+      id
+      filesTotal
+      scannedTotal
+      errorsTotal
+      isCompleted
+      errorMessage
+    }
+  }
+`);
+
+const LibraryScanSubscription = graphql(`
+  subscription LibraryScan($id: ID!) {
+    libraryScan(id: $id) {
+      id
+      filesTotal
+      scannedTotal
+      errorsTotal
+      isCompleted
+      errorMessage
+    }
+  }
+`);
 
 type Snapshot = ResultOf<typeof LibraryScanSubscription>['libraryScan'];
 

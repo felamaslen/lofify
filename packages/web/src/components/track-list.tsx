@@ -2,10 +2,49 @@ import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useEffect, useMemo, useRef } from 'react';
 
+import { graphql } from '../lib/gql.ts';
 import { gqlRequest } from '../lib/gql-request.ts';
-import { TrackByIdQuery, TracksQuery } from '../lib/queries.ts';
 import { cn } from '../lib/utils.ts';
-import { usePlayer } from '../state/player.tsx';
+import { TrackByIdQuery, usePlayer } from '../state/player.tsx';
+
+export const TracksQuery = graphql(`
+  query Tracks(
+    $first: Int
+    $last: Int
+    $after: String
+    $before: String
+    $format: Format
+    $quality: Int
+  ) {
+    tracks(first: $first, last: $last, after: $after, before: $before) {
+      totalCount
+      pageInfo {
+        hasNextPage
+        hasPreviousPage
+        startCursor
+        endCursor
+      }
+      edges {
+        cursor
+        node {
+          id
+          title
+          trackNumber
+          discNumber
+          artist
+          album
+          year
+          format
+          duration {
+            seconds
+            formatted
+          }
+          url(format: $format, quality: $quality)
+        }
+      }
+    }
+  }
+`);
 
 const PAGE_SIZE = 100;
 const ROW_HEIGHT = 36;

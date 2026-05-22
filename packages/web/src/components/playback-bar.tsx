@@ -17,6 +17,8 @@ export function PlaybackBar() {
     current,
     isPlaying,
     positionSeconds,
+    bufferedRanges,
+    transcodedSeconds,
     togglePlay,
     next,
     previous,
@@ -82,7 +84,14 @@ export function PlaybackBar() {
           min={0}
           max={total || 1}
           step={1}
-          onValueChange={(v) => v[0] !== undefined && seek(v[0])}
+          availableEnd={transcodedSeconds}
+          bufferedRanges={bufferedRanges}
+          onValueChange={(v) => {
+            if (v[0] === undefined) return;
+            // Clamp to transcoded region — anything past it would stall MSE.
+            const target = transcodedSeconds > 0 ? Math.min(v[0], transcodedSeconds) : v[0];
+            seek(target);
+          }}
           disabled={!current || total === 0}
           aria-label="Scrub"
           className="flex-1"
