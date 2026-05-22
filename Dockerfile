@@ -18,9 +18,9 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
 FROM deps AS backend-build
 RUN pnpm --filter "./packages/backend..." build || true
 
-# ---------- ui build ----------
-FROM deps AS ui-build
-RUN pnpm --filter "./packages/ui..." build || true
+# ---------- web build ----------
+FROM deps AS web-build
+RUN pnpm --filter "./packages/web..." build || true
 
 # ---------- backend runtime ----------
 FROM node:24-bookworm-slim AS backend
@@ -33,7 +33,7 @@ ENV NODE_ENV=production
 EXPOSE 4000
 CMD ["node", "packages/backend/dist/index.js"]
 
-# ---------- ui runtime (nginx static) ----------
-FROM nginx:1.27-alpine AS ui
-COPY --from=ui-build /app/packages/ui/dist /usr/share/nginx/html
+# ---------- web runtime (nginx static) ----------
+FROM nginx:1.27-alpine AS web
+COPY --from=web-build /app/packages/web/dist /usr/share/nginx/html
 EXPOSE 80

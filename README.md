@@ -11,7 +11,7 @@ change.
 ```
 packages/
   backend/   TypeScript monolith: GraphQL API, playback, scanner, db schema
-  ui/        Vite + React + TanStack Router web app (not yet present)
+  web/       Vite + React + TanStack Router web client
 ```
 
 The scanner lives inside `packages/backend` — it is not a separate
@@ -28,7 +28,7 @@ package or service.
 
 ```sh
 pnpm install
-docker compose up        # postgres, otel-lgtm, backend, ui
+docker compose up        # postgres, otel-lgtm, backend, web
 pnpm db:migrate          # apply migrations
 ```
 

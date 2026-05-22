@@ -206,7 +206,7 @@ Goal: `GET /play/{signature}/{options}/{id}` streams audio.
 
 Goal: usable single-page player.
 
-- [ ] `packages/ui` — Vite + React + TanStack Router.
+- [x] `packages/web` — Vite + React + TanStack Router.
 - [ ] Single route `/`.
 - [ ] Infinitely scrolling track list, virtualised with TanStack Virtual.
       Columns: disc, track, title, duration, artist, album, year.
