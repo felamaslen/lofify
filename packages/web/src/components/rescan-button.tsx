@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { Loader2, RefreshCw } from 'lucide-react';
+import { Button } from './ui/button.tsx';
+import { Progress } from './ui/progress.tsx';
 import { gqlRequest } from '../lib/gql-request.ts';
 import {
   LibraryScanSubscription,
@@ -61,28 +64,28 @@ export function RescanButton() {
   const indeterminate = busy && percent === null;
 
   return (
-    <div className="rescan">
-      <button
+    <div className="flex items-center gap-3">
+      <Button
         type="button"
+        variant="secondary"
+        size="sm"
         onClick={start}
         disabled={busy}
-        className="rescan-button"
       >
+        {busy ? (
+          <Loader2 className="animate-spin" />
+        ) : (
+          <RefreshCw />
+        )}
         {busy ? 'Scanning…' : 'Rescan library'}
-      </button>
+      </Button>
       {scan && (
-        <div
-          className={`rescan-progress${indeterminate ? ' is-indeterminate' : ''}`}
-          role="progressbar"
-          aria-valuemin={0}
-          aria-valuemax={100}
-          {...(percent != null ? { 'aria-valuenow': percent } : {})}
-        >
-          <div
-            className="rescan-progress-fill"
-            style={percent != null ? { width: `${percent}%` } : undefined}
+        <div className="flex w-[220px] flex-col gap-1">
+          <Progress
+            value={percent ?? 0}
+            {...(indeterminate ? { indeterminate: true } : {})}
           />
-          <span className="rescan-progress-label">
+          <span className="text-center text-xs tabular-nums text-muted-foreground">
             {scan.scannedTotal}
             {scan.filesTotal != null ? ` / ${scan.filesTotal}` : ''}
             {scan.errorsTotal > 0 ? ` (${scan.errorsTotal} errors)` : ''}

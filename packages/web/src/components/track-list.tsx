@@ -3,10 +3,14 @@ import { useInfiniteQuery } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { gqlRequest } from '../lib/gql-request.ts';
 import { TracksQuery } from '../lib/queries.ts';
+import { cn } from '../lib/utils.ts';
 import { usePlayer } from '../state/player.tsx';
 
 const PAGE_SIZE = 100;
-const ROW_HEIGHT = 32;
+const ROW_HEIGHT = 36;
+
+const COLS =
+  'grid grid-cols-[40px_60px_minmax(0,2fr)_80px_minmax(0,1.2fr)_minmax(0,1.4fr)_80px] items-center gap-3 px-4';
 
 export function TrackList() {
   const { format, play, current } = usePlayer();
@@ -58,32 +62,42 @@ export function TrackList() {
 
   if (query.isError) {
     return (
-      <div className="track-list-status">
+      <div className="p-6 text-sm text-destructive-foreground">
         Failed to load: {(query.error as Error).message}
       </div>
     );
   }
   if (edges.length === 0 && query.isLoading) {
-    return <div className="track-list-status">Loading…</div>;
+    return (
+      <div className="p-6 text-sm text-muted-foreground">Loading…</div>
+    );
   }
   if (edges.length === 0) {
     return (
-      <div className="track-list-status">No tracks yet. Run a library scan.</div>
+      <div className="p-6 text-sm text-muted-foreground">
+        No tracks yet. Run a library scan.
+      </div>
     );
   }
 
   return (
-    <div className="track-list">
-      <div className="track-list-header" role="row">
-        <span className="col-disc">#</span>
-        <span className="col-track">Track</span>
-        <span className="col-title">Title</span>
-        <span className="col-duration">Time</span>
-        <span className="col-artist">Artist</span>
-        <span className="col-album">Album</span>
-        <span className="col-year">Year</span>
+    <div className="grid grid-rows-[auto_1fr] overflow-hidden">
+      <div
+        role="row"
+        className={cn(
+          COLS,
+          'border-b border-border py-2 text-[11px] uppercase tracking-wider text-muted-foreground',
+        )}
+      >
+        <span>#</span>
+        <span>Track</span>
+        <span>Title</span>
+        <span>Time</span>
+        <span>Artist</span>
+        <span>Album</span>
+        <span>Year</span>
       </div>
-      <div ref={scrollRef} className="track-list-scroll">
+      <div ref={scrollRef} className="relative overflow-y-auto">
         <div
           style={{
             height: virtualizer.getTotalSize(),
@@ -100,7 +114,12 @@ export function TrackList() {
               <div
                 key={edge.cursor}
                 role="row"
-                className={`track-row${active ? ' is-active' : ''}`}
+                onDoubleClick={() => play(t.id)}
+                className={cn(
+                  COLS,
+                  'cursor-pointer text-sm hover:bg-accent/40',
+                  active && 'bg-primary/15 text-primary-foreground',
+                )}
                 style={{
                   position: 'absolute',
                   top: 0,
@@ -109,15 +128,26 @@ export function TrackList() {
                   height: virtualRow.size,
                   transform: `translateY(${virtualRow.start}px)`,
                 }}
-                onDoubleClick={() => play(t.id)}
               >
-                <span className="col-disc">{t.discNumber ?? ''}</span>
-                <span className="col-track">{t.trackNumber ?? ''}</span>
-                <span className="col-title">{t.title ?? '(untitled)'}</span>
-                <span className="col-duration">{t.duration.formatted}</span>
-                <span className="col-artist">{t.artist ?? ''}</span>
-                <span className="col-album">{t.album ?? ''}</span>
-                <span className="col-year">{t.year ?? ''}</span>
+                <span className="text-muted-foreground tabular-nums">
+                  {t.discNumber ?? ''}
+                </span>
+                <span className="text-muted-foreground tabular-nums">
+                  {t.trackNumber ?? ''}
+                </span>
+                <span className="truncate">{t.title ?? '(untitled)'}</span>
+                <span className="tabular-nums text-muted-foreground">
+                  {t.duration.formatted}
+                </span>
+                <span className="truncate text-muted-foreground">
+                  {t.artist ?? ''}
+                </span>
+                <span className="truncate text-muted-foreground">
+                  {t.album ?? ''}
+                </span>
+                <span className="text-muted-foreground tabular-nums">
+                  {t.year ?? ''}
+                </span>
               </div>
             );
           })}

@@ -1,227 +1,47 @@
-:root {
-  color-scheme: dark;
-  font-family:
-    system-ui,
-    -apple-system,
-    Segoe UI,
-    sans-serif;
-  background: #0f1115;
-  color: #e6e8eb;
-}
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
-* {
-  box-sizing: border-box;
-}
-
-body {
-  margin: 0;
-  min-height: 100vh;
-}
-
-.app-shell {
-  display: grid;
-  grid-template-rows: auto 1fr auto;
-  height: 100vh;
-}
-
-.app-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 20px;
-  border-bottom: 1px solid #1f232b;
-}
-
-.app-header h1 {
-  margin: 0;
-  font-size: 18px;
-  letter-spacing: 0.04em;
-}
-
-.app-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-
-.rescan {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.rescan-button {
-  background: #1d2a3a;
-  border: 1px solid #2a313c;
-  color: inherit;
-  padding: 6px 12px;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 12px;
-}
-
-.rescan-button:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.rescan-progress {
-  position: relative;
-  width: 220px;
-  height: 16px;
-  background: #1f232b;
-  border-radius: 8px;
-  overflow: hidden;
-  font-size: 11px;
-  color: #cdd3dc;
-}
-
-.rescan-progress-fill {
-  position: absolute;
-  inset: 0 auto 0 0;
-  background: linear-gradient(90deg, #2f6fcb, #4d9be8);
-  transition: width 0.2s ease;
-}
-
-.rescan-progress.is-indeterminate .rescan-progress-fill {
-  width: 40%;
-  animation: rescan-shimmer 1.2s linear infinite;
-}
-
-@keyframes rescan-shimmer {
-  0% {
-    transform: translateX(-100%);
+@layer base {
+  :root {
+    --background: 220 18% 7%;
+    --foreground: 210 16% 92%;
+    --card: 220 18% 9%;
+    --card-foreground: 210 16% 92%;
+    --popover: 220 18% 10%;
+    --popover-foreground: 210 16% 92%;
+    --primary: 213 77% 56%;
+    --primary-foreground: 210 16% 98%;
+    --secondary: 220 14% 18%;
+    --secondary-foreground: 210 16% 92%;
+    --muted: 220 14% 14%;
+    --muted-foreground: 215 10% 64%;
+    --accent: 220 14% 18%;
+    --accent-foreground: 210 16% 92%;
+    --destructive: 0 70% 52%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 220 14% 18%;
+    --input: 220 14% 18%;
+    --ring: 213 77% 56%;
+    --radius: 0.5rem;
   }
-  100% {
-    transform: translateX(250%);
+
+  * {
+    @apply border-border;
   }
-}
 
-.rescan-progress-label {
-  position: relative;
-  display: block;
-  text-align: center;
-  line-height: 16px;
-  font-variant-numeric: tabular-nums;
-}
+  html,
+  body,
+  #root {
+    @apply h-full;
+  }
 
-.track-list {
-  display: grid;
-  grid-template-rows: auto 1fr;
-  overflow: hidden;
-}
-
-.track-list-header,
-.track-row {
-  display: grid;
-  grid-template-columns: 40px 60px 1fr 80px 1.2fr 1.4fr 80px;
-  align-items: center;
-  gap: 8px;
-  padding: 0 16px;
-  font-size: 13px;
-}
-
-.track-list-header {
-  color: #8a93a3;
-  text-transform: uppercase;
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  padding-top: 8px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid #1f232b;
-}
-
-.track-list-scroll {
-  overflow-y: auto;
-  position: relative;
-}
-
-.track-row {
-  cursor: pointer;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.track-row > span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.track-row:hover {
-  background: #181c24;
-}
-
-.track-row.is-active {
-  background: #1d2a3a;
-  color: #9ec5fe;
-}
-
-.track-list-status {
-  padding: 24px;
-  color: #8a93a3;
-}
-
-.playback-bar {
-  border-top: 1px solid #1f232b;
-  padding: 10px 16px;
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: 16px;
-  align-items: center;
-  background: #11151c;
-}
-
-.playback-controls button {
-  background: transparent;
-  border: 1px solid #2a313c;
-  color: inherit;
-  width: 34px;
-  height: 34px;
-  border-radius: 4px;
-  cursor: pointer;
-}
-
-.playback-controls button:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.playback-track-info {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.track-title {
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.track-meta {
-  color: #8a93a3;
-  font-size: 12px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.playback-scrub {
-  display: grid;
-  grid-template-columns: 50px 240px 50px;
-  align-items: center;
-  gap: 8px;
-  font-variant-numeric: tabular-nums;
-  font-size: 12px;
-  color: #8a93a3;
-}
-
-.playback-scrub input[type='range'] {
-  width: 100%;
-}
-
-.scrub-fill {
-  display: none;
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family:
+      system-ui,
+      -apple-system,
+      'Segoe UI',
+      sans-serif;
+  }
 }

@@ -1,4 +1,7 @@
 import { useMemo } from 'react';
+import { Pause, Play, SkipBack, SkipForward } from 'lucide-react';
+import { Button } from './ui/button.tsx';
+import { Slider } from './ui/slider.tsx';
 import { usePlayer } from '../state/player.tsx';
 
 function fmt(seconds: number): string {
@@ -20,51 +23,70 @@ export function PlaybackBar() {
   } = usePlayer();
 
   const total = current?.duration.seconds ?? 0;
-  const percent = useMemo(
-    () => (total > 0 ? Math.min(100, (positionSeconds / total) * 100) : 0),
+  const sliderValue = useMemo(
+    () => [Math.min(positionSeconds, total)],
     [positionSeconds, total],
   );
 
   return (
-    <div className="playback-bar">
-      <div className="playback-controls">
-        <button onClick={previous} disabled={!current} aria-label="Previous">
-          ⏮
-        </button>
-        <button onClick={togglePlay} disabled={!current} aria-label="Play/pause">
-          {isPlaying ? '⏸' : '▶'}
-        </button>
-        <button onClick={next} disabled={!current} aria-label="Next">
-          ⏭
-        </button>
+    <div className="grid grid-cols-[auto_1fr_auto] items-center gap-4 border-t border-border bg-card/60 px-4 py-3 backdrop-blur">
+      <div className="flex items-center gap-1">
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={previous}
+          disabled={!current}
+          aria-label="Previous"
+        >
+          <SkipBack />
+        </Button>
+        <Button
+          variant="default"
+          size="icon"
+          onClick={togglePlay}
+          disabled={!current}
+          aria-label="Play/pause"
+        >
+          {isPlaying ? <Pause /> : <Play />}
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={next}
+          disabled={!current}
+          aria-label="Next"
+        >
+          <SkipForward />
+        </Button>
       </div>
-      <div className="playback-track-info">
+      <div className="flex min-w-0 flex-col">
         {current ? (
           <>
-            <span className="track-title">{current.title ?? '(untitled)'}</span>
-            <span className="track-meta">
+            <span className="truncate text-sm font-medium">
+              {current.title ?? '(untitled)'}
+            </span>
+            <span className="truncate text-xs text-muted-foreground">
               {current.artist ?? 'Unknown artist'}
               {current.album ? ` — ${current.album}` : ''}
             </span>
           </>
         ) : (
-          <span className="track-meta">Nothing playing</span>
+          <span className="text-xs text-muted-foreground">Nothing playing</span>
         )}
       </div>
-      <div className="playback-scrub">
-        <span className="time">{fmt(positionSeconds)}</span>
-        <input
-          type="range"
+      <div className="flex w-[320px] items-center gap-3 text-xs tabular-nums text-muted-foreground">
+        <span className="w-10 text-right">{fmt(positionSeconds)}</span>
+        <Slider
+          value={sliderValue}
           min={0}
-          max={total || 0}
+          max={total || 1}
           step={1}
-          value={Math.min(positionSeconds, total)}
-          onChange={(e) => seek(Number(e.target.value))}
+          onValueChange={(v) => v[0] !== undefined && seek(v[0])}
           disabled={!current || total === 0}
           aria-label="Scrub"
+          className="flex-1"
         />
-        <span className="time">{current?.duration.formatted ?? '00:00'}</span>
-        <span className="scrub-fill" style={{ width: `${percent}%` }} aria-hidden />
+        <span className="w-10">{current?.duration.formatted ?? '00:00'}</span>
       </div>
     </div>
   );

@@ -1,3 +1,10 @@
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from './ui/select.tsx';
 import { usePlayer, type Format } from '../state/player.tsx';
 
 const CHOICES: { value: Format; label: string }[] = [
@@ -10,18 +17,17 @@ const CHOICES: { value: Format; label: string }[] = [
 export function FormatPicker() {
   const { format, setFormat } = usePlayer();
   return (
-    <label className="format-picker">
-      Format:&nbsp;
-      <select
-        value={format}
-        onChange={(e) => setFormat(e.target.value as Format)}
-      >
+    <Select value={format} onValueChange={(v) => setFormat(v as Format)}>
+      <SelectTrigger className="w-[140px]">
+        <SelectValue placeholder="Quality" />
+      </SelectTrigger>
+      <SelectContent>
         {CHOICES.map((c) => (
-          <option key={c.value} value={c.value}>
+          <SelectItem key={c.value} value={c.value}>
             {c.label}
-          </option>
+          </SelectItem>
         ))}
-      </select>
-    </label>
+      </SelectContent>
+    </Select>
   );
 }
