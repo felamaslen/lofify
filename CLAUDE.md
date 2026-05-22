@@ -37,3 +37,14 @@ without being reminded.
 - Use `fastify.inject` to drive GraphQL operations end-to-end.
 - Do not import implementation modules from tests. Assert only on
   observable HTTP/GraphQL responses. Tests are behavioural.
+
+## Frontend
+
+- GraphQL documents are colocated with their consumer (no central
+  `queries.ts`). Each operation and fragment is bound to a JS const
+  suffixed `Document`; the GraphQL operation/fragment name itself does
+  **not** carry the suffix (`const PlaybackBarDocument = graphql(\`fragment PlaybackBar on Track { ... }\`)`).
+  Each consumer declares a fragment with exactly the fields it needs and
+  reads them via `readFragment(FragmentDocument, ref)` — never use
+  `@_unmask`. Parent documents compose by spreading the child fragments
+  and listing them as dependencies in the `graphql()` second argument.
