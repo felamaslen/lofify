@@ -116,21 +116,26 @@ export async function runFfmpeg(
             entry.emitter.emit('chunk', chunk);
           };
 
-          // TESTING ONLY — when `TRANSCODE_MAX_BITRATE` is set, serialise the
-          // emit calls through a delay chain so each chunk waits its share of
-          // wall-clock time, keeping the effective throughput at or below the
-          // configured bits/sec. ffmpeg keeps producing at full speed in the
-          // background; we just gate when consumers see the bytes.
+          // TESTING ONLY — when `TRANSCODE_MAX_BITRATE` is set, slice each
+          // ffmpeg chunk into smaller sub-chunks and serialise them through a
+          // delay chain. Smaller pieces keep the emit rate smooth instead of
+          // arriving in bursts the size of whatever ffmpeg flushed at once.
+          // ffmpeg keeps producing at full speed in the background; we just
+          // gate when consumers see the bytes.
           const maxBps = env.TRANSCODE_MAX_BITRATE;
+          const SMOOTH_CHUNK = 4096;
           let emitQueue: Promise<void> = Promise.resolve();
           proc.stdout.on('data', (chunk: Buffer) => {
             if (maxBps <= 0) {
               emit(chunk);
               return;
             }
-            const delayMs = (chunk.length * 8 * 1000) / maxBps;
-            emitQueue = emitQueue.then(() => new Promise((r) => setTimeout(r, delayMs)));
-            void emitQueue.then(() => emit(chunk));
+            for (let off = 0; off < chunk.length; off += SMOOTH_CHUNK) {
+              const sub = chunk.subarray(off, Math.min(chunk.length, off + SMOOTH_CHUNK));
+              const delayMs = (sub.length * 8 * 1000) / maxBps;
+              emitQueue = emitQueue.then(() => new Promise((r) => setTimeout(r, delayMs)));
+              void emitQueue.then(() => emit(sub));
+            }
           });
 
           proc.on('error', reject);

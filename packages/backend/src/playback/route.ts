@@ -179,7 +179,7 @@ async function streamEntryToRaw(
   };
   raw.on('close', onClose);
 
-  const writeChunk = async (chunk: Buffer): Promise<void> => {
+  const writeRaw = async (chunk: Buffer): Promise<void> => {
     if (closed) return;
     if (!raw.write(chunk)) {
       await new Promise<void>((resolve) => {
@@ -192,11 +192,23 @@ async function streamEntryToRaw(
         raw.once('close', done);
       });
     }
-    // TESTING ONLY — simulate a slow client link. Delay the next write by the
-    // wall-clock cost of `chunk.length` at the configured bitrate so callers
-    // see effective throughput at or below `PLAYBACK_MAX_BITRATE`.
-    if (env.PLAYBACK_MAX_BITRATE > 0 && !closed) {
-      const delayMs = (chunk.length * 8 * 1000) / env.PLAYBACK_MAX_BITRATE;
+  };
+
+  const writeChunk = async (chunk: Buffer): Promise<void> => {
+    if (closed) return;
+    // TESTING ONLY — simulate a slow client link. Split into smaller pieces so
+    // bytes trickle out evenly instead of arriving in chunk-sized bursts.
+    const maxBps = env.PLAYBACK_MAX_BITRATE;
+    if (maxBps <= 0) {
+      await writeRaw(chunk);
+      return;
+    }
+    const SMOOTH_CHUNK = 4096;
+    for (let off = 0; off < chunk.length && !closed; off += SMOOTH_CHUNK) {
+      const sub = chunk.subarray(off, Math.min(chunk.length, off + SMOOTH_CHUNK));
+      await writeRaw(sub);
+      if (closed) return;
+      const delayMs = (sub.length * 8 * 1000) / maxBps;
       await new Promise<void>((resolve) => {
         const onCloseDuringDelay = (): void => {
           clearTimeout(timer);
