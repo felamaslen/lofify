@@ -1,4 +1,4 @@
-import { type Format,usePlayer } from '../state/player.tsx';
+import { type Quality, usePlayer } from '../state/player.tsx';
 import {
   Select,
   SelectContent,
@@ -6,28 +6,46 @@ import {
   SelectTrigger,
   SelectValue,
 } from './ui/select.tsx';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip.tsx';
 
-const CHOICES: { value: Format; label: string }[] = [
-  { value: 'AUTO_HI', label: 'Auto (hi)' },
-  { value: 'AUTO_LO', label: 'Auto (lo)' },
-  { value: 'FLAC', label: 'FLAC' },
-  { value: 'WEBM', label: 'WebM' },
+const CHOICES: { value: Quality; label: string }[] = [
+  { value: 'max', label: 'Max (lossless)' },
+  { value: 'high', label: 'High' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'low', label: 'Low' },
 ];
 
 export function FormatPicker() {
-  const { format, setFormat } = usePlayer();
+  const { quality, setQuality, maxQualityAvailable } = usePlayer();
   return (
-    <Select value={format} onValueChange={(v) => setFormat(v as Format)}>
-      <SelectTrigger className="w-[140px]">
-        <SelectValue placeholder="Quality" />
-      </SelectTrigger>
-      <SelectContent>
-        {CHOICES.map((c) => (
-          <SelectItem key={c.value} value={c.value}>
-            {c.label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <TooltipProvider delayDuration={150}>
+      <Select value={quality} onValueChange={(v) => setQuality(v as Quality)}>
+        <SelectTrigger className="w-[170px]">
+          <SelectValue placeholder="Quality" />
+        </SelectTrigger>
+        <SelectContent>
+          {CHOICES.map((c) => {
+            const disabled = c.value === 'max' && !maxQualityAvailable;
+            const item = (
+              <SelectItem key={c.value} value={c.value} disabled={disabled}>
+                {c.label}
+              </SelectItem>
+            );
+            return disabled ? (
+              <Tooltip key={c.value}>
+                <TooltipTrigger asChild>
+                  <div>{item}</div>
+                </TooltipTrigger>
+                <TooltipContent side="left">
+                  Your browser cannot decode FLAC, so the lossless passthrough path is unavailable.
+                </TooltipContent>
+              </Tooltip>
+            ) : (
+              item
+            );
+          })}
+        </SelectContent>
+      </Select>
+    </TooltipProvider>
   );
 }

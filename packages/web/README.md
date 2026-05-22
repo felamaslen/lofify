@@ -30,6 +30,19 @@ pnpm gql:generate      # rewrites src/graphql-env.d.ts
 Set `SCHEMA_URL` to point at a non-default backend (defaults to
 `http://localhost:4000/graphql/schema.graphql`).
 
+## Playback
+
+The quality picker in the header maps to a coarse preset:
+
+| Choice          | What the player does                                                                                                                                                                                                                  |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Max (lossless)  | Sends `Accept: audio/flac, <fallback>`. Server passes the source through when it's already FLAC, otherwise encodes the first fallback at the highest preset. Bare `<audio>` plays the FLAC blob; no MSE. Disabled when the browser cannot decode FLAC. |
+| High / Med / Low | Sends `Accept: <encoded-formats>` and the matching `quality` GraphQL enum. The server picks the first acceptable container (webm/opus or mp3) and chunks it; the player consumes the chunks via MSE.                                  |
+
+`Accept` is derived once per page load from `MediaSource.isTypeSupported`
+checks and `<audio>.canPlayType('audio/flac')`. MSE failures or
+unreachable endpoints raise a toast.
+
 ## Env
 
 | Variable                  | Purpose                                       |

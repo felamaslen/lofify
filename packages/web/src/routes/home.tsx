@@ -1,3 +1,4 @@
+import { ErrorToast } from '../components/error-toast.tsx';
 import { FormatPicker } from '../components/format-picker.tsx';
 import { PlaybackBar } from '../components/playback-bar.tsx';
 import { RescanButton } from '../components/rescan-button.tsx';
@@ -15,6 +16,7 @@ export function Home() {
       </header>
       <TrackList />
       <PlaybackBar />
+      <ErrorToast />
     </div>
   );
 }

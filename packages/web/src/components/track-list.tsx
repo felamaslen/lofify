@@ -55,7 +55,7 @@ const COLS =
   'grid grid-cols-[40px_60px_minmax(0,2fr)_80px_minmax(0,1.2fr)_minmax(0,1.4fr)_80px] items-center gap-3 px-4';
 
 export function TrackList() {
-  const { format, play, current } = usePlayer();
+  const { quality, play, current } = usePlayer();
   const queryClient = useQueryClient();
 
   const query = useInfiniteQuery({
@@ -83,10 +83,18 @@ export function TrackList() {
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
     hoverTimerRef.current = setTimeout(() => {
       hoverTimerRef.current = null;
+      const gqlQuality =
+        quality === 'max'
+          ? null
+          : quality === 'high'
+            ? 'HIGH'
+            : quality === 'medium'
+              ? 'MEDIUM'
+              : 'LOW';
       void queryClient.prefetchQuery({
-        queryKey: ['track', id, format],
+        queryKey: ['track', id, quality],
         queryFn: ({ signal }) =>
-          gqlRequest(TrackByIdDocument, { id, format, quality: null }, signal),
+          gqlRequest(TrackByIdDocument, { id, quality: gqlQuality }, signal),
       });
     }, HOVER_PREFETCH_MS);
   };

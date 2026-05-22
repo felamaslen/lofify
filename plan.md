@@ -210,15 +210,24 @@ Goal: usable single-page player.
 - [ ] Single route `/`.
 - [ ] Infinitely scrolling track list, virtualised with TanStack Virtual.
       Columns: disc, track, title, duration, artist, album, year.
-- [ ] Format picker: `Auto (hi)`, `Auto (lo)`, `FLAC`, `WebM`.
-- [ ] Double-click a row → request `Track.url(quality, format)` →
-      `<audio>` element plays it.
+- [ ] Quality picker: `Max (lossless)`, `High`, `Medium`, `Low`. `Max`
+      disabled (with tooltip) when the browser can't decode FLAC.
+- [ ] Capabilities detected at init: bare-audio FLAC support, MSE for
+      `audio/webm; codecs=opus`, MSE for `audio/mpeg`. The `Accept`
+      header sent to `/play/...` is derived from these (and from the
+      quality choice — `Max` prepends `audio/flac`).
+- [ ] Double-click a row → request `Track.url(quality)` →
+      `createPlayer(audio, url, accept)`: HEAD-probe to discover
+      chunked vs direct; chunked goes via MSE, direct (FLAC passthrough)
+      streams bare into the `<audio>` element from a fetched blob.
 - [ ] Playback bar: play/pause, next, previous, scrub gutter, current-track
       info.
 - [ ] Next/prev driven by `Query.tracks(first: 1, after: <currentId>)`
       (and `last: 1, before: …`).
 - [ ] Scrub gutter advances based on known `duration.seconds` regardless of
       ffmpeg progress.
+- [ ] Toast errors when MSE setup fails or the playback endpoint is
+      unreachable.
 
 ---
 

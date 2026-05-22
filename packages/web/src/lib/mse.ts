@@ -1,9 +1,9 @@
 /**
  * Segmented MSE playback pipeline.
  *
- * A `Player` owns the audio element's source for the lifetime of a single track. For codecs MSE can decode, the server delivers the track as a sequence of equal-duration DASH chunks; the player fetches the chunk containing `currentTime` plus one chunk of look-ahead and appends each to a single `SourceBuffer`. The chunks come from one ffmpeg pass on the server so they're gap-less by construction — no `timestampOffset` arithmetic is needed.
+ * For non-flac streams the server delivers the track as a sequence of equal-duration DASH chunks; the player fetches the chunk containing `currentTime` plus one chunk of look-ahead and appends each to a single `SourceBuffer`. The chunks come from one ffmpeg pass on the server so they're gap-less by construction — no `timestampOffset` arithmetic is needed.
  *
- * For codecs MSE can't decode (FLAC passthrough), `createPlayer` falls back to `audio.src = url` and seeks behave like the browser's default.
+ * For flac (passthrough) the player skips MSE entirely and uses bare `<audio src=blob>` playback — the spec requires lossless to stay un-touched. We fetch the file as a blob so we can inject the `Accept` header (a bare `audio.src = url` would send the browser default, which the server rejects).
  */
 
 /** Drop chunks whose end is more than this many seconds behind `currentTime`. Bounds SourceBuffer memory. */
@@ -12,16 +12,16 @@ const BEHIND_WINDOW = 30;
 const PREFETCH_AHEAD = 1;
 
 export interface Player {
-  /** Seek to `time` seconds on the track's timeline. The caller is responsible for clamping to the ready region — `setReadyChunks` advertises that bound. */
   seekTo(time: number): Promise<void>;
-  /** Update the player's view of how many chunks the server has finished encoding. Used by `seekTo` to refuse seeks past the ready cursor (the server would 504 anyway, but failing fast spares the SourceBuffer churn). */
   setReadyChunks(n: number): void;
-  /** Tear down: aborts in-flight fetches, ends the MediaSource, revokes the blob URL. */
   dispose(): void;
 }
 
 class DirectPlayer implements Player {
-  constructor(private audio: HTMLAudioElement) {}
+  constructor(
+    private audio: HTMLAudioElement,
+    private blobUrl: string | null,
+  ) {}
   async seekTo(time: number): Promise<void> {
     this.audio.currentTime = time;
   }
@@ -29,7 +29,7 @@ class DirectPlayer implements Player {
     // Passthrough — the file is always available, nothing to track.
   }
   dispose(): void {
-    // nothing to clean up — caller owns audio.src
+    if (this.blobUrl) URL.revokeObjectURL(this.blobUrl);
   }
 }
 
@@ -38,20 +38,17 @@ class MsePlayer implements Player {
   private loaded = new Set<number>();
   private pending = new Map<number, AbortController>();
   private appendQueue: Array<{ segIndex: number; data: Uint8Array }> = [];
-  /** Index of the segment whose `appendBuffer` is currently in flight — used to dispatch a precise `loaded` event when its `updateend` lands, rather than relying on `updateend` (which also fires for removes/multiple unrelated appends). */
   private appendingSegIndex: number | null = null;
   private endedSignalled = false;
-  /** True once chunk 0 has been appended at least once — the init segment data (codec params) stays in the SourceBuffer's track config even after the buffered range gets evicted, so subsequent appends remain valid for the rest of this player's lifetime. */
   private initAppended = false;
-  /** Set while a seek is awaiting its target chunk to land. `evictBehindWindow` consults this so the freshly-appended chunk for an earlier seek isn't immediately evicted by the still-stale `currentTime`. */
   private pendingSeekSegIndex: number | null = null;
-  /** Fires `loaded` events with `detail: segIndex: number` after a chunk's `appendBuffer` completes (its `updateend` fires). `waitForLoaded` listens here so it gets a precise signal per chunk, decoupled from the SourceBuffer's other state transitions. */
   private events = new EventTarget();
   private readyChunks: number;
 
   constructor(
     private audio: HTMLAudioElement,
     private url: string,
+    private accept: string,
     private mediaSource: MediaSource,
     private sourceBuffer: SourceBuffer,
     private blobUrl: string,
@@ -63,12 +60,10 @@ class MsePlayer implements Player {
     sourceBuffer.addEventListener('updateend', this.onUpdateEnd);
     audio.addEventListener('timeupdate', this.onTimeUpdate);
     audio.addEventListener('seeking', this.onTimeUpdate);
-    // Kick off the initial fetch — without this the player would sit idle until the first `timeupdate`, which never fires because the audio element has nothing to play.
     void this.ensureWindow();
   }
 
   private onUpdateEnd = (): void => {
-    // The SourceBuffer can fire updateend after dispose() if the MediaSource was detached mid-append (e.g. user switched tracks). Touching `this.sourceBuffer.buffered` after detachment throws `InvalidStateError: This SourceBuffer has been removed`.
     if (this.disposed) return;
     const justAppended = this.appendingSegIndex;
     this.appendingSegIndex = null;
@@ -93,7 +88,6 @@ class MsePlayer implements Player {
       this.audio.currentTime = time;
       return;
     }
-    // `ensureWindow` derives its prefetch range from `audio.currentTime`, so calling it now (before we've moved the playhead) would only refetch chunks around the OLD position. Cancel anything that isn't the target and dispatch the target fetch directly.
     for (const [seg, ctrl] of this.pending) {
       if (seg !== targetSeg) {
         ctrl.abort();
@@ -103,33 +97,14 @@ class MsePlayer implements Player {
     if (!this.pending.has(targetSeg)) {
       void this.fetchSegment(targetSeg);
     }
-    // Tell `evictBehindWindow` to retain the seek target — otherwise the eviction triggered by the chunk's own `updateend` (which runs with `currentTime` still at the old, later position) would remove the just-appended chunk before we've moved the playhead onto it.
     this.pendingSeekSegIndex = targetSeg;
     try {
-      // Don't move the playhead until the target chunk is actually appended — setting `currentTime` into an unbuffered gap leaves Chrome's audio element stalled in a "waiting" state that doesn't reliably recover when the chunk eventually lands.
       await this.waitForLoaded(targetSeg);
       if (this.disposed) return;
-      // Snap to the actual buffered range. ffmpeg's DASH muxer may emit cluster timecodes a few ms off from `N * segmentDuration` (frame quantisation, source-PTS drift), so the requested `time` can land just before the chunk's real start. Without this, the audio element seeks into a sub-ms gap and stalls.
-      this.audio.currentTime = time; //  this.snapToBuffered(time);
+      this.audio.currentTime = time;
     } finally {
       this.pendingSeekSegIndex = null;
     }
-  }
-
-  private snapToBuffered(time: number): number {
-    try {
-      const b = this.sourceBuffer.buffered;
-      for (let i = 0; i < b.length; i++) {
-        const start = b.start(i);
-        const end = b.end(i);
-        if (time >= start && time < end) return time;
-        // Snap FORWARD to the next buffered range only if `time` lands in a tiny gap just before it (sub-frame ffmpeg drift). Never snap backwards — `(0, 5.998]` should NOT pull `5.999` back to `0`, which is what a wider tolerance ends up doing when the seek target is just inside one range and the previous range happens to live within `segmentDuration` of it.
-        if (time < start && start - time < 0.1) return start;
-      }
-    } catch {
-      // SourceBuffer detached — fall through to the requested time
-    }
-    return time;
   }
 
   private waitForLoaded(segIndex: number): Promise<void> {
@@ -177,7 +152,6 @@ class MsePlayer implements Player {
     if (this.disposed) return;
     const start = this.currentSeg();
     const end = Math.min(this.segmentCount - 1, this.readyChunks - 1, start + PREFETCH_AHEAD);
-    // Cancel fetches outside the window — they're for chunks we no longer need imminently (e.g. after a seek).
     for (const [seg, ctrl] of this.pending) {
       if (seg < start || seg > end) {
         ctrl.abort();
@@ -195,7 +169,10 @@ class MsePlayer implements Player {
     const ctrl = new AbortController();
     this.pending.set(segIndex, ctrl);
     try {
-      const res = await fetch(`${this.url}/${segIndex}`, { signal: ctrl.signal });
+      const res = await fetch(`${this.url}/${segIndex}`, {
+        signal: ctrl.signal,
+        headers: { Accept: this.accept },
+      });
       if (!res.ok) return;
       const buf = new Uint8Array(await res.arrayBuffer());
       if (this.disposed || ctrl.signal.aborted) {
@@ -215,7 +192,6 @@ class MsePlayer implements Player {
     this.drainAppendQueue();
   }
 
-  /** True iff it's safe to read SourceBuffer properties — the MediaSource may have closed (e.g. detached from the audio element on track switch) at any point after construction, after which every access on the SourceBuffer throws `InvalidStateError: This SourceBuffer has been removed`. */
   private isSourceBufferLive(): boolean {
     return !this.disposed && this.mediaSource.readyState === 'open';
   }
@@ -225,7 +201,7 @@ class MsePlayer implements Player {
     if (this.sourceBuffer.updating) return;
     if (this.appendQueue.length === 0) return;
 
-    // Chunk 0 carries the init segment (`init.webm` is spliced in front of it server-side); the SourceBuffer needs that init data before any other media chunk can be appended. While we're waiting for chunk 0 to arrive for the first time, hold higher-indexed chunks in the queue — once it's appended, `initAppended` stays true forever and the rest can append in any order, even after the buffered region for chunk 0 is later evicted.
+    // Chunk 0 carries the init segment (server-spliced for webm; mp3 needs none); higher-indexed chunks have to wait until the init has landed for webm. Once `initAppended` is true the remaining chunks can append in any order.
     let pickIdx = 0;
     if (!this.initAppended) {
       const zero = this.appendQueue.findIndex((item) => item.segIndex === 0);
@@ -248,7 +224,7 @@ class MsePlayer implements Player {
           const b = this.sourceBuffer.buffered;
           if (b.length > 0 && b.start(0) < cutoff) {
             this.sourceBuffer.remove(b.start(0), cutoff);
-            this.appendingSegIndex = next.segIndex; // remove()'s updateend re-runs drain
+            this.appendingSegIndex = next.segIndex;
           }
         } catch {
           // invalid state — let the next updateend retry naturally
@@ -266,7 +242,6 @@ class MsePlayer implements Player {
       return;
     }
     if (b.length === 0) return;
-    // Cutoff is the earliest timestamp we're willing to retain. Normally that's `currentTime - 30s`, but if a seek is pending towards an earlier chunk, we have to keep that chunk too — otherwise we'd evict the very data the seek just fetched, before the audio element's playhead has had a chance to move there.
     let cutoff = this.audio.currentTime - BEHIND_WINDOW;
     if (this.pendingSeekSegIndex != null) {
       cutoff = Math.min(cutoff, this.pendingSeekSegIndex * this.segmentDuration - BEHIND_WINDOW);
@@ -302,49 +277,81 @@ class MsePlayer implements Player {
   }
 }
 
-type ProbeSegmented = {
-  mode: 'segmented';
+type ProbeChunked = {
+  mode: 'chunked';
   contentType: string;
   segmentCount: number;
   segmentDuration: number;
   durationSeconds: number;
   readyChunks: number;
 };
-type ProbeDirect = { mode: 'direct' };
+type ProbeDirect = { mode: 'direct'; contentType: string };
 
-async function probe(url: string): Promise<ProbeSegmented | ProbeDirect | null> {
+async function probe(url: string, accept: string): Promise<ProbeChunked | ProbeDirect | null> {
   let res: Response;
   try {
-    res = await fetch(url, { method: 'HEAD' });
+    res = await fetch(url, { method: 'HEAD', headers: { Accept: accept } });
   } catch {
     return null;
   }
   if (!res.ok) return null;
+  const contentType = res.headers.get('content-type') ?? '';
   const segs = Number(res.headers.get('x-lofify-segments') ?? 0);
   if (segs > 0) {
     return {
-      mode: 'segmented',
-      contentType: res.headers.get('content-type') ?? '',
+      mode: 'chunked',
+      contentType,
       segmentCount: segs,
       segmentDuration: Number(res.headers.get('x-lofify-segment-duration') ?? 6),
       durationSeconds: Number(res.headers.get('x-lofify-duration') ?? 0),
       readyChunks: Number(res.headers.get('x-lofify-ready-chunks') ?? 0),
     };
   }
-  return { mode: 'direct' };
+  return { mode: 'direct', contentType };
 }
 
-export async function createPlayer(audio: HTMLAudioElement, url: string): Promise<Player> {
-  const meta = await probe(url);
+export type CreatePlayerError =
+  | { kind: 'mse-unsupported'; contentType: string }
+  | { kind: 'probe-failed' }
+  | { kind: 'direct-fetch-failed' };
 
-  if (!meta || meta.mode === 'direct') {
-    audio.src = url;
-    return new DirectPlayer(audio);
+export type CreatePlayerOptions = {
+  /** Called when the player can't satisfy the request. The caller is expected to surface this to the user (e.g. a toast). */
+  onError?: (err: CreatePlayerError) => void;
+};
+
+export async function createPlayer(
+  audio: HTMLAudioElement,
+  url: string,
+  accept: string,
+  options: CreatePlayerOptions = {},
+): Promise<Player | null> {
+  const meta = await probe(url, accept);
+  if (!meta) {
+    options.onError?.({ kind: 'probe-failed' });
+    return null;
   }
 
+  if (meta.mode === 'direct') {
+    // Direct mode = flac passthrough. Fetch as a blob so we can inject the Accept header (a plain `audio.src = url` would send the browser default, which the server rejects).
+    let blobUrl: string | null = null;
+    try {
+      const res = await fetch(url, { headers: { Accept: accept } });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      blobUrl = URL.createObjectURL(blob);
+      audio.src = blobUrl;
+    } catch {
+      options.onError?.({ kind: 'direct-fetch-failed' });
+      return null;
+    }
+    return new DirectPlayer(audio, blobUrl);
+  }
+
+  // Chunked mode — required to use MSE.
   if (typeof MediaSource === 'undefined' || !MediaSource.isTypeSupported(meta.contentType)) {
-    audio.src = url;
-    return new DirectPlayer(audio);
+    options.onError?.({ kind: 'mse-unsupported', contentType: meta.contentType });
+    return null;
   }
 
   const mediaSource = new MediaSource();
@@ -353,7 +360,6 @@ export async function createPlayer(audio: HTMLAudioElement, url: string): Promis
   await new Promise<void>((resolve) => {
     mediaSource.addEventListener('sourceopen', () => resolve(), { once: true });
   });
-  // Without this, the audio element infers `duration` from the SourceBuffer's `buffered.end`, so after appending the first 6-second chunk the element thinks the track is 6 seconds long and fires `ended`.
   if (meta.durationSeconds > 0) {
     try {
       mediaSource.duration = meta.durationSeconds;
@@ -366,6 +372,7 @@ export async function createPlayer(audio: HTMLAudioElement, url: string): Promis
   return new MsePlayer(
     audio,
     url,
+    accept,
     mediaSource,
     sourceBuffer,
     blobUrl,
