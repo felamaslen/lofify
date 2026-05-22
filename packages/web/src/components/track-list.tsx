@@ -33,14 +33,11 @@ export function TrackList() {
         signal,
       ),
     getNextPageParam: (last) =>
-      last.tracks?.pageInfo.hasNextPage
-        ? (last.tracks.pageInfo.endCursor ?? null)
-        : undefined,
+      last.tracks?.pageInfo.hasNextPage ? (last.tracks.pageInfo.endCursor ?? null) : undefined,
   });
 
   const edges = useMemo(
-    () =>
-      query.data?.pages.flatMap((page) => page.tracks?.edges ?? []) ?? [],
+    () => query.data?.pages.flatMap((page) => page.tracks?.edges ?? []) ?? [],
     [query.data],
   );
 
@@ -69,15 +66,11 @@ export function TrackList() {
     );
   }
   if (edges.length === 0 && query.isLoading) {
-    return (
-      <div className="p-6 text-sm text-muted-foreground">Loading…</div>
-    );
+    return <div className="p-6 text-sm text-muted-foreground">Loading…</div>;
   }
   if (edges.length === 0) {
     return (
-      <div className="p-6 text-sm text-muted-foreground">
-        No tracks yet. Run a library scan.
-      </div>
+      <div className="p-6 text-sm text-muted-foreground">No tracks yet. Run a library scan.</div>
     );
   }
 
@@ -115,6 +108,9 @@ export function TrackList() {
               <div
                 key={edge.cursor}
                 role="row"
+                onMouseDown={(e) => {
+                  if (e.detail >= 2) e.preventDefault();
+                }}
                 onDoubleClick={() => play(t.id)}
                 className={cn(
                   COLS,
@@ -130,25 +126,13 @@ export function TrackList() {
                   transform: `translateY(${virtualRow.start}px)`,
                 }}
               >
-                <span className="text-muted-foreground tabular-nums">
-                  {t.discNumber ?? ''}
-                </span>
-                <span className="text-muted-foreground tabular-nums">
-                  {t.trackNumber ?? ''}
-                </span>
+                <span className="text-muted-foreground tabular-nums">{t.discNumber ?? ''}</span>
+                <span className="text-muted-foreground tabular-nums">{t.trackNumber ?? ''}</span>
                 <span className="truncate">{t.title ?? '(untitled)'}</span>
-                <span className="tabular-nums text-muted-foreground">
-                  {t.duration.formatted}
-                </span>
-                <span className="truncate text-muted-foreground">
-                  {t.artist ?? ''}
-                </span>
-                <span className="truncate text-muted-foreground">
-                  {t.album ?? ''}
-                </span>
-                <span className="text-muted-foreground tabular-nums">
-                  {t.year ?? ''}
-                </span>
+                <span className="tabular-nums text-muted-foreground">{t.duration.formatted}</span>
+                <span className="truncate text-muted-foreground">{t.artist ?? ''}</span>
+                <span className="truncate text-muted-foreground">{t.album ?? ''}</span>
+                <span className="text-muted-foreground tabular-nums">{t.year ?? ''}</span>
               </div>
             );
           })}
