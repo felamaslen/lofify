@@ -61,10 +61,10 @@ const TrackQuery = graphql(`
 `);
 
 const TrackUrlQuery = graphql(`
-  query TrackUrl($id: ID!, $quality: Int, $format: Format) {
+  query TrackUrl($id: ID!, $quality: Quality) {
     track(id: $id) {
       id
-      url(quality: $quality, format: $format)
+      url(quality: $quality)
     }
   }
 `);
@@ -187,10 +187,10 @@ test('Query.track returns derived format/duration and a signed url', async () =>
 
   const { data: signed } = await gqlRequest(app)
     .query(TrackUrlQuery)
-    .variables({ id, quality: 7, format: 'OGG' })
+    .variables({ id, quality: 'HIGH' })
     .expectNoErrors();
   expect(signed.track!.url).toMatchInlineSnapshot(
-    `"/play/774fda3d1cf3cbbbf6751d4806e79f67298d088febd94ce68eb7ea5aedbf21eb/f:ogg/q:7/01934567-89ab-7cde-8123-456789abcdef"`,
+    `"/play/e0c61ae825a37abdb003210bab97b5c0fbff7d28a295c4b95852946d238edd8f/q:h/01934567-89ab-7cde-8123-456789abcdef"`,
   );
 });
 
@@ -202,7 +202,7 @@ test('Query.track returns null when id is unknown', async () => {
   expect(data.track).toBeNull();
 });
 
-test('Track.url rejects quality outside 0–10', async () => {
+test('Track.url rejects quality values outside the Quality enum', async () => {
   await seed([
     { artist: 'A', album: 'A1', discNumber: 1, trackNumber: 1, title: 'only', format: 'mp3', codec: 'mp3', durationSeconds: 60 },
   ]);
@@ -214,7 +214,8 @@ test('Track.url rejects quality outside 0–10', async () => {
 
   const { errors } = await gqlRequest(app)
     .query(TrackUrlQuery)
-    .variables({ id, quality: 99, format: null })
+    // Cast around gql.tada's literal-union typing so we can exercise the schema rejection at runtime.
+    .variables({ id, quality: 'ULTRA' as 'LOW' })
     .expectErrors();
-  expect(errors[0]?.message).toMatch(/between 0 and 10/);
+  expect(errors[0]?.message).toMatch(/Quality/);
 });

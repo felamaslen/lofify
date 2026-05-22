@@ -64,30 +64,18 @@ export function getSchema(): GraphQLSchema {
             };
         }
     });
-    const FormatType: GraphQLEnumType = new GraphQLEnumType({
-        description: "Container/codec to deliver. `ORIGINAL` streams the source file untouched; `AUTO_HI` and `AUTO_LO` let the server pick a sensible high- or low-bandwidth target; the remaining members pin a specific format.",
-        name: "Format",
+    const QualityType: GraphQLEnumType = new GraphQLEnumType({
+        description: "Coarse delivery quality the client requests for an encoded stream. `MAX` is server-internal \u2014 clients ask for it implicitly by including `audio/flac` in their `Accept` header, not via this enum.",
+        name: "Quality",
         values: {
-            AAC: {
-                value: "AAC"
+            HIGH: {
+                value: "HIGH"
             },
-            AUTO_HI: {
-                value: "AUTO_HI"
+            LOW: {
+                value: "LOW"
             },
-            AUTO_LO: {
-                value: "AUTO_LO"
-            },
-            FLAC: {
-                value: "FLAC"
-            },
-            OGG: {
-                value: "OGG"
-            },
-            ORIGINAL: {
-                value: "ORIGINAL"
-            },
-            WEBM: {
-                value: "WEBM"
+            MEDIUM: {
+                value: "MEDIUM"
             }
         }
     });
@@ -130,32 +118,17 @@ export function getSchema(): GraphQLSchema {
                     type: GraphQLInt
                 },
                 url: {
-                    description: "Signed URL the client should `GET` to stream this track. Re-call with different `quality`/`format` values to switch transcode targets.",
+                    description: "Signed URL the client should `GET` to stream this track. The container format is selected at request time via the `Accept` header; the signed URL is independent of it, so a single URL can be replayed with different `Accept` values to switch formats without re-querying GraphQL.",
                     name: "url",
                     type: new GraphQLNonNull(GraphQLString),
                     args: {
-                        format: {
-                            description: "Target container/codec. Defaults to `ORIGINAL` when omitted.",
-                            type: FormatType
-                        },
                         quality: {
-                            description: "Target playback quality on an opaque 0\u201310 scale where higher is better.",
-                            type: GraphQLInt,
-                            extensions: {
-                                grats: {
-                                    directives: [{
-                                            name: "constraint",
-                                            args: {
-                                                max: 10,
-                                                min: 0
-                                            }
-                                        }]
-                                }
-                            }
+                            description: "Coarse delivery quality.",
+                            type: QualityType
                         }
                     },
                     resolve(source, args) {
-                        return trackUrlResolver(source, args.quality, args.format);
+                        return trackUrlResolver(source, args.quality);
                     }
                 },
                 year: {
@@ -368,15 +341,17 @@ export function getSchema(): GraphQLSchema {
                     }
                 },
                 transcodeProgress: {
-                    description: "Stream progress snapshots of the transcode that backs a given `(trackId, format, quality)` playback URL. Emits at most once per second while the transcode is running, then yields a final snapshot when it finishes. Passthrough playback yields a single `isDone: true` snapshot.",
+                    description: "Stream progress snapshots of the transcode that backs a given `(trackId, quality, Accept)` playback stream. Pass the same `Accept` header value the client will send to `/play/...` \u2014 the server resolves it to the same transcode job key, so the subscription observes the actual encoder the player is consuming.\n\nEmits at most once per second while the transcode is running, then yields a final snapshot when it finishes. Passthrough streams (`audio/flac` accepted on a flac source) yield a single `isDone: true` snapshot.",
                     name: "transcodeProgress",
                     type: new GraphQLNonNull(TranscodeProgressType),
                     args: {
-                        format: {
-                            type: FormatType
+                        acceptHeaderValue: {
+                            description: "The exact value the client will send in the `Accept` header on `/play/...` \u2014 may be a comma-separated list. Defaults to `audio/webm` if omitted.",
+                            type: GraphQLString
                         },
                         quality: {
-                            type: GraphQLInt
+                            description: "One of `low`, `medium`, `high`.",
+                            type: GraphQLString
                         },
                         trackId: {
                             type: new GraphQLNonNull(GraphQLID)
@@ -409,6 +384,6 @@ export function getSchema(): GraphQLSchema {
         query: QueryType,
         mutation: MutationType,
         subscription: SubscriptionType,
-        types: [FormatType, DurationType, LibraryScanType, MutationType, PageInfoType, QueryType, SubscriptionType, TrackType, TrackConnectionType, TrackEdgeType, TranscodeProgressType, VoidType]
+        types: [QualityType, DurationType, LibraryScanType, MutationType, PageInfoType, QueryType, SubscriptionType, TrackType, TrackConnectionType, TrackEdgeType, TranscodeProgressType, VoidType]
     });
 }

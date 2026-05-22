@@ -8,9 +8,10 @@ import parseRange from 'range-parser';
 import { db } from '../db/client.js';
 import type { Track as DbTrack } from '../db/schema/index.js';
 import { tracks as tracksTable } from '../db/schema/index.js';
-import { type ParsedOptions, parseOptionSegments, type RequestedFormat } from './options.js';
+import { type ParsedOptions, parseOptionSegments } from './options.js';
 import { verifySignature } from './sign.js';
 import {
+  chunkLayout,
   getOrStartTranscodeJob,
   jobCacheKey,
   readChunkFile,
@@ -20,91 +21,97 @@ import {
   waitForChunks,
 } from './transcode.js';
 
-export function contentTypeFor(format: string, codec: string): string {
-  const f = format.toLowerCase();
-  const c = codec.toLowerCase();
-  switch (f) {
-    case 'mp3':
-      return 'audio/mpeg';
+/** Delivery-format identifiers used during Accept-header negotiation. */
+export type DeliveryFormat = 'flac' | 'mpeg' | 'webm';
+
+const ACCEPT_MAP: Record<string, DeliveryFormat> = {
+  'audio/flac': 'flac',
+  'audio/mpeg': 'mpeg',
+  'audio/webm': 'webm',
+};
+
+// Order in which a wildcard (audio/* or */*) expands. flac comes first so plain
+// `<audio src=url>` playback (which sends Accept: */*) gets passthrough on
+// lossless sources.
+const WILDCARD_EXPANSION: readonly DeliveryFormat[] = ['flac', 'webm', 'mpeg'];
+
+/**
+ * Parse an Accept header into an ordered, de-duped list of supported delivery formats.
+ *
+ * Returns `null` if any media type is outside the supported set, or if the header is empty/missing. Standard wildcards expand to all three supported formats — that's what bare `<audio>` elements send when they fetch the playback URL directly, and rejecting them would force every consumer to inject a header.
+ */
+export function parseAcceptHeader(header: string | undefined | null): DeliveryFormat[] | null {
+  if (!header) return null;
+  const parts = header.split(',').map((s) => s.trim()).filter(Boolean);
+  if (parts.length === 0) return null;
+  const seen = new Set<DeliveryFormat>();
+  const out: DeliveryFormat[] = [];
+  const push = (fmt: DeliveryFormat): void => {
+    if (!seen.has(fmt)) {
+      seen.add(fmt);
+      out.push(fmt);
+    }
+  };
+  for (const part of parts) {
+    // Strip any media-type parameters (e.g. `;q=0.9`) — we don't honour quality weighting; ordering is enough.
+    const mime = part.split(';')[0]!.trim().toLowerCase();
+    if (mime === '*/*' || mime === 'audio/*') {
+      for (const fmt of WILDCARD_EXPANSION) push(fmt);
+      continue;
+    }
+    const fmt = ACCEPT_MAP[mime];
+    if (!fmt) return null;
+    push(fmt);
+  }
+  return out;
+}
+
+export function contentTypeFor(format: DeliveryFormat): string {
+  switch (format) {
     case 'flac':
       return 'audio/flac';
-    case 'wav':
-      return 'audio/wav';
-    case 'aac':
-    case 'adts':
-      return 'audio/aac';
-    case 'm4a':
-    case 'mp4':
-      return 'audio/mp4';
-    case 'ogg':
-      return c ? `audio/ogg; codecs=${c}` : 'audio/ogg';
+    case 'mpeg':
+      return 'audio/mpeg';
     case 'webm':
-      return c ? `audio/webm; codecs=${c}` : 'audio/webm';
-    default:
-      return 'application/octet-stream';
+      return 'audio/webm; codecs=opus';
   }
 }
 
 export type ResolvedTarget =
-  | { kind: 'passthrough' }
-  | { kind: 'transcode'; target: TranscodeTarget };
+  | { kind: 'passthrough'; contentType: string }
+  | { kind: 'transcode'; target: TranscodeTarget; contentType: string };
 
-export function resolveTarget(track: DbTrack, opts: ParsedOptions): ResolvedTarget {
-  const sourceFormat = track.format.toLowerCase();
-  const sourceCodec = track.codec.toLowerCase();
-  const requested: RequestedFormat = opts.format ?? 'original';
-
-  let target: TranscodeTarget;
-  switch (requested) {
-    case 'original':
-      if (opts.quality == null) return { kind: 'passthrough' };
-      target = {
-        format:
-          sourceFormat === 'flac'
-            ? 'flac'
-            : sourceFormat === 'webm'
-              ? 'webm'
-              : sourceFormat === 'aac'
-                ? 'aac'
-                : 'ogg',
-        codec: sourceCodec,
-        quality: opts.quality,
-      };
-      break;
-    case 'auto_hi':
-      if (!track.isLossless) {
-        target = { format: 'webm', codec: 'opus', quality: opts.quality };
-        break;
-      }
-      if (sourceFormat === 'flac' && opts.quality == null) return { kind: 'passthrough' };
-      target = { format: 'flac', codec: 'flac', quality: opts.quality };
-      break;
-    case 'auto_lo':
-      if (sourceFormat === 'webm' && sourceCodec === 'opus' && opts.quality == null) {
-        return { kind: 'passthrough' };
-      }
-      target = { format: 'webm', codec: 'opus', quality: opts.quality };
-      break;
-    case 'flac':
-      if (sourceFormat === 'flac' && opts.quality == null) return { kind: 'passthrough' };
-      target = { format: 'flac', codec: 'flac', quality: opts.quality };
-      break;
-    case 'ogg':
-      if (sourceFormat === 'ogg' && opts.quality == null) return { kind: 'passthrough' };
-      target = { format: 'ogg', codec: 'vorbis', quality: opts.quality };
-      break;
-    case 'webm':
-      if (sourceFormat === 'webm' && opts.quality == null) return { kind: 'passthrough' };
-      target = { format: 'webm', codec: 'opus', quality: opts.quality };
-      break;
-    case 'aac':
-      if ((sourceFormat === 'aac' || sourceFormat === 'm4a') && opts.quality == null) {
-        return { kind: 'passthrough' };
-      }
-      target = { format: 'aac', codec: 'aac', quality: opts.quality };
-      break;
+/**
+ * Pick a delivery target given the source track, signed options, and the client's accepted formats.
+ *
+ * Rules:
+ * - If `flac` is in the accept list and the source is flac → passthrough.
+ * - If `flac` is in the accept list and the source is lossy → encode at max quality to the first non-flac accept entry.
+ * - If `flac` is not in the accept list → encode at the requested quality (default `1`) to the first accept entry.
+ */
+export function resolveTarget(track: DbTrack, opts: ParsedOptions, accepts: DeliveryFormat[]): ResolvedTarget {
+  const sourceIsFlac = track.format.toLowerCase() === 'flac';
+  if (accepts.includes('flac')) {
+    if (sourceIsFlac) return { kind: 'passthrough', contentType: contentTypeFor('flac') };
+    const fallback = accepts.find((a) => a !== 'flac');
+    // Caller validates `accepts` (flac alone is rejected upstream) so a fallback always exists here.
+    if (!fallback) throw new Error('unreachable: flac without fallback');
+    return {
+      kind: 'transcode',
+      target: encodeTarget(fallback, 'max'),
+      contentType: contentTypeFor(fallback),
+    };
   }
-  return { kind: 'transcode', target };
+  const fmt = accepts[0]!;
+  const q = opts.quality ?? 'medium';
+  return { kind: 'transcode', target: encodeTarget(fmt, q), contentType: contentTypeFor(fmt) };
+}
+
+function encodeTarget(fmt: DeliveryFormat, quality: 'low' | 'medium' | 'high' | 'max'): TranscodeTarget {
+  if (fmt === 'flac') throw new Error('flac is passthrough-only');
+  return fmt === 'webm'
+    ? { format: { container: 'webm', codec: 'opus' }, quality }
+    : { format: { container: 'mp3', codec: 'mp3' }, quality };
 }
 
 function parseRangeHeader(
@@ -122,10 +129,10 @@ async function sendPassthrough(
   req: FastifyRequest,
   reply: FastifyReply,
   track: DbTrack,
+  contentType: string,
 ): Promise<void> {
   const st = await stat(track.file);
   const total = st.size;
-  const contentType = contentTypeFor(track.format, track.codec);
 
   reply.header('Accept-Ranges', 'bytes');
   reply.header('Content-Type', contentType);
@@ -158,9 +165,11 @@ function parseSegIndex(value: string | null): number | null {
   return n;
 }
 
-function chunkFileName(segIndex: number): string {
-  // ffmpeg's DASH muxer numbers media segments from 1 with %05d padding (see `-media_seg_name chunk-$Number%05d$.webm` in ffmpeg.ts).
-  return `chunk-${String(segIndex + 1).padStart(5, '0')}.webm`;
+function chunkFileName(target: TranscodeTarget, segIndex: number): string {
+  const { ext } = chunkLayout(target);
+  // The webm DASH muxer numbers media segments from 1; the mp3 segment muxer numbers from 0. Normalise both to the 0-indexed external API by adjusting here.
+  const onDiskIndex = target.format.container === 'webm' ? segIndex + 1 : segIndex;
+  return `chunk-${String(onDiskIndex).padStart(5, '0')}.${ext}`;
 }
 
 async function sendTranscodeChunk(
@@ -168,10 +177,11 @@ async function sendTranscodeChunk(
   reply: FastifyReply,
   track: DbTrack,
   target: TranscodeTarget,
+  contentType: string,
   segRaw: string | null,
 ): Promise<void> {
   const segCount = Math.max(1, Math.ceil(track.durationSeconds / SEGMENT_DURATION_SECONDS));
-  const contentType = contentTypeFor(target.format, target.codec);
+  const { init: initName } = chunkLayout(target);
 
   const setMetaHeaders = (job: TranscodeJob | null): void => {
     reply.header('Content-Type', contentType);
@@ -179,7 +189,6 @@ async function sendTranscodeChunk(
     reply.header('X-Lofify-Segment-Duration', String(SEGMENT_DURATION_SECONDS));
     reply.header('X-Lofify-Duration', String(track.durationSeconds));
     reply.header('X-Lofify-Ready-Chunks', String(job?.readyChunks ?? 0));
-    // Cross-origin XHR/fetch can only read these via `Response.headers.get()` if they're listed here. `@fastify/cors` doesn't add them by default.
     reply.header(
       'Access-Control-Expose-Headers',
       'X-Lofify-Segments, X-Lofify-Segment-Duration, X-Lofify-Duration, X-Lofify-Ready-Chunks',
@@ -204,24 +213,23 @@ async function sendTranscodeChunk(
   }
 
   const job = await getOrStartTranscodeJob(jobCacheKey(track.id, target), track.file, target);
-  // Wait until the requested chunk has been written. `segIndex + 1` because chunks are 1-indexed on disk.
+  // For webm, on-disk index = segIndex + 1; for mp3 the indexes match. `waitForChunks` counts files irrespective of numbering, so the lower bound is the same.
   await waitForChunks(job, segIndex + 1);
   if (job.error) {
     reply.code(500);
     return reply.send({ error: job.error.message });
   }
   if (segIndex >= job.readyChunks) {
-    // ffmpeg finished but never produced this chunk — track shorter than expected.
     reply.code(404);
     return reply.send({ error: 'chunk past end-of-track' });
   }
 
   let buf: Buffer;
   try {
-    const chunk = await readChunkFile(job, chunkFileName(segIndex));
-    if (segIndex === 0) {
-      // The first chunk must be preceded by the init segment so the SourceBuffer learns the codec parameters; we splice them server-side instead of inventing a separate `/init` endpoint.
-      const init = await readChunkFile(job, 'init.webm');
+    const chunk = await readChunkFile(job, chunkFileName(target, segIndex));
+    if (initName && segIndex === 0) {
+      // The first chunk must be preceded by the init segment so the SourceBuffer learns the codec parameters; mp3 doesn't have one (every frame is self-describing).
+      const init = await readChunkFile(job, initName);
       buf = Buffer.concat([init, chunk]);
     } else {
       buf = chunk;
@@ -249,7 +257,6 @@ export async function registerPlaybackRoute(app: FastifyInstance): Promise<void>
       return reply.send({ error: 'missing track id' });
     }
 
-    // The trailing path component is the chunk index when it's purely digits — all track ids are UUIDs, so this is unambiguous. Without a trailing number, the request targets chunk 0 (or doesn't specify, e.g. HEAD).
     const last = segments[segments.length - 1]!;
     const segRaw = /^\d+$/.test(last) && segments.length >= 2 ? last : null;
     const idSegments = segRaw == null ? segments : segments.slice(0, -1);
@@ -268,6 +275,17 @@ export async function registerPlaybackRoute(app: FastifyInstance): Promise<void>
       return reply.send({ error: 'invalid options' });
     }
 
+    const acceptHeader = req.headers.accept;
+    const accepts = parseAcceptHeader(typeof acceptHeader === 'string' ? acceptHeader : undefined);
+    if (!accepts) {
+      reply.code(406);
+      return reply.send({ error: 'missing or unsupported Accept header' });
+    }
+    if (accepts.includes('flac') && accepts.length === 1) {
+      reply.code(406);
+      return reply.send({ error: 'audio/flac must be paired with at least one fallback format' });
+    }
+
     const rows = await db.select().from(tracksTable).where(eq(tracksTable.id, id)).limit(1);
     const track = rows[0];
     if (!track) {
@@ -275,11 +293,11 @@ export async function registerPlaybackRoute(app: FastifyInstance): Promise<void>
       return reply.send({ error: 'unknown track' });
     }
 
-    const resolved = resolveTarget(track, opts);
+    const resolved = resolveTarget(track, opts, accepts);
     if (resolved.kind === 'passthrough') {
-      return sendPassthrough(req, reply, track);
+      return sendPassthrough(req, reply, track, resolved.contentType);
     }
-    return sendTranscodeChunk(req, reply, track, resolved.target, segRaw);
+    return sendTranscodeChunk(req, reply, track, resolved.target, resolved.contentType, segRaw);
   };
 
   app.get('/play/:signature/*', handler);

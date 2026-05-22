@@ -5,11 +5,11 @@ import { signPlaybackUrl } from '../playback/sign.js';
 import { Duration } from './duration.js';
 
 /**
- * Container/codec to deliver. `ORIGINAL` streams the source file untouched; `AUTO_HI` and `AUTO_LO` let the server pick a sensible high- or low-bandwidth target; the remaining members pin a specific format.
+ * Coarse delivery quality the client requests for an encoded stream. `MAX` is server-internal — clients ask for it implicitly by including `audio/flac` in their `Accept` header, not via this enum.
  *
  * @gqlEnum
  */
-export type Format = 'ORIGINAL' | 'AUTO_HI' | 'AUTO_LO' | 'AAC' | 'OGG' | 'WEBM' | 'FLAC';
+export type Quality = 'LOW' | 'MEDIUM' | 'HIGH';
 
 /**
  * A single audio file in the library.
@@ -38,24 +38,20 @@ export type Track = {
 };
 
 /**
- * Signed URL the client should `GET` to stream this track. Re-call with different `quality`/`format` values to switch transcode targets.
+ * Signed URL the client should `GET` to stream this track. The container format is selected at request time via the `Accept` header; the signed URL is independent of it, so a single URL can be replayed with different `Accept` values to switch formats without re-querying GraphQL.
  *
  * @gqlField
  */
 export function url(
   track: Track,
-  /**
-   * Target playback quality on an opaque 0–10 scale where higher is better.
-   *
-   * @gqlAnnotate constraint(min: 0, max: 10)
-   */
-  quality?: Int | null,
-  /** Target container/codec. Defaults to `ORIGINAL` when omitted. */
-  format?: Format | null,
+  /** Coarse delivery quality. */
+  quality?: Quality | null,
 ): string {
   return signPlaybackUrl(track.id, {
-    quality: quality ?? null,
-    format: format ? (format.toLowerCase() as Lowercase<Format>) : null,
+    quality:
+      quality == null
+        ? null
+        : (quality.toLowerCase() as 'low' | 'medium' | 'high'),
   });
 }
 
@@ -80,4 +76,3 @@ export function toGqlTrack(row: DbTrack): Track {
     duration: new Duration(row.durationSeconds),
   };
 }
-

@@ -8,22 +8,24 @@ import { LRUCache } from 'lru-cache';
 
 import { env } from '../env.js';
 import { logger } from '../logger.js';
-import { type FfmpegHandle, spawnDashEncoder } from './ffmpeg.js';
+import { type FfmpegHandle, spawnChunkedEncoder } from './ffmpeg.js';
 
+/** Target encoded delivery format. `flac` is never encoded — it's passthrough-only — so it does not appear here. The container/codec pairing is fixed (opus only ever ships in webm; mp3 only ever ships raw), so they're modelled as a discriminated union to make impossible states unrepresentable. */
 export type TranscodeTarget = {
-  format: 'flac' | 'ogg' | 'webm' | 'aac';
-  codec: string;
-  quality: number | null;
+  format: { container: 'webm'; codec: 'opus' } | { container: 'mp3'; codec: 'mp3' };
+  /** Coarse quality preset. `max` is server-chosen only — it kicks in when the client accepted flac but the source is lossy, so we still need to encode (because we can't passthrough non-flac as flac). */
+  quality: 'low' | 'medium' | 'high' | 'max';
 };
 
-/** Duration of one playback chunk, in seconds. Matches `-seg_duration` passed to ffmpeg's DASH muxer. */
+/** Duration of one playback chunk, in seconds. Matches `-seg_duration` passed to ffmpeg. */
 export const SEGMENT_DURATION_SECONDS = 6;
 
-/** A single track's in-progress / completed DASH transcode. Owns the tmpdir, the ffmpeg process, and a `'progress'` event stream the GraphQL subscription drives off. */
+/** A single track's in-progress / completed transcode. Owns the tmpdir, the ffmpeg process, and a `'progress'` event stream the GraphQL subscription drives off. */
 export type TranscodeJob = {
   key: string;
   dir: string;
-  /** Number of `chunk-NNNNN.webm` files currently on disk. Initialised at 0; bumped by the dir watcher. */
+  target: TranscodeTarget;
+  /** Number of `chunk-NNNNN.{ext}` files currently on disk. Initialised at 0; bumped by the dir watcher. */
   readyChunks: number;
   /** Set after ffmpeg exits successfully and the final chunk count has been recorded. */
   done: boolean;
@@ -42,11 +44,17 @@ function transcodeRoot(): string {
 }
 
 export function jobCacheKey(trackId: string, target: TranscodeTarget): string {
-  return `${trackId}:${target.format}:${target.codec}:${target.quality ?? 'auto'}`;
+  return `${trackId}:${target.format.container}:${target.format.codec}:${target.quality}`;
+}
+
+/** File extension and (optional) init-segment name for a target's chunked output. */
+export function chunkLayout(target: TranscodeTarget): { ext: string; init: string | null } {
+  return target.format.container === 'webm'
+    ? { ext: 'webm', init: 'init.webm' }
+    : { ext: 'mp3', init: null };
 }
 
 const cache = new LRUCache<string, TranscodeJob>({
-  // Use a count cap as a coarse guard; per-job disk usage varies, so the disk-quota story is driven by the tmpfs mount in containers and by TTL eviction here.
   max: 64,
   ttl: env.TRANSCODE_CACHE_TTL_SECONDS * 1000,
   updateAgeOnGet: true,
@@ -64,30 +72,31 @@ const cache = new LRUCache<string, TranscodeJob>({
 
 const inFlightStart = new Map<string, Promise<TranscodeJob>>();
 
-async function countChunks(dir: string): Promise<number> {
+async function countChunks(dir: string, ext: string): Promise<number> {
   try {
     const names = await readdir(dir);
+    const suffix = `.${ext}`;
     let n = 0;
-    for (const name of names) if (name.startsWith('chunk-') && name.endsWith('.webm')) n += 1;
+    for (const name of names) if (name.startsWith('chunk-') && name.endsWith(suffix)) n += 1;
     return n;
   } catch {
     return 0;
   }
 }
 
-/** Poll the tmpdir at a fixed cadence and bump `job.readyChunks` whenever new files appear. `fs.watch` would be lower-latency but its semantics differ across platforms (especially in containers) — a 250ms poll is plenty since ffmpeg writes a chunk every ~6/realtime seconds anyway. */
+/** Poll the tmpdir at a fixed cadence and bump `job.readyChunks` whenever new files appear. */
 async function watchChunks(job: TranscodeJob): Promise<void> {
+  const { ext } = chunkLayout(job.target);
   while (!job.stop.aborted && !job.done) {
-    const n = await countChunks(job.dir);
+    const n = await countChunks(job.dir, ext);
     if (n > job.readyChunks) {
       job.readyChunks = n;
       job.emitter.emit('progress');
     }
     await delay(250);
   }
-  // Final reconciliation after ffmpeg exits — pick up any chunk(s) written between the last poll and exit.
   if (!job.stop.aborted) {
-    const n = await countChunks(job.dir);
+    const n = await countChunks(job.dir, ext);
     if (n > job.readyChunks) {
       job.readyChunks = n;
       job.emitter.emit('progress');
@@ -103,14 +112,14 @@ async function startJob(
   const root = transcodeRoot();
   await mkdir(root, { recursive: true });
   const safeKey = key.replace(/[^A-Za-z0-9_.-]+/g, '_');
-  // `mkdtemp` gives each ffmpeg invocation its own directory, so an LRU eviction's `rm` (which is fire-and-forget) can't race with a subsequent re-start for the same key and pull the new job's output out from under it. The `${safeKey}-` prefix is debug-friendly when inspecting the tmpfs by hand.
   const dir = await mkdtemp(path.join(root, `${safeKey}-`));
-  const ffmpeg = spawnDashEncoder(source, target, dir, SEGMENT_DURATION_SECONDS);
+  const ffmpeg = spawnChunkedEncoder(source, target, dir, SEGMENT_DURATION_SECONDS);
   const emitter = new EventEmitter();
   emitter.setMaxListeners(0);
   const job: TranscodeJob = {
     key,
     dir,
+    target,
     readyChunks: 0,
     done: false,
     error: null,
@@ -137,7 +146,6 @@ async function startJob(
   return job;
 }
 
-/** Get or start a transcode job for `(track, target)`. Concurrent callers for the same key share the same job. */
 export async function getOrStartTranscodeJob(
   key: string,
   source: string,
@@ -152,7 +160,6 @@ export async function getOrStartTranscodeJob(
   return promise;
 }
 
-/** Resolve once `job.readyChunks >= n` or ffmpeg finishes (whichever happens first). */
 export function waitForChunks(job: TranscodeJob, n: number): Promise<void> {
   if (job.readyChunks >= n || job.done) return Promise.resolve();
   return new Promise((resolve) => {
@@ -175,12 +182,10 @@ export function waitForChunks(job: TranscodeJob, n: number): Promise<void> {
   });
 }
 
-/** Read a chunk file from the job's tmpdir. */
 export async function readChunkFile(job: TranscodeJob, name: string): Promise<Buffer> {
   return readFile(path.join(job.dir, name));
 }
 
-/** Test-only — drop all cached jobs (and their tmpdirs) and the in-flight start map. */
 export function _resetTranscodeCache(): void {
   cache.clear();
   inFlightStart.clear();

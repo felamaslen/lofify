@@ -1,12 +1,11 @@
 import crypto from 'node:crypto';
 
 import { env } from '../env.js';
-import type { ParsedOptions } from './options.js';
+import { type ParsedOptions, qualityToChar } from './options.js';
 
 function encodeOptionsSegments(opts: ParsedOptions): string[] {
   const parts: string[] = [];
-  if (opts.format != null) parts.push(`f:${opts.format}`);
-  if (opts.quality != null) parts.push(`q:${opts.quality}`);
+  if (opts.quality != null) parts.push(`q:${qualityToChar(opts.quality)}`);
   return parts;
 }
 

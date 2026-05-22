@@ -77,27 +77,38 @@ the resolver runs.
   [`graphql-sse`](https://github.com/enisdenjo/graphql-sse)
   (distinct-connections mode). Send a `subscription` operation with
   `Accept: text/event-stream`.
-- `GET /play/:signature/[:options.../]:id[/:seg]` — stream a track.
-  The URL is produced by `Track.url` and HMAC-signed with
-  `PLAYBACK_SIGNING_SECRET`. `:options` are zero or more `<key>:<value>`
-  segments — `f:<format>` (`original`, `auto_hi`, `auto_lo`, `flac`,
-  `ogg`, `webm`, `aac`) and `q:<0-10>`. Passthrough when the source
-  matches the requested format and quality is unset — the response is
-  the whole file with `Accept-Ranges: bytes` and `Range` support.
-  Otherwise the request kicks off (or attaches to) a single per-track
-  ffmpeg DASH transcode that writes `init.webm` + `chunk-NNNNN.webm`
-  files into `TRANSCODE_TMPDIR`. The trailing `:seg` selects the chunk:
-  `seg=0` returns the init segment concatenated with `chunk-00001.webm`
-  so the client only has to append once; `seg=N>0` returns just
-  `chunk-(N+1).webm`. Requests for chunks that aren't on disk yet block
-  until ffmpeg writes them. `HEAD` against the same URL returns the
-  meta headers (`X-Lofify-Segments`, `X-Lofify-Segment-Duration`,
+- `GET /play/:signature/[q:<l|m|h>/]:id[/:seg]` — stream a track. The URL
+  is produced by `Track.url` and HMAC-signed with `PLAYBACK_SIGNING_SECRET`.
+  The only signed option is the quality (`q:l`, `q:m`, `q:h`); the
+  delivery container is negotiated at request time via the `Accept`
+  header, so a single signed URL can be replayed with different `Accept`
+  values to switch formats. Supported `Accept` entries: `audio/flac`,
+  `audio/mpeg`, `audio/webm` (plus the standard wildcards). `audio/flac`
+  must always be paired with at least one fallback — flac alone returns
+  `406`. Resolution:
+  - `audio/flac` accepted + flac source → passthrough (whole file with
+    `Accept-Ranges: bytes`, `Range` support, `Content-Type: audio/flac`).
+  - `audio/flac` accepted + lossy source → encode the first non-flac
+    `Accept` entry at the encoder's max preset.
+  - `audio/flac` not accepted → encode the first `Accept` entry at the
+    requested quality (`low` / `medium` / `high`; defaults to medium).
+
+  Encoded paths kick off (or attach to) a single per-track ffmpeg job.
+  `audio/webm` uses ffmpeg's DASH muxer and writes `init.webm` +
+  `chunk-NNNNN.webm`; `audio/mpeg` uses the segment muxer and writes
+  standalone `chunk-NNNNN.mp3` files (no init segment — every mp3 frame
+  is self-describing). The trailing `:seg` selects the 0-indexed chunk:
+  for webm, `seg=0` returns the init concatenated with chunk 1 and
+  `seg=N>0` returns just chunk `N+1`; for mp3, `seg=N` returns chunk `N`
+  verbatim. Requests for chunks that aren't on disk yet block until
+  ffmpeg writes them. `HEAD` against the same URL returns the meta
+  headers (`X-Lofify-Segments`, `X-Lofify-Segment-Duration`,
   `X-Lofify-Duration`, `X-Lofify-Ready-Chunks`) for the client to
   discover the segmented-playback mode. The HMAC signature covers only
   the `options/id` portion of the path — `:seg` is unsigned. Up to
   `TRANSCODE_MAX_PARALLEL` ffmpeg processes run concurrently; jobs are
   LRU-evicted (and their tmpdirs `rm`-ed) under `TRANSCODE_CACHE_*`.
-- `subscription transcodeProgress(trackId, format, quality)` — emits
+- `subscription transcodeProgress(trackId, acceptHeaderValue, quality)` — emits
   `{ readyChunks, chunkDurationSeconds, isDone }` snapshots throttled
   to ~1 Hz so the playback UI can clamp seeks to the encoded region
   and overlay a "still encoding" stripe on the seek bar.

@@ -4,14 +4,13 @@ import type { ID, Int } from 'grats';
 import { db } from '../db/client.js';
 import { tracks as tracksTable } from '../db/schema/index.js';
 import { parseOptionSegments } from '../playback/options.js';
-import { resolveTarget } from '../playback/route.js';
+import { parseAcceptHeader, resolveTarget } from '../playback/route.js';
 import type { TranscodeJob } from '../playback/transcode.js';
 import {
   getOrStartTranscodeJob,
   jobCacheKey,
   SEGMENT_DURATION_SECONDS,
 } from '../playback/transcode.js';
-import type { Format } from './track.js';
 
 /**
  * Snapshot of how far the server has progressed transcoding a track's playback stream. Drives the "still encoding" overlay in the playback bar so the client knows which seek targets are reachable.
@@ -45,14 +44,18 @@ function snapshot(job: TranscodeJob | null): TranscodeProgress {
 const THROTTLE_MS = 1000;
 
 /**
- * Stream progress snapshots of the transcode that backs a given `(trackId, format, quality)` playback URL. Emits at most once per second while the transcode is running, then yields a final snapshot when it finishes. Passthrough playback yields a single `isDone: true` snapshot.
+ * Stream progress snapshots of the transcode that backs a given `(trackId, quality, Accept)` playback stream. Pass the same `Accept` header value the client will send to `/play/...` — the server resolves it to the same transcode job key, so the subscription observes the actual encoder the player is consuming.
+ *
+ * Emits at most once per second while the transcode is running, then yields a final snapshot when it finishes. Passthrough streams (`audio/flac` accepted on a flac source) yield a single `isDone: true` snapshot.
  *
  * @gqlSubscriptionField transcodeProgress
  */
 export async function* transcodeProgressSubscription(args: {
   trackId: ID;
-  format?: Format | null;
-  quality?: Int | null;
+  /** The exact value the client will send in the `Accept` header on `/play/...` — may be a comma-separated list. Defaults to `audio/webm` if omitted. */
+  acceptHeaderValue?: string | null;
+  /** One of `low`, `medium`, `high`. */
+  quality?: string | null;
 }): AsyncIterable<TranscodeProgress> {
   const rows = await db
     .select()
@@ -62,14 +65,23 @@ export async function* transcodeProgressSubscription(args: {
   const track = rows[0];
   if (!track) return;
 
+  const accepts = parseAcceptHeader(args.acceptHeaderValue ?? 'audio/webm');
+  if (!accepts) return;
+  // Same edge-case the route enforces — flac-only Accept is invalid because flac is never encoded.
+  if (accepts.includes('flac') && accepts.length === 1) return;
+
   const optionSegments: string[] = [];
-  if (args.format != null) optionSegments.push(`f:${args.format.toLowerCase()}`);
-  if (args.quality != null) optionSegments.push(`q:${args.quality}`);
+  if (args.quality != null) {
+    const q = args.quality.toLowerCase();
+    const code = q === 'low' ? 'l' : q === 'medium' ? 'm' : q === 'high' ? 'h' : null;
+    if (code) optionSegments.push(`q:${code}`);
+  }
   const opts = parseOptionSegments(optionSegments);
   if (opts == null) return;
 
-  const resolved = resolveTarget(track, opts);
+  const resolved = resolveTarget(track, opts, accepts);
   if (resolved.kind === 'passthrough') {
+    // Flac passthrough — no encoder job to watch.
     yield snapshot(null);
     return;
   }

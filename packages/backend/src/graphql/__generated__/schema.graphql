@@ -5,16 +5,12 @@
 directive @constraint(min: Int!, max: Int!) on ARGUMENT_DEFINITION
 
 """
-Container/codec to deliver. `ORIGINAL` streams the source file untouched; `AUTO_HI` and `AUTO_LO` let the server pick a sensible high- or low-bandwidth target; the remaining members pin a specific format.
+Coarse delivery quality the client requests for an encoded stream. `MAX` is server-internal — clients ask for it implicitly by including `audio/flac` in their `Accept` header, not via this enum.
 """
-enum Format {
-  AAC
-  AUTO_HI
-  AUTO_LO
-  FLAC
-  OGG
-  ORIGINAL
-  WEBM
+enum Quality {
+  HIGH
+  LOW
+  MEDIUM
 }
 
 """A length of time, expressed in whole seconds."""
@@ -93,9 +89,19 @@ type Subscription {
   """
   libraryScan(id: ID!): LibraryScan!
   """
-  Stream progress snapshots of the transcode that backs a given `(trackId, format, quality)` playback URL. Emits at most once per second while the transcode is running, then yields a final snapshot when it finishes. Passthrough playback yields a single `isDone: true` snapshot.
+  Stream progress snapshots of the transcode that backs a given `(trackId, quality, Accept)` playback stream. Pass the same `Accept` header value the client will send to `/play/...` — the server resolves it to the same transcode job key, so the subscription observes the actual encoder the player is consuming.
+  
+  Emits at most once per second while the transcode is running, then yields a final snapshot when it finishes. Passthrough streams (`audio/flac` accepted on a flac source) yield a single `isDone: true` snapshot.
   """
-  transcodeProgress(format: Format, quality: Int, trackId: ID!): TranscodeProgress!
+  transcodeProgress(
+    """
+    The exact value the client will send in the `Accept` header on `/play/...` — may be a comma-separated list. Defaults to `audio/webm` if omitted.
+    """
+    acceptHeaderValue: String
+    """One of `low`, `medium`, `high`."""
+    quality: String
+    trackId: ID!
+  ): TranscodeProgress!
 }
 
 """A single audio file in the library."""
@@ -112,15 +118,11 @@ type Track {
   title: String
   trackNumber: Int
   """
-  Signed URL the client should `GET` to stream this track. Re-call with different `quality`/`format` values to switch transcode targets.
+  Signed URL the client should `GET` to stream this track. The container format is selected at request time via the `Accept` header; the signed URL is independent of it, so a single URL can be replayed with different `Accept` values to switch formats without re-querying GraphQL.
   """
   url(
-    """Target container/codec. Defaults to `ORIGINAL` when omitted."""
-    format: Format
-    """
-    Target playback quality on an opaque 0–10 scale where higher is better.
-    """
-    quality: Int @constraint(max: 10, min: 0)
+    """Coarse delivery quality."""
+    quality: Quality
   ): String!
   year: String
 }
