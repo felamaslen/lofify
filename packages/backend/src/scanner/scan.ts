@@ -1,7 +1,9 @@
+import { Writable } from 'node:stream';
+
 import { SpanStatusCode, trace } from '@opentelemetry/api';
 import { eq } from 'drizzle-orm';
 import fg from 'fast-glob';
-import { Writable } from 'node:stream';
+
 import { db } from '../db/client.js';
 import { tracks } from '../db/schema/index.js';
 import { env } from '../env.js';

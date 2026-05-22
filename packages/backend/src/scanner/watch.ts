@@ -1,5 +1,6 @@
+import { type Span,SpanStatusCode, trace } from '@opentelemetry/api';
 import chokidar, { type FSWatcher } from 'chokidar';
-import { SpanStatusCode, trace, type Span } from '@opentelemetry/api';
+
 import { logger } from '../logger.js';
 import { AUDIO_EXTENSION_RE } from './audio-extensions.js';
 import { deleteTrackByFile, upsertTrack } from './scan.js';

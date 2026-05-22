@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+
 import { v4 as uuidv4 } from 'uuid';
 
 export type ScanError = {

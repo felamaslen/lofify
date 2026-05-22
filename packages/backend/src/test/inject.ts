@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+
 import { buildApp } from '../app.js';
 
 export async function makeApp(): Promise<FastifyInstance> {

@@ -1,6 +1,7 @@
-import { getScan, onScanUpdate } from '../scanner/runner.js';
 import type { ID, Int } from 'grats';
+
 import { env } from '../env.js';
+import { getScan, onScanUpdate } from '../scanner/runner.js';
 import { getLatestScan, type ScanState } from '../scanner/runner.js';
 import { scanLibrary } from '../scanner/scan.js';
 

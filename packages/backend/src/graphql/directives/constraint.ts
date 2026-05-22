@@ -1,11 +1,11 @@
 import {
-  GraphQLError,
-  GraphQLSchema,
   defaultFieldResolver,
-  isObjectType,
   type GraphQLArgument,
+  GraphQLError,
   type GraphQLField,
   type GraphQLFieldResolver,
+  GraphQLSchema,
+  isObjectType,
 } from 'graphql';
 import { Int } from 'grats';
 

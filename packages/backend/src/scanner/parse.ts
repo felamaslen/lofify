@@ -1,7 +1,9 @@
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
-import { parseFile } from 'music-metadata';
+
 import { SpanStatusCode, trace } from '@opentelemetry/api';
+import { parseFile } from 'music-metadata';
+
 import type { NewTrack } from '../db/schema/index.js';
 
 export type ParsedTrack = Omit<NewTrack, 'id' | 'createdAt' | 'updatedAt' | 'scannedAt'>;

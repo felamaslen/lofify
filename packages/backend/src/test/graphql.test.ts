@@ -1,6 +1,7 @@
-import { afterAll, beforeAll, expect, test } from 'vitest';
-import type { FastifyInstance } from 'fastify';
 import gql from 'fake-tag';
+import type { FastifyInstance } from 'fastify';
+import { afterAll, beforeAll, expect, test } from 'vitest';
+
 import { gqlRequest, makeApp } from './inject.js';
 
 let app: FastifyInstance;

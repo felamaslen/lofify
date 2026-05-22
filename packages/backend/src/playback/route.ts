@@ -1,18 +1,20 @@
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
+
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import parseRange from 'range-parser';
+
 import { db } from '../db/client.js';
-import { tracks as tracksTable } from '../db/schema/index.js';
 import type { Track as DbTrack } from '../db/schema/index.js';
-import { parseOptionSegments, type ParsedOptions, type RequestedFormat } from './options.js';
+import { tracks as tracksTable } from '../db/schema/index.js';
+import { type ParsedOptions, parseOptionSegments, type RequestedFormat } from './options.js';
 import { verifySignature } from './sign.js';
 import {
   getOrStartTranscode,
   subscribe,
-  waitForCompletion,
   type TranscodeTarget,
+  waitForCompletion,
 } from './transcode.js';
 
 export function contentTypeFor(format: string, codec: string): string {

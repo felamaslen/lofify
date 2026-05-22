@@ -1,10 +1,12 @@
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import Fastify, { type FastifyInstance } from 'fastify';
-import fastifyCors from '@fastify/cors';
+
 import { ApolloServer } from '@apollo/server';
 import fastifyApollo, { fastifyApolloDrainPlugin } from '@as-integrations/fastify';
+import fastifyCors from '@fastify/cors';
+import Fastify, { type FastifyInstance } from 'fastify';
 import { createHandler as createSseHandler } from 'graphql-sse/lib/use/fastify';
+
 import { env } from './env.js';
 import { buildSchema } from './graphql/index.js';
 import { registerPlaybackRoute } from './playback/route.js';

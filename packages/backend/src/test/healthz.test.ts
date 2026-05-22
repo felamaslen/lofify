@@ -1,5 +1,6 @@
-import { afterAll, beforeAll, expect, test } from 'vitest';
 import type { FastifyInstance } from 'fastify';
+import { afterAll, beforeAll, expect, test } from 'vitest';
+
 import { makeApp } from './inject.js';
 
 let app: FastifyInstance;

@@ -1,13 +1,15 @@
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
+
 import type { FastifyInstance } from 'fastify';
+import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
+
 import { db } from '../db/client.js';
 import { tracks } from '../db/schema/index.js';
 import { makeApp } from '../test/inject.js';
-import { _resetTranscodeCache } from './transcode.js';
 import { signPlaybackUrl } from './sign.js';
+import { _resetTranscodeCache } from './transcode.js';
 
 const fixturesDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),

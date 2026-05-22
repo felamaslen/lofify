@@ -1,6 +1,8 @@
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+
 import { SpanStatusCode, trace } from '@opentelemetry/api';
+
 import { env } from '../env.js';
 import { logger } from '../logger.js';
 

@@ -1,6 +1,7 @@
-import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
-import type { FastifyInstance } from 'fastify';
 import gql from 'fake-tag';
+import type { FastifyInstance } from 'fastify';
+import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
+
 import { db } from '../db/client.js';
 import { tracks } from '../db/schema/index.js';
 import { gqlRequest, makeApp } from '../test/inject.js';

@@ -1,5 +1,6 @@
 import { SpanStatusCode, trace } from '@opentelemetry/api';
 import { Cron } from 'croner';
+
 import { env } from '../env.js';
 import { logger } from '../logger.js';
 import { scanLibrary } from './scan.js';
