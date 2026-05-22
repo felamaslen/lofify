@@ -218,11 +218,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
           next: (data) => {
             const p = data.transcodeProgress;
             if (!p) return;
-            // For passthrough the server emits `isDone: true` with `readyChunks: 0` once — treat that as "everything is ready" so the seek bar isn't permanently clamped.
-            const ready =
-              p.isDone && p.readyChunks === 0
-                ? totalSeconds
-                : p.readyChunks * p.chunkDurationSeconds;
+            // Once ffmpeg signals done, the whole track is ready — `readyChunks * chunkDurationSeconds` floor-rounds below the actual duration (chunks are fixed-length, tracks aren't), and passthrough emits `isDone: true` with `readyChunks: 0`. Both cases collapse to "the seek bar should clear".
+            const ready = p.isDone
+              ? totalSeconds
+              : p.readyChunks * p.chunkDurationSeconds;
             const clamped = Math.min(ready, totalSeconds);
             setReadySeconds(clamped);
             playerRef.current?.setReadyChunks(p.readyChunks);
