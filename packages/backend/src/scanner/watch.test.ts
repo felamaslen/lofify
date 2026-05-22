@@ -88,6 +88,9 @@ describe('watchLibrary', () => {
         isLossless: false,
       }),
     );
+
+    const row = await getRow(file);
+    expect(row.durationSeconds).toBeGreaterThan(0);
   });
 
   it('writes a flac row as lossless', async () => {
@@ -106,6 +109,9 @@ describe('watchLibrary', () => {
         isLossless: true,
       }),
     );
+
+    const row = await getRow(file);
+    expect(row.durationSeconds).toBeGreaterThan(0);
   });
 
   it('updates the existing row when the file changes', async () => {

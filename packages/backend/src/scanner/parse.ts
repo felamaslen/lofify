@@ -28,7 +28,7 @@ export async function parseTrack(file: string): Promise<ParsedTrack> {
     try {
       await assertAudioHeader(file);
       const [metadata, st] = await Promise.all([
-        parseFile(file, { skipCovers: true }),
+        parseFile(file, { skipCovers: true, duration: true }),
         stat(file),
       ]);
       const { common, format } = metadata;
