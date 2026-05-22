@@ -101,6 +101,9 @@ importers:
       grats:
         specifier: ^0.0.36
         version: 0.0.36
+      lru-cache:
+        specifier: '11'
+        version: 11.5.0
       music-metadata:
         specifier: ^11.12.3
         version: 11.12.3

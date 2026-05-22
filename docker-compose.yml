@@ -34,9 +34,10 @@ services:
       BACKEND_PORT: 4000
       LIBRARY_PATH: /music
       PLAYBACK_SIGNING_SECRET: ${PLAYBACK_SIGNING_SECRET:-dev-secret}
-      TRANSCODE_MAX_PARALLEL: ${TRANSCODE_MAX_PARALLEL:-2}
+      TRANSCODE_MAX_PARALLEL: ${TRANSCODE_MAX_PARALLEL:-4}
       TRANSCODE_CACHE_MAX_BYTES: ${TRANSCODE_CACHE_MAX_BYTES:-1073741824}
       TRANSCODE_CACHE_TTL_SECONDS: ${TRANSCODE_CACHE_TTL_SECONDS:-3600}
+      TRANSCODE_TMPDIR: /transcode
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-lgtm:4318
       OTEL_SERVICE_NAME: lofify-backend
     ports:
@@ -45,6 +46,7 @@ services:
       - .:/app
       - backend-node-modules:/app/node_modules
       - ${LIBRARY_PATH:-./music}:/music:ro
+      - ./transcode-debug:/transcode
     depends_on:
       postgres:
         condition: service_healthy

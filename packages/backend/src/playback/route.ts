@@ -1,6 +1,5 @@
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
-import type { ServerResponse } from 'node:http';
 
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
@@ -9,19 +8,17 @@ import parseRange from 'range-parser';
 import { db } from '../db/client.js';
 import type { Track as DbTrack } from '../db/schema/index.js';
 import { tracks as tracksTable } from '../db/schema/index.js';
-import { env } from '../env.js';
 import { type ParsedOptions, parseOptionSegments, type RequestedFormat } from './options.js';
 import { verifySignature } from './sign.js';
 import {
-  type Entry,
-  getOrStartTranscode,
-  subscribe,
+  getOrStartTranscodeJob,
+  jobCacheKey,
+  readChunkFile,
+  SEGMENT_DURATION_SECONDS,
+  type TranscodeJob,
   type TranscodeTarget,
-  waitForBytes,
+  waitForChunks,
 } from './transcode.js';
-
-/** For an open-ended range like `bytes=N-` against an in-progress transcode, we don't know the final byte until ffmpeg finishes — so we serve the slice we already have, then close. The browser will request the next slice. This is the floor on how much we wait to buffer before responding, to keep per-seek request count modest. */
-const MIN_OPEN_RANGE_BYTES = 256 * 1024;
 
 export function contentTypeFor(format: string, codec: string): string {
   const f = format.toLowerCase();
@@ -48,11 +45,9 @@ export function contentTypeFor(format: string, codec: string): string {
   }
 }
 
-export type ResolvedTarget = { kind: 'passthrough' } | { kind: 'transcode'; target: TranscodeTarget };
-
-export function transcodeCacheKey(trackId: string, target: TranscodeTarget): string {
-  return `${trackId}:${target.format}:${target.codec}:${target.quality ?? 'auto'}`;
-}
+export type ResolvedTarget =
+  | { kind: 'passthrough' }
+  | { kind: 'transcode'; target: TranscodeTarget };
 
 export function resolveTarget(track: DbTrack, opts: ParsedOptions): ResolvedTarget {
   const sourceFormat = track.format.toLowerCase();
@@ -123,16 +118,6 @@ function parseRangeHeader(
   return { start, end };
 }
 
-/** Parse a `bytes=N-` or `bytes=N-M` header without needing to know the total resource size. Returns `end: null` for open-ended ranges (`bytes=N-`) so the caller can distinguish "client wants until EOF" from "client wants exactly up to M" — that distinction matters for transcoded responses, where we don't know the final size yet. We use this instead of `range-parser` because that library needs the total size up front to resolve `bytes=N-` into `{ start, end: total-1 }`, which loses the open/closed signal and forces a fake size in this code path. Multi-range, suffix ranges (`bytes=-N`), and non-bytes units are unsupported and return `null`. */
-function parseSimpleRange(header: string): { start: number; end: number | null } | null {
-  const m = /^bytes=(\d+)-(\d*)$/.exec(header);
-  if (!m) return null;
-  const start = Number(m[1]);
-  const end = m[2] === '' ? null : Number(m[2]);
-  if (end !== null && end < start) return null;
-  return { start, end };
-}
-
 async function sendPassthrough(
   req: FastifyRequest,
   reply: FastifyReply,
@@ -142,9 +127,16 @@ async function sendPassthrough(
   const total = st.size;
   const contentType = contentTypeFor(track.format, track.codec);
 
-  const range = parseRangeHeader(req.headers.range, total);
   reply.header('Accept-Ranges', 'bytes');
   reply.header('Content-Type', contentType);
+
+  if (req.method === 'HEAD') {
+    reply.code(200);
+    reply.header('Content-Length', String(total));
+    return reply.send();
+  }
+
+  const range = parseRangeHeader(req.headers.range, total);
 
   if (range) {
     const length = range.end - range.start + 1;
@@ -158,204 +150,137 @@ async function sendPassthrough(
   return reply.send(createReadStream(track.file));
 }
 
-/** Copy headers added via `reply.header()` (e.g. by the CORS plugin) onto the raw response. Without this, hijacking drops anything plugins set on the Fastify reply, since `reply.send()` is what normally flushes them. */
-function flushReplyHeadersToRaw(reply: FastifyReply, raw: ServerResponse): void {
-  const headers = reply.getHeaders();
-  for (const [name, value] of Object.entries(headers)) {
-    if (value === undefined) continue;
-    raw.setHeader(name, value as string | number | readonly string[]);
-  }
+function parseSegIndex(value: string | null): number | null {
+  if (value == null) return 0;
+  if (!/^\d+$/.test(value)) return null;
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 0) return null;
+  return n;
 }
 
-async function streamEntryToRaw(
-  raw: ServerResponse,
-  entry: Entry,
-  startByte: number,
-  maxBytes: number | null,
-): Promise<void> {
-  let closed = false;
-  const onClose = (): void => {
-    closed = true;
-  };
-  raw.on('close', onClose);
-
-  const writeRaw = async (chunk: Buffer): Promise<void> => {
-    if (closed) return;
-    if (!raw.write(chunk)) {
-      await new Promise<void>((resolve) => {
-        const done = (): void => {
-          raw.off('drain', done);
-          raw.off('close', done);
-          resolve();
-        };
-        raw.once('drain', done);
-        raw.once('close', done);
-      });
-    }
-  };
-
-  const writeChunk = async (chunk: Buffer): Promise<void> => {
-    if (closed) return;
-    // TESTING ONLY — simulate a slow client link. Split into smaller pieces so
-    // bytes trickle out evenly instead of arriving in chunk-sized bursts.
-    const maxBps = env.PLAYBACK_MAX_BITRATE;
-    if (maxBps <= 0) {
-      await writeRaw(chunk);
-      return;
-    }
-    const SMOOTH_CHUNK = 4096;
-    for (let off = 0; off < chunk.length && !closed; off += SMOOTH_CHUNK) {
-      const sub = chunk.subarray(off, Math.min(chunk.length, off + SMOOTH_CHUNK));
-      await writeRaw(sub);
-      if (closed) return;
-      const delayMs = (sub.length * 8 * 1000) / maxBps;
-      await new Promise<void>((resolve) => {
-        const onCloseDuringDelay = (): void => {
-          clearTimeout(timer);
-          resolve();
-        };
-        const timer = setTimeout(() => {
-          raw.off('close', onCloseDuringDelay);
-          resolve();
-        }, delayMs);
-        raw.once('close', onCloseDuringDelay);
-      });
-    }
-  };
-
-  let remaining = maxBytes;
-  const trim = (chunk: Buffer): Buffer => {
-    if (remaining == null) return chunk;
-    return chunk.length <= remaining ? chunk : chunk.subarray(0, remaining);
-  };
-
-  try {
-    const sub = subscribe(entry, startByte);
-    for (const chunk of sub.initial) {
-      if (closed || remaining === 0) break;
-      const slice = trim(chunk);
-      await writeChunk(slice);
-      if (remaining != null) remaining -= slice.length;
-    }
-    while (!closed && remaining !== 0) {
-      const chunk = await Promise.race<Buffer | null>([
-        sub.next(),
-        new Promise<null>((resolve) => raw.once('close', () => resolve(null))),
-      ]);
-      if (closed || chunk == null) break;
-      const slice = trim(chunk);
-      await writeChunk(slice);
-      if (remaining != null) remaining -= slice.length;
-    }
-    if (closed) return;
-    const err = sub.error();
-    if (err) {
-      raw.destroy(err);
-      return;
-    }
-    raw.end();
-  } finally {
-    raw.off('close', onClose);
-  }
+function chunkFileName(segIndex: number): string {
+  // ffmpeg's DASH muxer numbers media segments from 1 with %05d padding (see `-media_seg_name chunk-$Number%05d$.webm` in ffmpeg.ts).
+  return `chunk-${String(segIndex + 1).padStart(5, '0')}.webm`;
 }
 
-async function sendTranscode(
+async function sendTranscodeChunk(
   req: FastifyRequest,
   reply: FastifyReply,
   track: DbTrack,
   target: TranscodeTarget,
-  cacheKey: string,
+  segRaw: string | null,
 ): Promise<void> {
-  const entry = getOrStartTranscode(cacheKey, track.file, target);
+  const segCount = Math.max(1, Math.ceil(track.durationSeconds / SEGMENT_DURATION_SECONDS));
   const contentType = contentTypeFor(target.format, target.codec);
 
-  const rangeHeader = req.headers.range;
-  const range = rangeHeader ? parseSimpleRange(rangeHeader) : null;
+  const setMetaHeaders = (job: TranscodeJob | null): void => {
+    reply.header('Content-Type', contentType);
+    reply.header('X-Lofify-Segments', String(segCount));
+    reply.header('X-Lofify-Segment-Duration', String(SEGMENT_DURATION_SECONDS));
+    reply.header('X-Lofify-Duration', String(track.durationSeconds));
+    reply.header('X-Lofify-Ready-Chunks', String(job?.readyChunks ?? 0));
+    // Cross-origin XHR/fetch can only read these via `Response.headers.get()` if they're listed here. `@fastify/cors` doesn't add them by default.
+    reply.header(
+      'Access-Control-Expose-Headers',
+      'X-Lofify-Segments, X-Lofify-Segment-Duration, X-Lofify-Duration, X-Lofify-Ready-Chunks',
+    );
+  };
 
-  if (range) {
-    const wantBytes =
-      range.end !== null ? range.end + 1 : range.start + MIN_OPEN_RANGE_BYTES;
-    await waitForBytes(entry, wantBytes);
-
-    if (entry.error) {
-      reply.code(500);
-      return reply.send({ error: entry.error.message });
-    }
-    if (range.start >= entry.bytes) {
-      reply.code(416);
-      if (entry.done) reply.header('Content-Range', `bytes */${entry.bytes}`);
-      return reply.send();
-    }
-
-    const last =
-      range.end !== null ? Math.min(range.end, entry.bytes - 1) : entry.bytes - 1;
-    const total = entry.done ? String(entry.bytes) : '*';
-    const byteLength = last - range.start + 1;
-
-    reply.code(206);
-    reply.hijack();
-    const raw = reply.raw;
-    flushReplyHeadersToRaw(reply, raw);
-    raw.statusCode = 206;
-    raw.setHeader('Content-Type', contentType);
-    raw.setHeader('Accept-Ranges', 'bytes');
-    raw.setHeader('Content-Range', `bytes ${range.start}-${last}/${total}`);
-    raw.setHeader('Content-Length', String(byteLength));
-    await streamEntryToRaw(raw, entry, range.start, byteLength);
-    return;
+  if (req.method === 'HEAD') {
+    const job = await getOrStartTranscodeJob(jobCacheKey(track.id, target), track.file, target);
+    setMetaHeaders(job);
+    reply.code(200);
+    return reply.send();
   }
 
+  const segIndex = parseSegIndex(segRaw);
+  if (segIndex == null) {
+    reply.code(400);
+    return reply.send({ error: 'invalid seg' });
+  }
+  if (segIndex >= segCount) {
+    reply.code(404);
+    return reply.send({ error: 'seg out of range' });
+  }
+
+  const job = await getOrStartTranscodeJob(jobCacheKey(track.id, target), track.file, target);
+  // Wait until the requested chunk has been written. `segIndex + 1` because chunks are 1-indexed on disk.
+  await waitForChunks(job, segIndex + 1);
+  if (job.error) {
+    reply.code(500);
+    return reply.send({ error: job.error.message });
+  }
+  if (segIndex >= job.readyChunks) {
+    // ffmpeg finished but never produced this chunk — track shorter than expected.
+    reply.code(404);
+    return reply.send({ error: 'chunk past end-of-track' });
+  }
+
+  let buf: Buffer;
+  try {
+    const chunk = await readChunkFile(job, chunkFileName(segIndex));
+    if (segIndex === 0) {
+      // The first chunk must be preceded by the init segment so the SourceBuffer learns the codec parameters; we splice them server-side instead of inventing a separate `/init` endpoint.
+      const init = await readChunkFile(job, 'init.webm');
+      buf = Buffer.concat([init, chunk]);
+    } else {
+      buf = chunk;
+    }
+  } catch (err) {
+    reply.code(500);
+    return reply.send({ error: err instanceof Error ? err.message : 'chunk read failed' });
+  }
+
+  setMetaHeaders(job);
   reply.code(200);
-  reply.hijack();
-  const raw = reply.raw;
-  flushReplyHeadersToRaw(reply, raw);
-  raw.setHeader('Content-Type', contentType);
-  raw.setHeader('Accept-Ranges', 'bytes');
-  await streamEntryToRaw(raw, entry, 0, null);
+  reply.header('Content-Length', String(buf.length));
+  reply.header('Cache-Control', 'private, max-age=3600');
+  return reply.send(buf);
 }
 
 export async function registerPlaybackRoute(app: FastifyInstance): Promise<void> {
-  app.get<{ Params: { signature: string; '*': string } }>(
-    '/play/:signature/*',
-    async (req, reply) => {
-      const { signature } = req.params;
-      const rest = req.params['*'] ?? '';
-      const segments = rest.split('/').filter((s) => s !== '');
-      if (segments.length === 0) {
-        reply.code(404);
-        return reply.send({ error: 'missing track id' });
-      }
-      const id = segments[segments.length - 1]!;
-      const optionSegments = segments.slice(0, -1);
-      const payload = segments.join('/');
+  const handler = async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    const params = req.params as { signature: string; '*': string };
+    const { signature } = params;
+    const rest = params['*'] ?? '';
+    const segments = rest.split('/').filter((s) => s !== '');
+    if (segments.length === 0) {
+      reply.code(404);
+      return reply.send({ error: 'missing track id' });
+    }
 
-      if (!verifySignature(payload, signature)) {
-        reply.code(403);
-        return reply.send({ error: 'invalid signature' });
-      }
+    // The trailing path component is the chunk index when it's purely digits — all track ids are UUIDs, so this is unambiguous. Without a trailing number, the request targets chunk 0 (or doesn't specify, e.g. HEAD).
+    const last = segments[segments.length - 1]!;
+    const segRaw = /^\d+$/.test(last) && segments.length >= 2 ? last : null;
+    const idSegments = segRaw == null ? segments : segments.slice(0, -1);
+    const id = idSegments[idSegments.length - 1]!;
+    const optionSegments = idSegments.slice(0, -1);
+    const payload = idSegments.join('/');
 
-      const opts = parseOptionSegments(optionSegments);
-      if (opts == null) {
-        reply.code(400);
-        return reply.send({ error: 'invalid options' });
-      }
+    if (!verifySignature(payload, signature)) {
+      reply.code(403);
+      return reply.send({ error: 'invalid signature' });
+    }
 
-      const rows = await db
-        .select()
-        .from(tracksTable)
-        .where(eq(tracksTable.id, id))
-        .limit(1);
-      const track = rows[0];
-      if (!track) {
-        reply.code(404);
-        return reply.send({ error: 'unknown track' });
-      }
+    const opts = parseOptionSegments(optionSegments);
+    if (opts == null) {
+      reply.code(400);
+      return reply.send({ error: 'invalid options' });
+    }
 
-      const resolved = resolveTarget(track, opts);
-      if (resolved.kind === 'passthrough') {
-        return sendPassthrough(req, reply, track);
-      }
-      return sendTranscode(req, reply, track, resolved.target, transcodeCacheKey(track.id, resolved.target));
-    },
-  );
+    const rows = await db.select().from(tracksTable).where(eq(tracksTable.id, id)).limit(1);
+    const track = rows[0];
+    if (!track) {
+      reply.code(404);
+      return reply.send({ error: 'unknown track' });
+    }
+
+    const resolved = resolveTarget(track, opts);
+    if (resolved.kind === 'passthrough') {
+      return sendPassthrough(req, reply, track);
+    }
+    return sendTranscodeChunk(req, reply, track, resolved.target, segRaw);
+  };
+
+  app.get('/play/:signature/*', handler);
 }

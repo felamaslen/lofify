@@ -38,6 +38,7 @@
     "graphql": "^16.14.0",
     "graphql-sse": "^2.6.0",
     "grats": "^0.0.36",
+    "lru-cache": "11",
     "music-metadata": "^11.12.3",
     "pg": "^8.13.1",
     "range-parser": "^1.2.1",

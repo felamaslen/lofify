@@ -1,4 +1,4 @@
-import { readFile, stat } from 'node:fs/promises';
+import { readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -6,12 +6,12 @@ import { app } from '../app.js';
 import { db } from '../db/client.js';
 import { tracks } from '../db/schema/index.js';
 import { signPlaybackUrl } from './sign.js';
-import { _resetTranscodeCache, type Entry } from './transcode.js';
+import { _resetTranscodeCache } from './transcode.js';
 
-const runFfmpegMock = vi.hoisted(() => vi.fn());
+const spawnDashEncoderMock = vi.hoisted(() => vi.fn());
 vi.mock('./ffmpeg.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./ffmpeg.js')>();
-  return { ...actual, runFfmpeg: runFfmpegMock };
+  return { ...actual, spawnDashEncoder: spawnDashEncoderMock };
 });
 
 const fixturesDir = path.join(
@@ -27,45 +27,51 @@ const SAMPLE_FLAC = path.join(fixturesDir, 'sample.flac');
 beforeEach(async () => {
   await db.delete(tracks);
   _resetTranscodeCache();
-  const actual = await vi.importActual<typeof import('./ffmpeg.js')>('./ffmpeg.js');
-  runFfmpegMock.mockReset();
-  runFfmpegMock.mockImplementation(actual.runFfmpeg);
+  spawnDashEncoderMock.mockReset();
 });
 
-function createFakeTranscode(): {
-  emit: (data: Buffer | string) => void;
+/** A controllable fake DASH encoder. Captures the outDir on first call so tests can write fake init + chunk files into it, and exposes hooks to resolve/reject the job. */
+function fakeEncoder(): {
+  waitForStart: () => Promise<string>;
+  writeInit: (data: Buffer | string) => Promise<void>;
+  writeChunk: (segIndex: number, data: Buffer | string) => Promise<void>;
   finish: () => void;
   fail: (err: Error) => void;
-  waitForStart: () => Promise<void>;
 } {
-  let entry: Entry | null = null;
-  let resolveDone: (() => void) | null = null;
-  let rejectDone: ((err: Error) => void) | null = null;
-  let onStart: (() => void) | null = null;
-  runFfmpegMock.mockImplementation((e: Entry) => {
-    entry = e;
-    onStart?.();
-    return new Promise<void>((res, rej) => {
-      resolveDone = res;
-      rejectDone = rej;
-    });
-  });
-  return {
-    emit: (data) => {
-      if (!entry) throw new Error('no transcode in flight');
-      const chunk = typeof data === 'string' ? Buffer.from(data) : data;
-      entry.chunks.push(chunk);
-      entry.bytes += chunk.length;
-      entry.lastAccess = Date.now();
-      entry.emitter.emit('chunk', chunk);
+  let outDir: string | null = null;
+  let onStart: ((dir: string) => void) | null = null;
+  let resolveDone!: () => void;
+  let rejectDone!: (err: Error) => void;
+  spawnDashEncoderMock.mockImplementation(
+    (_source: string, _target: unknown, dir: string) => {
+      outDir = dir;
+      onStart?.(dir);
+      return {
+        done: new Promise<void>((res, rej) => {
+          resolveDone = res;
+          rejectDone = rej;
+        }),
+        kill: () => undefined,
+      };
     },
-    finish: () => resolveDone?.(),
-    fail: (err) => rejectDone?.(err),
+  );
+  return {
     waitForStart: () =>
-      new Promise<void>((resolve) => {
-        if (entry) resolve();
+      new Promise<string>((resolve) => {
+        if (outDir) resolve(outDir);
         else onStart = resolve;
       }),
+    writeInit: async (data) => {
+      if (!outDir) throw new Error('encoder has not started');
+      await writeFile(path.join(outDir, 'init.webm'), data);
+    },
+    writeChunk: async (segIndex, data) => {
+      if (!outDir) throw new Error('encoder has not started');
+      const name = `chunk-${String(segIndex + 1).padStart(5, '0')}.webm`;
+      await writeFile(path.join(outDir, name), data);
+    },
+    finish: () => resolveDone(),
+    fail: (err) => rejectDone(err),
   };
 }
 
@@ -75,6 +81,7 @@ async function seedTrack(opts: {
   format: string;
   codec: string;
   isLossless: boolean;
+  durationSeconds?: number;
 }): Promise<string> {
   const st = await stat(opts.file);
   const [row] = await db
@@ -94,7 +101,7 @@ async function seedTrack(opts: {
       isLossless: opts.isLossless,
       file: opts.file,
       sizeBytes: st.size,
-      durationSeconds: 1,
+      durationSeconds: opts.durationSeconds ?? 1,
     })
     .returning({ id: tracks.id });
   return row!.id;
@@ -142,209 +149,151 @@ test('passthrough — honours Range with 206 Partial Content', async () => {
   expect(res.rawPayload.equals(expected)).toBe(true);
 });
 
-test('transcode — streams a converted body', async () => {
+test('transcode — chunk 0 splices the init segment in front of chunk 1 on disk', async () => {
+  const enc = fakeEncoder();
   const id = await seedTrack({
     file: SAMPLE_FLAC,
     format: 'flac',
     codec: 'flac',
     isLossless: true,
+    durationSeconds: 60,
   });
-  const url = signPlaybackUrl(id, { quality: null, format: 'ogg' });
-
-  const res = await app.inject({ method: 'GET', url });
-  expect(res.statusCode).toBe(200);
-  expect(res.headers['content-type']).toBe('audio/ogg; codecs=vorbis');
-  expect(res.rawPayload.length).toBeGreaterThan(0);
-  expect(res.rawPayload.subarray(0, 4).toString('ascii')).toBe('OggS');
-}, 30_000);
-
-test('transcode — no range streams the full body as 200', async () => {
-  const fake = createFakeTranscode();
-  const id = await seedTrack({
-    file: SAMPLE_FLAC,
-    format: 'flac',
-    codec: 'flac',
-    isLossless: true,
-  });
-  const url = signPlaybackUrl(id, { quality: null, format: 'ogg' });
+  const url = `${signPlaybackUrl(id, { quality: null, format: 'webm' })}/0`;
 
   const pending = app.inject({
     method: 'GET',
     url,
     headers: { origin: 'http://localhost:5173' },
   });
-  await fake.waitForStart();
-  fake.emit('hello');
-  fake.emit('world');
-  fake.finish();
+  await enc.waitForStart();
+  await enc.writeInit('INIT');
+  await enc.writeChunk(0, 'C0');
 
   const res = await pending;
   expect(res.statusCode).toBe(200);
-  expect(res.headers['content-type']).toBe('audio/ogg; codecs=vorbis');
-  expect(res.headers['accept-ranges']).toBe('bytes');
-  expect(res.headers['content-range']).toBeUndefined();
-  expect(res.headers['access-control-allow-origin']).toBe('http://localhost:5173');
-  expect(res.rawPayload.toString()).toBe('helloworld');
+  expect(res.headers['content-type']).toBe('audio/webm; codecs=opus');
+  expect(res.headers['x-lofify-segments']).toBe('10');
+  expect(res.headers['x-lofify-segment-duration']).toBe('6');
+  expect(res.headers['x-lofify-duration']).toBe('60');
+  expect(res.headers['x-lofify-ready-chunks']).toBe('1');
+  expect(res.headers['access-control-expose-headers']).toContain('X-Lofify-Ready-Chunks');
+  expect(res.rawPayload.toString()).toBe('INITC0');
 });
 
-test('transcode — Range: bytes=0- returns 206 with full known range once done', async () => {
-  const fake = createFakeTranscode();
+test('transcode — chunk N>0 serves only chunk-(N+1).webm', async () => {
+  const enc = fakeEncoder();
   const id = await seedTrack({
     file: SAMPLE_FLAC,
     format: 'flac',
     codec: 'flac',
     isLossless: true,
+    durationSeconds: 60,
   });
-  const url = signPlaybackUrl(id, { quality: null, format: 'ogg' });
+  const url = `${signPlaybackUrl(id, { quality: null, format: 'webm' })}/3`;
 
-  const pending = app.inject({
-    method: 'GET',
-    url,
-    headers: { range: 'bytes=0-', origin: 'http://localhost:5173' },
-  });
-  await fake.waitForStart();
-  const body = Buffer.alloc(1000, 0x42);
-  fake.emit(body);
-  fake.finish();
+  const pending = app.inject({ method: 'GET', url });
+  await enc.waitForStart();
+  await enc.writeInit('INIT');
+  for (let i = 0; i <= 3; i++) await enc.writeChunk(i, `C${i}`);
 
   const res = await pending;
-  expect(res.statusCode).toBe(206);
-  expect(res.headers['content-type']).toBe('audio/ogg; codecs=vorbis');
-  expect(res.headers['accept-ranges']).toBe('bytes');
-  expect(res.headers['content-range']).toBe('bytes 0-999/1000');
-  expect(res.headers['content-length']).toBe('1000');
-  expect(res.headers['access-control-allow-origin']).toBe('http://localhost:5173');
-  expect(res.rawPayload.equals(body)).toBe(true);
+  expect(res.statusCode).toBe(200);
+  expect(res.rawPayload.toString()).toBe('C3');
 });
 
-test('transcode — Range: bytes=0- mid-transcode returns 206 with unknown total', async () => {
-  const fake = createFakeTranscode();
+test('transcode — request for not-yet-encoded chunk waits for the watcher', async () => {
+  const enc = fakeEncoder();
   const id = await seedTrack({
     file: SAMPLE_FLAC,
     format: 'flac',
     codec: 'flac',
     isLossless: true,
+    durationSeconds: 60,
   });
-  const url = signPlaybackUrl(id, { quality: null, format: 'ogg' });
+  const url = `${signPlaybackUrl(id, { quality: null, format: 'webm' })}/2`;
 
-  const pending = app.inject({
-    method: 'GET',
-    url,
-    headers: { range: 'bytes=0-', origin: 'http://localhost:5173' },
-  });
-  await fake.waitForStart();
-
-  const body = Buffer.alloc(256 * 1024, 0x37);
-  fake.emit(body);
-
-  const res = await pending;
-  expect(res.statusCode).toBe(206);
-  expect(res.headers['content-range']).toBe(`bytes 0-${body.length - 1}/*`);
-  expect(res.headers['content-length']).toBe(String(body.length));
-  expect(res.headers['access-control-allow-origin']).toBe('http://localhost:5173');
-  expect(res.rawPayload.equals(body)).toBe(true);
-
-  fake.finish();
-});
-
-test('transcode — seek into already-transcoded area serves 206 immediately', async () => {
-  const fake = createFakeTranscode();
-  const id = await seedTrack({
-    file: SAMPLE_FLAC,
-    format: 'flac',
-    codec: 'flac',
-    isLossless: true,
-  });
-  const url = signPlaybackUrl(id, { quality: null, format: 'ogg' });
-
-  const initial = app.inject({ method: 'GET', url });
-  await fake.waitForStart();
-
-  const body = Buffer.alloc(1000);
-  for (let i = 0; i < body.length; i++) body[i] = i & 0xff;
-  fake.emit(body);
-
-  const seek = await app.inject({
-    method: 'GET',
-    url,
-    headers: { range: 'bytes=500-700', origin: 'http://localhost:5173' },
-  });
-  expect(seek.statusCode).toBe(206);
-  expect(seek.headers['content-range']).toBe('bytes 500-700/*');
-  expect(seek.headers['content-length']).toBe('201');
-  expect(seek.headers['access-control-allow-origin']).toBe('http://localhost:5173');
-  expect(seek.rawPayload.equals(body.subarray(500, 701))).toBe(true);
-
-  fake.finish();
-  await initial;
-});
-
-test('transcode — seek into not-yet-transcoded area waits for the bytes', async () => {
-  const fake = createFakeTranscode();
-  const id = await seedTrack({
-    file: SAMPLE_FLAC,
-    format: 'flac',
-    codec: 'flac',
-    isLossless: true,
-  });
-  const url = signPlaybackUrl(id, { quality: null, format: 'ogg' });
-
-  const initial = app.inject({ method: 'GET', url });
-  await fake.waitForStart();
-
-  const head = Buffer.alloc(100, 0xaa);
-  fake.emit(head);
-
-  const seek = app.inject({
-    method: 'GET',
-    url,
-    headers: { range: 'bytes=500-700', origin: 'http://localhost:5173' },
-  });
+  const pending = app.inject({ method: 'GET', url });
+  await enc.waitForStart();
+  await enc.writeInit('INIT');
+  await enc.writeChunk(0, 'C0');
+  // Inject hasn't resolved yet — chunks 1 and 2 are still missing.
   let settled = false;
-  void seek.then(() => {
+  void pending.then(() => {
     settled = true;
   });
-  await new Promise((r) => setTimeout(r, 30));
+  await new Promise((r) => setTimeout(r, 350));
   expect(settled).toBe(false);
 
-  const tail = Buffer.alloc(700, 0xbb);
-  fake.emit(tail);
+  await enc.writeChunk(1, 'C1');
+  await enc.writeChunk(2, 'C2');
 
-  const res = await seek;
-  expect(res.statusCode).toBe(206);
-  expect(res.headers['content-range']).toBe('bytes 500-700/*');
-  expect(res.headers['content-length']).toBe('201');
-  expect(res.headers['access-control-allow-origin']).toBe('http://localhost:5173');
-  const full = Buffer.concat([head, tail]);
-  expect(res.rawPayload.equals(full.subarray(500, 701))).toBe(true);
-
-  fake.finish();
-  await initial;
+  const res = await pending;
+  expect(res.statusCode).toBe(200);
+  expect(res.rawPayload.toString()).toBe('C2');
+  expect(res.headers['x-lofify-ready-chunks']).toBe('3');
 });
 
-test('transcode — range starting past EOF returns 416', async () => {
-  const fake = createFakeTranscode();
+test('transcode — chunk past expected track length returns 404', async () => {
+  fakeEncoder(); // ffmpeg is invoked but the test never produces files
   const id = await seedTrack({
     file: SAMPLE_FLAC,
     format: 'flac',
     codec: 'flac',
     isLossless: true,
+    durationSeconds: 12, // 2 chunks → valid indices 0, 1
   });
-  const url = signPlaybackUrl(id, { quality: null, format: 'ogg' });
+  const url = `${signPlaybackUrl(id, { quality: null, format: 'webm' })}/5`;
 
-  const initial = app.inject({ method: 'GET', url });
-  await fake.waitForStart();
-  fake.emit(Buffer.alloc(100, 0xaa));
-  fake.finish();
-  await initial;
+  const res = await app.inject({ method: 'GET', url });
+  expect(res.statusCode).toBe(404);
+});
+
+test('transcode — HEAD probe returns metadata headers without waiting for chunks', async () => {
+  const enc = fakeEncoder();
+  const id = await seedTrack({
+    file: SAMPLE_FLAC,
+    format: 'flac',
+    codec: 'flac',
+    isLossless: true,
+    durationSeconds: 60,
+  });
+  const url = signPlaybackUrl(id, { quality: null, format: 'webm' });
 
   const res = await app.inject({
-    method: 'GET',
+    method: 'HEAD',
     url,
-    headers: { range: 'bytes=500-700' },
+    headers: { origin: 'http://localhost:5173' },
   });
-  expect(res.statusCode).toBe(416);
-  expect(res.headers['content-range']).toBe('bytes */100');
+  expect(res.statusCode).toBe(200);
+  expect(res.headers['content-type']).toBe('audio/webm; codecs=opus');
+  expect(res.headers['x-lofify-segments']).toBe('10');
+  expect(res.headers['x-lofify-segment-duration']).toBe('6');
+  expect(res.headers['x-lofify-duration']).toBe('60');
+  expect(res.headers['x-lofify-ready-chunks']).toBe('0');
+  expect(res.headers['access-control-expose-headers']).toContain('X-Lofify-Ready-Chunks');
+
+  await enc.waitForStart();
+});
+
+test('transcode — second request for same chunk hits cache (no second ffmpeg spawn)', async () => {
+  const enc = fakeEncoder();
+  const id = await seedTrack({
+    file: SAMPLE_FLAC,
+    format: 'flac',
+    codec: 'flac',
+    isLossless: true,
+    durationSeconds: 60,
+  });
+  const url = `${signPlaybackUrl(id, { quality: null, format: 'webm' })}/0`;
+
+  const first = app.inject({ method: 'GET', url });
+  await enc.waitForStart();
+  await enc.writeInit('INIT');
+  await enc.writeChunk(0, 'C0');
+  await first;
+  await app.inject({ method: 'GET', url });
+
+  expect(spawnDashEncoderMock).toHaveBeenCalledTimes(1);
 });
 
 test('rejects requests with an invalid signature', async () => {
@@ -369,11 +318,10 @@ test('rejects requests with malformed options', async () => {
     codec: 'mp3',
     isLossless: false,
   });
-  // Build a payload with an unknown option key, signed correctly so we
-  // pass signature verification and trip the options parser instead.
   const { signPayload } = await import('./sign.js');
   const payload = `bogus:1/${id}`;
   const sig = signPayload(payload);
   const res = await app.inject({ method: 'GET', url: `/play/${sig}/${payload}` });
   expect(res.statusCode).toBe(400);
 });
+

@@ -23,3 +23,5 @@ pnpm-debug.log*
 
 *.tsbuildinfo
 *.generated.ts
+
+/transcode-debug

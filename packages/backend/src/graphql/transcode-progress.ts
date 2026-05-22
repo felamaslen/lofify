@@ -1,53 +1,51 @@
 import { eq } from 'drizzle-orm';
-import type { Float, ID, Int } from 'grats';
+import type { ID, Int } from 'grats';
 
 import { db } from '../db/client.js';
 import { tracks as tracksTable } from '../db/schema/index.js';
 import { parseOptionSegments } from '../playback/options.js';
-import { resolveTarget, transcodeCacheKey } from '../playback/route.js';
-import type { Entry } from '../playback/transcode.js';
-import { getOrStartTranscode } from '../playback/transcode.js';
+import { resolveTarget } from '../playback/route.js';
+import type { TranscodeJob } from '../playback/transcode.js';
+import {
+  getOrStartTranscodeJob,
+  jobCacheKey,
+  SEGMENT_DURATION_SECONDS,
+} from '../playback/transcode.js';
 import type { Format } from './track.js';
 
 /**
- * Snapshot of how much of a transcoded playback stream the server has produced so far. Lets the client distinguish "the server has these bytes ready to serve" from "I've downloaded these bytes" — useful for seek-bar indicators and for clamping seeks to the transcoded region.
+ * Snapshot of how far the server has progressed transcoding a track's playback stream. Drives the "still encoding" overlay in the playback bar so the client knows which seek targets are reachable.
  *
  * @gqlType
  */
 export class TranscodeProgress {
-  constructor(
-    private snapshot: { secondsTranscoded: number; bytesTranscoded: number; isDone: boolean },
-  ) {}
+  constructor(private snapshot: { readyChunks: number; isDone: boolean }) {}
 
-  /** Seconds of audio the server has finished transcoding. Zero when no transcode is running (e.g. passthrough playback). @gqlField */
-  secondsTranscoded(): Float {
-    return this.snapshot.secondsTranscoded;
+  /** Number of equal-duration chunks that have been written to the transcode cache so far. Multiply by `chunkDurationSeconds` to get the seconds-ready cursor. @gqlField */
+  readyChunks(): Int {
+    return this.snapshot.readyChunks;
   }
 
-  /** Bytes produced by the transcoder so far. Combined with `secondsTranscoded` this gives an average bytes-per-second the client can use to estimate the byte offset for a seek target. @gqlField */
-  bytesTranscoded(): Int {
-    return this.snapshot.bytesTranscoded;
+  /** Duration of a single transcode chunk, in seconds. Constant for the lifetime of the subscription. @gqlField */
+  chunkDurationSeconds(): Int {
+    return SEGMENT_DURATION_SECONDS;
   }
 
-  /** True once transcoding has finished (successfully or not). After this the snapshot is final. @gqlField */
+  /** True once ffmpeg has finished (successfully or not). After this the snapshot is final. @gqlField */
   isDone(): boolean {
     return this.snapshot.isDone;
   }
 }
 
-function snapshot(entry: Entry | null): TranscodeProgress {
-  if (!entry) return new TranscodeProgress({ secondsTranscoded: 0, bytesTranscoded: 0, isDone: true });
-  return new TranscodeProgress({
-    secondsTranscoded: entry.transcodedSeconds,
-    bytesTranscoded: entry.bytes,
-    isDone: entry.done,
-  });
+function snapshot(job: TranscodeJob | null): TranscodeProgress {
+  if (!job) return new TranscodeProgress({ readyChunks: 0, isDone: true });
+  return new TranscodeProgress({ readyChunks: job.readyChunks, isDone: job.done });
 }
 
 const THROTTLE_MS = 1000;
 
 /**
- * Stream progress snapshots of the transcode that backs a given `(trackId, format, quality)` playback URL. Emits at most once per second while the transcode is running, then yields a final snapshot when it finishes. The subscription kicks off the transcode if it isn't already running, so subscribing before fetching the playback URL is fine.
+ * Stream progress snapshots of the transcode that backs a given `(trackId, format, quality)` playback URL. Emits at most once per second while the transcode is running, then yields a final snapshot when it finishes. Passthrough playback yields a single `isDone: true` snapshot.
  *
  * @gqlSubscriptionField transcodeProgress
  */
@@ -72,31 +70,32 @@ export async function* transcodeProgressSubscription(args: {
 
   const resolved = resolveTarget(track, opts);
   if (resolved.kind === 'passthrough') {
-    // No transcode happens for passthrough; report a single "done at 0" snapshot
-    // so subscribers don't hang.
     yield snapshot(null);
     return;
   }
 
-  const cacheKey = transcodeCacheKey(track.id, resolved.target);
-  const entry = getOrStartTranscode(cacheKey, track.file, resolved.target);
+  const job = await getOrStartTranscodeJob(
+    jobCacheKey(track.id, resolved.target),
+    track.file,
+    resolved.target,
+  );
 
   let lastEmittedAt = 0;
   for (;;) {
     const now = Date.now();
     const wait = Math.max(0, lastEmittedAt + THROTTLE_MS - now);
     if (wait > 0) await new Promise<void>((r) => setTimeout(r, wait));
-    yield snapshot(entry);
+    yield snapshot(job);
     lastEmittedAt = Date.now();
-    if (entry.done) return;
+    if (job.done) return;
     await new Promise<void>((resolve) => {
       const finish = (): void => {
-        entry.emitter.off('progress', finish);
-        entry.emitter.off('done', finish);
+        job.emitter.off('progress', finish);
+        job.emitter.off('done', finish);
         resolve();
       };
-      entry.emitter.once('progress', finish);
-      entry.emitter.once('done', finish);
+      job.emitter.once('progress', finish);
+      job.emitter.once('done', finish);
     });
   }
 }

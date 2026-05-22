@@ -77,17 +77,30 @@ the resolver runs.
   [`graphql-sse`](https://github.com/enisdenjo/graphql-sse)
   (distinct-connections mode). Send a `subscription` operation with
   `Accept: text/event-stream`.
-- `GET /play/:signature/[:options.../]:id` — stream a track. The URL is
-  produced by `Track.url` and HMAC-signed with `PLAYBACK_SIGNING_SECRET`.
-  `:options` are zero or more `<key>:<value>` segments — `f:<format>`
-  (`original`, `auto_hi`, `auto_lo`, `flac`, `ogg`, `webm`, `aac`) and
-  `q:<0-10>`. Passthrough when the source matches the requested format
-  and quality is unset; otherwise the request transcodes through ffmpeg
-  (one process per arg-tuple, capped by `TRANSCODE_MAX_PARALLEL`,
-  results cached in memory under `TRANSCODE_CACHE_MAX_BYTES` /
-  `TRANSCODE_CACHE_TTL_SECONDS`). Passthrough honours `Range` with
-  `206 Partial Content`; transcode `Range` requests are served from the
-  cache once ffmpeg completes.
+- `GET /play/:signature/[:options.../]:id[/:seg]` — stream a track.
+  The URL is produced by `Track.url` and HMAC-signed with
+  `PLAYBACK_SIGNING_SECRET`. `:options` are zero or more `<key>:<value>`
+  segments — `f:<format>` (`original`, `auto_hi`, `auto_lo`, `flac`,
+  `ogg`, `webm`, `aac`) and `q:<0-10>`. Passthrough when the source
+  matches the requested format and quality is unset — the response is
+  the whole file with `Accept-Ranges: bytes` and `Range` support.
+  Otherwise the request kicks off (or attaches to) a single per-track
+  ffmpeg DASH transcode that writes `init.webm` + `chunk-NNNNN.webm`
+  files into `TRANSCODE_TMPDIR`. The trailing `:seg` selects the chunk:
+  `seg=0` returns the init segment concatenated with `chunk-00001.webm`
+  so the client only has to append once; `seg=N>0` returns just
+  `chunk-(N+1).webm`. Requests for chunks that aren't on disk yet block
+  until ffmpeg writes them. `HEAD` against the same URL returns the
+  meta headers (`X-Lofify-Segments`, `X-Lofify-Segment-Duration`,
+  `X-Lofify-Duration`, `X-Lofify-Ready-Chunks`) for the client to
+  discover the segmented-playback mode. The HMAC signature covers only
+  the `options/id` portion of the path — `:seg` is unsigned. Up to
+  `TRANSCODE_MAX_PARALLEL` ffmpeg processes run concurrently; jobs are
+  LRU-evicted (and their tmpdirs `rm`-ed) under `TRANSCODE_CACHE_*`.
+- `subscription transcodeProgress(trackId, format, quality)` — emits
+  `{ readyChunks, chunkDurationSeconds, isDone }` snapshots throttled
+  to ~1 Hz so the playback UI can clamp seeks to the encoded region
+  and overlay a "still encoding" stripe on the seek bar.
 
 ## Env
 
@@ -102,6 +115,7 @@ the resolver runs.
 | `SCAN_CONCURRENCY`             | `4`                   | Max files parsed and upserted in parallel by the scanner. |
 | `SCAN_CRON`                    | `0 2 * * *`           | Cron expression for the recurring full library scan. Empty disables. |
 | `PLAYBACK_SIGNING_SECRET`      | `dev-secret`          | HMAC key used to sign and verify `/play` URLs. |
-| `TRANSCODE_MAX_PARALLEL`       | `2`                   | Maximum concurrent ffmpeg transcode processes. |
+| `TRANSCODE_MAX_PARALLEL`       | `4`                   | Maximum concurrent ffmpeg transcode processes. |
 | `TRANSCODE_CACHE_MAX_BYTES`    | `1073741824` (1 GiB)  | Soft cap on bytes held in the in-memory transcode cache. |
 | `TRANSCODE_CACHE_TTL_SECONDS`  | `3600`                | TTL after last access for cached transcodes. |
+| `TRANSCODE_TMPDIR`             | `${os.tmpdir()}/lofify-transcode` | Scratch directory for ffmpeg DASH output. Mount as tmpfs in containers (see `docker-compose.yml`). |
