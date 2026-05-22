@@ -39,6 +39,28 @@ export const TracksQuery = graphql(`
   }
 `);
 
+export const StartLibraryScanMutation = graphql(`
+  mutation StartLibraryScan {
+    libraryScan {
+      id
+      filesTotal
+      scannedTotal
+      errorsTotal
+    }
+  }
+`);
+
+export const LibraryScanSubscription = graphql(`
+  subscription LibraryScan($id: ID!) {
+    libraryScan(id: $id) {
+      id
+      filesTotal
+      scannedTotal
+      errorsTotal
+    }
+  }
+`);
+
 export const TrackByIdQuery = graphql(`
   query TrackById($id: ID!, $format: Format, $quality: Int) {
     track(id: $id) {

@@ -153,6 +153,9 @@ importers:
       graphql:
         specifier: ^16.14.0
         version: 16.14.0
+      graphql-sse:
+        specifier: ^2.6.0
+        version: 2.6.0(graphql@16.14.0)
       react:
         specifier: ^19.0.0
         version: 19.2.6

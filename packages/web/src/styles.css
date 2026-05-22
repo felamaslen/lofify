@@ -38,6 +38,73 @@ body {
   letter-spacing: 0.04em;
 }
 
+.app-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.rescan {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.rescan-button {
+  background: #1d2a3a;
+  border: 1px solid #2a313c;
+  color: inherit;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.rescan-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.rescan-progress {
+  position: relative;
+  width: 220px;
+  height: 16px;
+  background: #1f232b;
+  border-radius: 8px;
+  overflow: hidden;
+  font-size: 11px;
+  color: #cdd3dc;
+}
+
+.rescan-progress-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: linear-gradient(90deg, #2f6fcb, #4d9be8);
+  transition: width 0.2s ease;
+}
+
+.rescan-progress.is-indeterminate .rescan-progress-fill {
+  width: 40%;
+  animation: rescan-shimmer 1.2s linear infinite;
+}
+
+@keyframes rescan-shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(250%);
+  }
+}
+
+.rescan-progress-label {
+  position: relative;
+  display: block;
+  text-align: center;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
 .track-list {
   display: grid;
   grid-template-rows: auto 1fr;
