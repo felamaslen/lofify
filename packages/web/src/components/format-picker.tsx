@@ -1,6 +1,6 @@
-import { usePlayer, type FormatChoice } from '../state/player.tsx';
+import { usePlayer, type Format } from '../state/player.tsx';
 
-const CHOICES: { value: FormatChoice; label: string }[] = [
+const CHOICES: { value: Format; label: string }[] = [
   { value: 'AUTO_HI', label: 'Auto (hi)' },
   { value: 'AUTO_LO', label: 'Auto (lo)' },
   { value: 'FLAC', label: 'FLAC' },
@@ -14,7 +14,7 @@ export function FormatPicker() {
       Format:&nbsp;
       <select
         value={format}
-        onChange={(e) => setFormat(e.target.value as FormatChoice)}
+        onChange={(e) => setFormat(e.target.value as Format)}
       >
         {CHOICES.map((c) => (
           <option key={c.value} value={c.value}>

@@ -11,18 +11,18 @@ import {
 import { useQueryClient } from '@tanstack/react-query';
 import { gqlRequest } from '../lib/gql-request.ts';
 import { TrackByIdQuery, TracksQuery } from '../lib/queries.ts';
-import type { ResultOf } from '../lib/gql.ts';
+import type { ResultOf, VariablesOf } from '../lib/gql.ts';
 
 type TrackNode = NonNullable<ResultOf<typeof TrackByIdQuery>['track']>;
 
-export type FormatChoice = 'AUTO_HI' | 'AUTO_LO' | 'FLAC' | 'WEBM';
+export type Format = NonNullable<VariablesOf<typeof TracksQuery>['format']>;
 
 type PlayerCtx = {
   current: TrackNode | null;
   isPlaying: boolean;
   positionSeconds: number;
-  format: FormatChoice;
-  setFormat: (f: FormatChoice) => void;
+  format: Format;
+  setFormat: (f: Format) => void;
   play: (id: string) => void;
   togglePlay: () => void;
   next: () => void;
@@ -46,7 +46,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const [current, setCurrent] = useState<TrackNode | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [positionSeconds, setPositionSeconds] = useState(0);
-  const [format, setFormat] = useState<FormatChoice>('AUTO_HI');
+  const [format, setFormat] = useState<Format>('AUTO_HI');
   const nextRef = useRef<() => void>(() => undefined);
 
   useEffect(() => {
