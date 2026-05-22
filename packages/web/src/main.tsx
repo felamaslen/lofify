@@ -7,8 +7,10 @@ import {
   Outlet,
   RouterProvider,
 } from '@tanstack/react-router';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { queryClient } from './lib/query-client.ts';
 import { Home } from './routes/home.tsx';
+import { PlayerProvider } from './state/player.tsx';
 import './styles.css';
 
 const rootRoute = createRootRoute({ component: () => <Outlet /> });
@@ -28,19 +30,15 @@ declare module '@tanstack/react-router' {
   }
 }
 
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: { staleTime: 30_000, refetchOnWindowFocus: false },
-  },
-});
-
 const root = document.getElementById('root');
 if (!root) throw new Error('Missing #root');
 
 createRoot(root).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
+      <PlayerProvider>
+        <RouterProvider router={router} />
+      </PlayerProvider>
     </QueryClientProvider>
   </StrictMode>,
 );
