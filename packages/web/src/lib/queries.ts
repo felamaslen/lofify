@@ -39,13 +39,28 @@ export const TracksQuery = graphql(`
   }
 `);
 
-export const StartLibraryScanMutation = graphql(`
-  mutation StartLibraryScan {
+export const LibraryScanQuery = graphql(`
+  query LibraryScanCurrent {
     libraryScan {
       id
       filesTotal
       scannedTotal
       errorsTotal
+      isCompleted
+      errorMessage
+    }
+  }
+`);
+
+export const StartLibraryScanMutation = graphql(`
+  mutation StartLibraryScan {
+    libraryScanStart {
+      id
+      filesTotal
+      scannedTotal
+      errorsTotal
+      isCompleted
+      errorMessage
     }
   }
 `);
@@ -57,6 +72,8 @@ export const LibraryScanSubscription = graphql(`
       filesTotal
       scannedTotal
       errorsTotal
+      isCompleted
+      errorMessage
     }
   }
 `);
