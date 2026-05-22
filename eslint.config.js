@@ -2,6 +2,7 @@ import js from '@eslint/js';
 import tseslint from '@typescript-eslint/eslint-plugin';
 import tsparser from '@typescript-eslint/parser';
 import prettier from 'eslint-config-prettier';
+import simpleImportSort from 'eslint-plugin-simple-import-sort';
 import globals from 'globals';
 
 export default [
@@ -13,9 +14,20 @@ export default [
       '**/target/**',
       '**/.turbo/**',
       '**/*.generated.ts',
+      '**/__generated__/**',
     ],
   },
   js.configs.recommended,
+  {
+    files: ['**/*.{ts,tsx,js,mjs,cjs}'],
+    plugins: {
+      'simple-import-sort': simpleImportSort,
+    },
+    rules: {
+      'simple-import-sort/imports': 'error',
+      'simple-import-sort/exports': 'error',
+    },
+  },
   {
     files: ['**/*.{ts,tsx}'],
     languageOptions: {
@@ -23,9 +35,6 @@ export default [
       parserOptions: {
         ecmaVersion: 2023,
         sourceType: 'module',
-      },
-      globals: {
-        ...globals.node,
       },
     },
     plugins: {
@@ -37,6 +46,18 @@ export default [
         'warn',
         { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
       ],
+    },
+  },
+  {
+    files: ['packages/backend/**/*.{ts,tsx}'],
+    languageOptions: {
+      globals: { ...globals.node },
+    },
+  },
+  {
+    files: ['packages/web/**/*.{ts,tsx}'],
+    languageOptions: {
+      globals: { ...globals.browser },
     },
   },
   prettier,
