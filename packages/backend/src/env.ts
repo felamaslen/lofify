@@ -36,6 +36,9 @@ const Schema = z.object({
   /** How long a cached transcode survives after its last access. */
   TRANSCODE_CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(3600),
 
+  /** TESTING ONLY — soft cap on the rate at which transcoded bytes are emitted to consumers, in bits per second. Each ffmpeg chunk is delayed by `chunk.length * 8 / TRANSCODE_MAX_BITRATE` seconds before being made visible, so the effective throughput stays at or below this rate. Lets us exercise the streaming/buffering UX in the browser without needing a slow machine. Defaults to 0 (no throttling). */
+  TRANSCODE_MAX_BITRATE: z.coerce.number().int().nonnegative().default(0),
+
   /** OTLP/HTTP base URL. Receivers expose `/v1/traces`, `/v1/logs`, `/v1/metrics` under it. */
   OTEL_EXPORTER_OTLP_ENDPOINT: z.string().url().default('http://otel-lgtm:4318'),
 

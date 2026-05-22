@@ -89,19 +89,39 @@ export async function runFfmpeg(
           proc.stderr.on('data', (chunk: Buffer) => {
             stderr += chunk.toString();
           });
-          proc.stdout.on('data', (chunk: Buffer) => {
+
+          const emit = (chunk: Buffer): void => {
             entry.chunks.push(chunk);
             entry.bytes += chunk.length;
             entry.lastAccess = Date.now();
             entry.emitter.emit('chunk', chunk);
+          };
+
+          // TESTING ONLY — when `TRANSCODE_MAX_BITRATE` is set, serialise the
+          // emit calls through a delay chain so each chunk waits its share of
+          // wall-clock time, keeping the effective throughput at or below the
+          // configured bits/sec. ffmpeg keeps producing at full speed in the
+          // background; we just gate when consumers see the bytes.
+          const maxBps = env.TRANSCODE_MAX_BITRATE;
+          let emitQueue: Promise<void> = Promise.resolve();
+          proc.stdout.on('data', (chunk: Buffer) => {
+            if (maxBps <= 0) {
+              emit(chunk);
+              return;
+            }
+            const delayMs = (chunk.length * 8 * 1000) / maxBps;
+            emitQueue = emitQueue.then(() => new Promise((r) => setTimeout(r, delayMs)));
+            void emitQueue.then(() => emit(chunk));
           });
+
           proc.on('error', reject);
           proc.on('close', (code) => {
-            if (code === 0) {
-              resolve();
-            } else {
+            if (code !== 0) {
               reject(new Error(`ffmpeg exited with code ${code}: ${stderr.trim()}`));
+              return;
             }
+            if (maxBps <= 0) resolve();
+            else void emitQueue.then(() => resolve());
           });
         });
         span.setAttribute('playback.bytes', entry.bytes);
