@@ -19,6 +19,11 @@ const Schema = z.object({
   /** Cron expression for the scheduled full library scan. Empty disables the schedule (manual `Mutation.libraryScan` still works). */
   SCAN_CRON: z.string().default('0 2 * * *'),
 
+  /** Comma-separated allowlist of origins for browser CORS. `*` allows any. Default permits the Vite dev server. */
+  CORS_ALLOW_ORIGINS: z
+    .string()
+    .default('http://localhost:5173,http://127.0.0.1:5173'),
+
   /** HMAC secret used to sign and verify playback URLs. */
   PLAYBACK_SIGNING_SECRET: z.string().default('dev-secret'),
 
