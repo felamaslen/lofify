@@ -33,16 +33,16 @@ function releaseSlot(): void {
 type Quality = 'low' | 'medium' | 'high' | 'max';
 
 /** Map our named quality scale to a target bitrate (in kbps) for the given encoder. `max` is only chosen by the server when the client asked for flac but the source is lossy. */
-function bitrateForQuality(format: 'webm' | 'mp3', quality: Quality): number {
+function bitrateForQuality(format: 'mp4' | 'mp3', quality: Quality): number {
   const table: Record<Quality, number> =
-    format === 'webm'
+    format === 'mp4'
       ? { low: 64, medium: 128, high: 192, max: 256 }
       : { low: 128, medium: 192, high: 256, max: 320 };
   return table[quality];
 }
 
-function webmCodecArgs(quality: Quality): string[] {
-  const bitrate = bitrateForQuality('webm', quality);
+function opusCodecArgs(quality: Quality): string[] {
+  const bitrate = bitrateForQuality('mp4', quality);
   return [
     '-c:a',
     'libopus',
@@ -70,7 +70,7 @@ export interface FfmpegHandle {
   kill(): void;
 }
 
-/** Spawn ffmpeg to produce playback chunks for `source` in `outDir`. The container determines the muxer: webm/opus uses the DASH muxer (one init segment + N media segments — gapless by construction); mp3 uses the segment muxer (frame-aligned standalone mp3 files, no init segment). */
+/** Spawn ffmpeg to produce playback chunks for `source` in `outDir`. The container determines the muxer: mp4/opus uses the DASH muxer with fMP4 segments (one init segment + N media segments — gapless by construction, and Chrome's MSE plays them more cleanly than WebM-Opus); mp3 uses the segment muxer (frame-aligned standalone mp3 files, no init segment). */
 export function spawnChunkedEncoder(
   source: string,
   target: TranscodeTarget,
@@ -109,15 +109,15 @@ export function spawnChunkedEncoder(
             '-vn',
           ];
           const args =
-            target.format.container === 'webm'
+            target.format.container === 'mp4'
               ? [
                   ...base,
-                  ...webmCodecArgs(target.quality),
-                  // `-f dash` runs as a single encoder pass and writes one init segment + N media segments — gap-less by construction across chunk boundaries.
+                  ...opusCodecArgs(target.quality),
+                  // `-f dash` runs as a single encoder pass and writes one init segment + N media segments — gap-less by construction across chunk boundaries. fMP4 (`-dash_segment_type mp4`) is preferred over WebM because Chrome's MSE plays multi-segment Opus more cleanly out of fMP4 (no audible glitches at cluster boundaries).
                   '-f',
                   'dash',
                   '-dash_segment_type',
-                  'webm',
+                  'mp4',
                   '-seg_duration',
                   String(segmentSeconds),
                   '-use_template',
@@ -127,9 +127,9 @@ export function spawnChunkedEncoder(
                   '-single_file',
                   '0',
                   '-init_seg_name',
-                  'init.webm',
+                  'init.mp4',
                   '-media_seg_name',
-                  'chunk-$Number%05d$.webm',
+                  'chunk-$Number%05d$.m4s',
                   '-window_size',
                   '0',
                   '-extra_window_size',

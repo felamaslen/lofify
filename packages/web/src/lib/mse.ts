@@ -1,7 +1,7 @@
 /**
  * Segmented MSE playback pipeline.
  *
- * For non-flac streams the server delivers the track as a sequence of equal-duration DASH chunks; the player fetches the chunk containing `currentTime` plus one chunk of look-ahead and appends each to a single `SourceBuffer`. The chunks come from one ffmpeg pass on the server so they're gap-less by construction — no `timestampOffset` arithmetic is needed.
+ * For non-flac streams the server delivers the track as a sequence of equal-duration DASH chunks (fMP4 for opus, raw mp3 frames otherwise); the player fetches the chunk containing `currentTime` plus one chunk of look-ahead and appends each to a single `SourceBuffer`. The chunks come from one ffmpeg pass on the server so they're gap-less by construction — no `timestampOffset` arithmetic is needed.
  *
  * For flac (passthrough) the player skips MSE entirely and uses bare `<audio src=blob>` playback — the spec requires lossless to stay un-touched. We fetch the file as a blob so we can inject the `Accept` header (a bare `audio.src = url` would send the browser default, which the server rejects).
  */
@@ -201,7 +201,7 @@ class MsePlayer implements Player {
     if (this.sourceBuffer.updating) return;
     if (this.appendQueue.length === 0) return;
 
-    // Chunk 0 carries the init segment (server-spliced for webm; mp3 needs none); higher-indexed chunks have to wait until the init has landed for webm. Once `initAppended` is true the remaining chunks can append in any order.
+    // Chunk 0 carries the init segment (server-spliced for fMP4; mp3 needs none); higher-indexed chunks have to wait until the init has landed for fMP4. Once `initAppended` is true the remaining chunks can append in any order.
     let pickIdx = 0;
     if (!this.initAppended) {
       const zero = this.appendQueue.findIndex((item) => item.segIndex === 0);

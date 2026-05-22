@@ -52,7 +52,7 @@ const THROTTLE_MS = 1000;
  */
 export async function* transcodeProgressSubscription(args: {
   trackId: ID;
-  /** The exact value the client will send in the `Accept` header on `/play/...` — may be a comma-separated list. Defaults to `audio/webm` if omitted. */
+  /** The exact value the client will send in the `Accept` header on `/play/...` — may be a comma-separated list. Defaults to `audio/mp4` if omitted. */
   acceptHeaderValue?: string | null;
   /** One of `low`, `medium`, `high`. */
   quality?: string | null;
@@ -65,7 +65,7 @@ export async function* transcodeProgressSubscription(args: {
   const track = rows[0];
   if (!track) return;
 
-  const accepts = parseAcceptHeader(args.acceptHeaderValue ?? 'audio/webm');
+  const accepts = parseAcceptHeader(args.acceptHeaderValue ?? 'audio/mp4');
   if (!accepts) return;
   // Same edge-case the route enforces — flac-only Accept is invalid because flac is never encoded.
   if (accepts.includes('flac') && accepts.length === 1) return;

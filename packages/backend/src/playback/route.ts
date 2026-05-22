@@ -22,18 +22,18 @@ import {
 } from './transcode.js';
 
 /** Delivery-format identifiers used during Accept-header negotiation. */
-export type DeliveryFormat = 'flac' | 'mpeg' | 'webm';
+export type DeliveryFormat = 'flac' | 'mpeg' | 'mp4';
 
 const ACCEPT_MAP: Record<string, DeliveryFormat> = {
   'audio/flac': 'flac',
   'audio/mpeg': 'mpeg',
-  'audio/webm': 'webm',
+  'audio/mp4': 'mp4',
 };
 
 // Order in which a wildcard (audio/* or */*) expands. flac comes first so plain
 // `<audio src=url>` playback (which sends Accept: */*) gets passthrough on
 // lossless sources.
-const WILDCARD_EXPANSION: readonly DeliveryFormat[] = ['flac', 'webm', 'mpeg'];
+const WILDCARD_EXPANSION: readonly DeliveryFormat[] = ['flac', 'mp4', 'mpeg'];
 
 /**
  * Parse an Accept header into an ordered, de-duped list of supported delivery formats.
@@ -72,8 +72,8 @@ export function contentTypeFor(format: DeliveryFormat): string {
       return 'audio/flac';
     case 'mpeg':
       return 'audio/mpeg';
-    case 'webm':
-      return 'audio/webm; codecs=opus';
+    case 'mp4':
+      return 'audio/mp4; codecs="opus"';
   }
 }
 
@@ -109,8 +109,8 @@ export function resolveTarget(track: DbTrack, opts: ParsedOptions, accepts: Deli
 
 function encodeTarget(fmt: DeliveryFormat, quality: 'low' | 'medium' | 'high' | 'max'): TranscodeTarget {
   if (fmt === 'flac') throw new Error('flac is passthrough-only');
-  return fmt === 'webm'
-    ? { format: { container: 'webm', codec: 'opus' }, quality }
+  return fmt === 'mp4'
+    ? { format: { container: 'mp4', codec: 'opus' }, quality }
     : { format: { container: 'mp3', codec: 'mp3' }, quality };
 }
 
@@ -167,8 +167,8 @@ function parseSegIndex(value: string | null): number | null {
 
 function chunkFileName(target: TranscodeTarget, segIndex: number): string {
   const { ext } = chunkLayout(target);
-  // The webm DASH muxer numbers media segments from 1; the mp3 segment muxer numbers from 0. Normalise both to the 0-indexed external API by adjusting here.
-  const onDiskIndex = target.format.container === 'webm' ? segIndex + 1 : segIndex;
+  // The DASH muxer numbers media segments from 1; the mp3 segment muxer numbers from 0. Normalise both to the 0-indexed external API by adjusting here.
+  const onDiskIndex = target.format.container === 'mp4' ? segIndex + 1 : segIndex;
   return `chunk-${String(onDiskIndex).padStart(5, '0')}.${ext}`;
 }
 
@@ -228,7 +228,7 @@ async function sendTranscodeChunk(
   try {
     const chunk = await readChunkFile(job, chunkFileName(target, segIndex));
     if (initName && segIndex === 0) {
-      // The first chunk must be preceded by the init segment so the SourceBuffer learns the codec parameters; mp3 doesn't have one (every frame is self-describing).
+      // The first chunk must be preceded by the init segment (fMP4 moov / WebM init) so the SourceBuffer learns the codec parameters; mp3 doesn't have one (every frame is self-describing).
       const init = await readChunkFile(job, initName);
       buf = Buffer.concat([init, chunk]);
     } else {

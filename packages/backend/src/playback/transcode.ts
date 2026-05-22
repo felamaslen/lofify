@@ -10,9 +10,9 @@ import { env } from '../env.js';
 import { logger } from '../logger.js';
 import { type FfmpegHandle, spawnChunkedEncoder } from './ffmpeg.js';
 
-/** Target encoded delivery format. `flac` is never encoded — it's passthrough-only — so it does not appear here. The container/codec pairing is fixed (opus only ever ships in webm; mp3 only ever ships raw), so they're modelled as a discriminated union to make impossible states unrepresentable. */
+/** Target encoded delivery format. `flac` is never encoded — it's passthrough-only — so it does not appear here. The container/codec pairing is fixed (opus only ever ships in fMP4; mp3 only ever ships raw), so they're modelled as a discriminated union to make impossible states unrepresentable. */
 export type TranscodeTarget = {
-  format: { container: 'webm'; codec: 'opus' } | { container: 'mp3'; codec: 'mp3' };
+  format: { container: 'mp4'; codec: 'opus' } | { container: 'mp3'; codec: 'mp3' };
   /** Coarse quality preset. `max` is server-chosen only — it kicks in when the client accepted flac but the source is lossy, so we still need to encode (because we can't passthrough non-flac as flac). */
   quality: 'low' | 'medium' | 'high' | 'max';
 };
@@ -49,8 +49,8 @@ export function jobCacheKey(trackId: string, target: TranscodeTarget): string {
 
 /** File extension and (optional) init-segment name for a target's chunked output. */
 export function chunkLayout(target: TranscodeTarget): { ext: string; init: string | null } {
-  return target.format.container === 'webm'
-    ? { ext: 'webm', init: 'init.webm' }
+  return target.format.container === 'mp4'
+    ? { ext: 'm4s', init: 'init.mp4' }
     : { ext: 'mp3', init: null };
 }
 

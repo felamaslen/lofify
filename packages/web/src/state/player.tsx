@@ -16,6 +16,9 @@ import { TracksDocument } from '../components/track-list.tsx';
 import {
   acceptHeaderFor,
   capabilities,
+  defaultFormat,
+  type Format,
+  isFormatAvailable,
   isMaxQualityAvailable,
   type Quality,
 } from '../lib/capabilities.ts';
@@ -38,16 +41,8 @@ export const TrackByIdDocument = graphql(
 );
 
 const TranscodeProgressDocument = graphql(`
-  subscription TranscodeProgress(
-    $trackId: ID!
-    $acceptHeaderValue: String
-    $quality: String
-  ) {
-    transcodeProgress(
-      trackId: $trackId
-      acceptHeaderValue: $acceptHeaderValue
-      quality: $quality
-    ) {
+  subscription TranscodeProgress($trackId: ID!, $acceptHeaderValue: String, $quality: String) {
+    transcodeProgress(trackId: $trackId, acceptHeaderValue: $acceptHeaderValue, quality: $quality) {
       readyChunks
       chunkDurationSeconds
       isDone
@@ -57,10 +52,12 @@ const TranscodeProgressDocument = graphql(`
 
 type TrackNode = NonNullable<ResultOf<typeof TrackByIdDocument>['track']>;
 
-export type { Quality };
+export type { Format, Quality };
 
 const QUALITY_STORAGE_KEY = 'lofify.player.quality';
 const QUALITY_VALUES: readonly Quality[] = ['max', 'high', 'medium', 'low'];
+const FORMAT_STORAGE_KEY = 'lofify.player.format';
+const FORMAT_VALUES: readonly Format[] = ['mp4', 'mp3'];
 
 const GRAPHQL_URL = import.meta.env.VITE_GRAPHQL_URL ?? '/graphql';
 
@@ -93,6 +90,17 @@ function loadStoredQuality(): Quality {
   return defaultQuality();
 }
 
+function loadStoredFormat(): Format {
+  if (typeof window === 'undefined') return defaultFormat();
+  const stored = window.localStorage.getItem(FORMAT_STORAGE_KEY);
+  if (stored && (FORMAT_VALUES as readonly string[]).includes(stored)) {
+    const f = stored as Format;
+    if (!isFormatAvailable(f)) return defaultFormat();
+    return f;
+  }
+  return defaultFormat();
+}
+
 /** Map the player's coarse quality knob to a GraphQL `Quality` enum value (or `null` for `max`, which the server infers from the `Accept` header instead). */
 function qualityForGql(quality: Quality): 'LOW' | 'MEDIUM' | 'HIGH' | null {
   switch (quality) {
@@ -121,6 +129,9 @@ type PlayerCtx = {
   quality: Quality;
   maxQualityAvailable: boolean;
   setQuality: (q: Quality) => void;
+  format: Format;
+  formatAvailability: Record<Format, boolean>;
+  setFormat: (f: Format) => void;
   error: PlayerError | null;
   dismissError: () => void;
   play: (id: string) => void;
@@ -162,11 +173,18 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const readySecondsRef = useRef(0);
   readySecondsRef.current = readySeconds;
   const [quality, setQualityState] = useState<Quality>(loadStoredQuality);
+  const [format, setFormatState] = useState<Format>(loadStoredFormat);
   const [error, setError] = useState<PlayerError | null>(null);
   const setQuality = useCallback((q: Quality) => {
     setQualityState(q);
     if (typeof window !== 'undefined') {
       window.localStorage.setItem(QUALITY_STORAGE_KEY, q);
+    }
+  }, []);
+  const setFormat = useCallback((f: Format) => {
+    setFormatState(f);
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(FORMAT_STORAGE_KEY, f);
     }
   }, []);
   const dismissError = useCallback(() => setError(null), []);
@@ -253,7 +271,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       transcodeUnsubRef.current?.();
       const meta = readFragment(PlaybackBarDocument, track);
       const totalSeconds = meta.duration.seconds;
-      const accept = acceptHeaderFor(quality, capabilities);
+      const accept = acceptHeaderFor(quality, format, capabilities);
       transcodeUnsubRef.current = subscribe(
         TranscodeProgressDocument,
         {
@@ -288,7 +306,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       await audio.play().catch(() => undefined);
       prefetchNext(track.id);
     },
-    [prefetchNext, quality],
+    [prefetchNext, quality, format],
   );
 
   const playTrack = useCallback(
@@ -355,6 +373,12 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       quality,
       maxQualityAvailable: isMaxQualityAvailable(),
       setQuality,
+      format,
+      formatAvailability: {
+        mp4: isFormatAvailable('mp4'),
+        mp3: isFormatAvailable('mp3'),
+      },
+      setFormat,
       error,
       dismissError,
       play: (id) => void playTrack(id),
@@ -371,6 +395,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       readySeconds,
       quality,
       setQuality,
+      format,
+      setFormat,
       error,
       dismissError,
       playTrack,

@@ -39,12 +39,12 @@ function fakeEncoder(): {
   fail: (err: Error) => void;
 } {
   let outDir: string | null = null;
-  let target: { format: { container: 'webm' | 'mp3' } } | null = null;
+  let target: { format: { container: 'mp4' | 'mp3' } } | null = null;
   let onStart: ((dir: string) => void) | null = null;
   let resolveDone!: () => void;
   let rejectDone!: (err: Error) => void;
   spawnChunkedEncoderMock.mockImplementation(
-    (_source: string, t: { format: { container: 'webm' | 'mp3' } }, dir: string) => {
+    (_source: string, t: { format: { container: 'mp4' | 'mp3' } }, dir: string) => {
       outDir = dir;
       target = t;
       onStart?.(dir);
@@ -65,14 +65,14 @@ function fakeEncoder(): {
       }),
     writeInit: async (data) => {
       if (!outDir || !target) throw new Error('encoder has not started');
-      if (target.format.container !== 'webm') throw new Error('init segment only exists for webm');
-      await writeFile(path.join(outDir, 'init.webm'), data);
+      if (target.format.container !== 'mp4') throw new Error('init segment only exists for mp4');
+      await writeFile(path.join(outDir, 'init.mp4'), data);
     },
     writeChunk: async (segIndex, data) => {
       if (!outDir || !target) throw new Error('encoder has not started');
-      const ext = target.format.container === 'webm' ? 'webm' : 'mp3';
-      // webm DASH muxer numbers from 1; mp3 segment muxer numbers from 0.
-      const idx = target.format.container === 'webm' ? segIndex + 1 : segIndex;
+      const ext = target.format.container === 'mp4' ? 'm4s' : 'mp3';
+      // DASH muxer numbers from 1; mp3 segment muxer numbers from 0.
+      const idx = target.format.container === 'mp4' ? segIndex + 1 : segIndex;
       const name = `chunk-${String(idx).padStart(5, '0')}.${ext}`;
       await writeFile(path.join(outDir, name), data);
     },
@@ -113,9 +113,9 @@ async function seedTrack(opts: {
   return row!.id;
 }
 
-const ACCEPT_FLAC_WEBM = 'audio/flac, audio/webm';
-const ACCEPT_WEBM = 'audio/webm';
-const ACCEPT_MPEG_WEBM = 'audio/mpeg, audio/webm';
+const ACCEPT_FLAC_MP4 = 'audio/flac, audio/mp4';
+const ACCEPT_MP4 = 'audio/mp4';
+const ACCEPT_MPEG_MP4 = 'audio/mpeg, audio/mp4';
 const ACCEPT_MPEG = 'audio/mpeg';
 
 test('passthrough — flac source served as audio/flac when client accepts it', async () => {
@@ -127,7 +127,7 @@ test('passthrough — flac source served as audio/flac when client accepts it', 
   });
   const url = signPlaybackUrl(id, { quality: null });
 
-  const res = await app.inject({ method: 'GET', url, headers: { accept: ACCEPT_FLAC_WEBM } });
+  const res = await app.inject({ method: 'GET', url, headers: { accept: ACCEPT_FLAC_MP4 } });
   expect(res.statusCode).toBe(200);
   expect(res.headers['content-type']).toBe('audio/flac');
   expect(res.headers['accept-ranges']).toBe('bytes');
@@ -149,7 +149,7 @@ test('passthrough — honours Range with 206 Partial Content', async () => {
   const res = await app.inject({
     method: 'GET',
     url,
-    headers: { accept: ACCEPT_FLAC_WEBM, range: 'bytes=10-49' },
+    headers: { accept: ACCEPT_FLAC_MP4, range: 'bytes=10-49' },
   });
   expect(res.statusCode).toBe(206);
   expect(res.headers['content-length']).toBe('40');
@@ -160,7 +160,7 @@ test('passthrough — honours Range with 206 Partial Content', async () => {
   expect(res.rawPayload.equals(expected)).toBe(true);
 });
 
-test('transcode — webm chunk 0 splices the init segment in front of chunk-00001.webm', async () => {
+test('transcode — mp4 chunk 0 splices the init segment in front of chunk-00001.m4s', async () => {
   const enc = fakeEncoder();
   const id = await seedTrack({
     file: SAMPLE_FLAC,
@@ -169,13 +169,13 @@ test('transcode — webm chunk 0 splices the init segment in front of chunk-0000
     isLossless: true,
     durationSeconds: 60,
   });
-  // Lossy-target client (no flac in Accept) — server encodes to webm/opus.
+  // Lossy-target client (no flac in Accept) — server encodes to mp4/opus.
   const url = `${signPlaybackUrl(id, { quality: null })}/0`;
 
   const pending = app.inject({
     method: 'GET',
     url,
-    headers: { accept: ACCEPT_WEBM, origin: 'http://localhost:5173' },
+    headers: { accept: ACCEPT_MP4, origin: 'http://localhost:5173' },
   });
   await enc.waitForStart();
   await enc.writeInit('INIT');
@@ -183,7 +183,7 @@ test('transcode — webm chunk 0 splices the init segment in front of chunk-0000
 
   const res = await pending;
   expect(res.statusCode).toBe(200);
-  expect(res.headers['content-type']).toBe('audio/webm; codecs=opus');
+  expect(res.headers['content-type']).toBe('audio/mp4; codecs="opus"');
   expect(res.headers['x-lofify-segments']).toBe('10');
   expect(res.headers['x-lofify-segment-duration']).toBe('6');
   expect(res.headers['x-lofify-duration']).toBe('60');
@@ -192,7 +192,7 @@ test('transcode — webm chunk 0 splices the init segment in front of chunk-0000
   expect(res.rawPayload.toString()).toBe('INITC0');
 });
 
-test('transcode — webm chunk N>0 serves only chunk-(N+1).webm', async () => {
+test('transcode — mp4 chunk N>0 serves only chunk-(N+1).m4s', async () => {
   const enc = fakeEncoder();
   const id = await seedTrack({
     file: SAMPLE_FLAC,
@@ -203,7 +203,7 @@ test('transcode — webm chunk N>0 serves only chunk-(N+1).webm', async () => {
   });
   const url = `${signPlaybackUrl(id, { quality: null })}/3`;
 
-  const pending = app.inject({ method: 'GET', url, headers: { accept: ACCEPT_WEBM } });
+  const pending = app.inject({ method: 'GET', url, headers: { accept: ACCEPT_MP4 } });
   await enc.waitForStart();
   await enc.writeInit('INIT');
   for (let i = 0; i <= 3; i++) await enc.writeChunk(i, `C${i}`);
@@ -225,7 +225,7 @@ test('transcode — mp3 chunk has no init splice; chunk-00000.mp3 is served verb
   // Accept lists audio/mpeg first → server picks mp3 as the encode target.
   const url = `${signPlaybackUrl(id, { quality: 'medium' })}/0`;
 
-  const pending = app.inject({ method: 'GET', url, headers: { accept: ACCEPT_MPEG_WEBM } });
+  const pending = app.inject({ method: 'GET', url, headers: { accept: ACCEPT_MPEG_MP4 } });
   await enc.waitForStart();
   await enc.writeChunk(0, 'MP3-0');
 
@@ -246,7 +246,7 @@ test('transcode — request for not-yet-encoded chunk waits for the watcher', as
   });
   const url = `${signPlaybackUrl(id, { quality: null })}/2`;
 
-  const pending = app.inject({ method: 'GET', url, headers: { accept: ACCEPT_WEBM } });
+  const pending = app.inject({ method: 'GET', url, headers: { accept: ACCEPT_MP4 } });
   await enc.waitForStart();
   await enc.writeInit('INIT');
   await enc.writeChunk(0, 'C0');
@@ -277,7 +277,7 @@ test('transcode — chunk past expected track length returns 404', async () => {
   });
   const url = `${signPlaybackUrl(id, { quality: null })}/5`;
 
-  const res = await app.inject({ method: 'GET', url, headers: { accept: ACCEPT_WEBM } });
+  const res = await app.inject({ method: 'GET', url, headers: { accept: ACCEPT_MP4 } });
   expect(res.statusCode).toBe(404);
 });
 
@@ -295,10 +295,10 @@ test('transcode — HEAD probe returns metadata headers without waiting for chun
   const res = await app.inject({
     method: 'HEAD',
     url,
-    headers: { accept: ACCEPT_WEBM, origin: 'http://localhost:5173' },
+    headers: { accept: ACCEPT_MP4, origin: 'http://localhost:5173' },
   });
   expect(res.statusCode).toBe(200);
-  expect(res.headers['content-type']).toBe('audio/webm; codecs=opus');
+  expect(res.headers['content-type']).toBe('audio/mp4; codecs="opus"');
   expect(res.headers['x-lofify-segments']).toBe('10');
   expect(res.headers['x-lofify-segment-duration']).toBe('6');
   expect(res.headers['x-lofify-duration']).toBe('60');
@@ -319,12 +319,12 @@ test('transcode — second request for same chunk hits cache (no second ffmpeg s
   });
   const url = `${signPlaybackUrl(id, { quality: null })}/0`;
 
-  const first = app.inject({ method: 'GET', url, headers: { accept: ACCEPT_WEBM } });
+  const first = app.inject({ method: 'GET', url, headers: { accept: ACCEPT_MP4 } });
   await enc.waitForStart();
   await enc.writeInit('INIT');
   await enc.writeChunk(0, 'C0');
   await first;
-  await app.inject({ method: 'GET', url, headers: { accept: ACCEPT_WEBM } });
+  await app.inject({ method: 'GET', url, headers: { accept: ACCEPT_MP4 } });
 
   expect(spawnChunkedEncoderMock).toHaveBeenCalledTimes(1);
 });
@@ -340,7 +340,7 @@ test('rejects requests with an invalid signature', async () => {
   const res = await app.inject({
     method: 'GET',
     url: `/play/${'0'.repeat(64)}/${id}`,
-    headers: { accept: ACCEPT_WEBM },
+    headers: { accept: ACCEPT_MP4 },
   });
   expect(res.statusCode).toBe(403);
 });
@@ -358,7 +358,7 @@ test('rejects requests with malformed options', async () => {
   const res = await app.inject({
     method: 'GET',
     url: `/play/${sig}/${payload}`,
-    headers: { accept: ACCEPT_WEBM },
+    headers: { accept: ACCEPT_MP4 },
   });
   expect(res.statusCode).toBe(400);
 });
@@ -407,7 +407,7 @@ test('rejects audio/flac with no fallback (406)', async () => {
   expect(res.statusCode).toBe(406);
 });
 
-test('lossy source with audio/flac+audio/webm Accept → encodes webm at max quality', async () => {
+test('lossy source with audio/flac+audio/mp4 Accept → encodes mp4 at max quality', async () => {
   const enc = fakeEncoder();
   const id = await seedTrack({
     file: SAMPLE_MP3,
@@ -418,14 +418,14 @@ test('lossy source with audio/flac+audio/webm Accept → encodes webm at max qua
   });
   const url = `${signPlaybackUrl(id, { quality: null })}/0`;
 
-  const pending = app.inject({ method: 'GET', url, headers: { accept: ACCEPT_FLAC_WEBM } });
+  const pending = app.inject({ method: 'GET', url, headers: { accept: ACCEPT_FLAC_MP4 } });
   await enc.waitForStart();
   await enc.writeInit('INIT');
   await enc.writeChunk(0, 'C0');
 
   const res = await pending;
   expect(res.statusCode).toBe(200);
-  expect(res.headers['content-type']).toBe('audio/webm; codecs=opus');
+  expect(res.headers['content-type']).toBe('audio/mp4; codecs="opus"');
 });
 
 test('rejects Accept=audio/mpeg only when source is non-mp3 lossy with no other fallback (still encodes mp3)', async () => {

@@ -95,7 +95,7 @@ type Subscription {
   """
   transcodeProgress(
     """
-    The exact value the client will send in the `Accept` header on `/play/...` — may be a comma-separated list. Defaults to `audio/webm` if omitted.
+    The exact value the client will send in the `Accept` header on `/play/...` — may be a comma-separated list. Defaults to `audio/mp4` if omitted.
     """
     acceptHeaderValue: String
     """One of `low`, `medium`, `high`."""

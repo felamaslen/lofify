@@ -83,7 +83,7 @@ the resolver runs.
   delivery container is negotiated at request time via the `Accept`
   header, so a single signed URL can be replayed with different `Accept`
   values to switch formats. Supported `Accept` entries: `audio/flac`,
-  `audio/mpeg`, `audio/webm` (plus the standard wildcards). `audio/flac`
+  `audio/mpeg`, `audio/mp4` (plus the standard wildcards). `audio/flac`
   must always be paired with at least one fallback — flac alone returns
   `406`. Resolution:
   - `audio/flac` accepted + flac source → passthrough (whole file with
@@ -94,12 +94,14 @@ the resolver runs.
     requested quality (`low` / `medium` / `high`; defaults to medium).
 
   Encoded paths kick off (or attach to) a single per-track ffmpeg job.
-  `audio/webm` uses ffmpeg's DASH muxer and writes `init.webm` +
-  `chunk-NNNNN.webm`; `audio/mpeg` uses the segment muxer and writes
-  standalone `chunk-NNNNN.mp3` files (no init segment — every mp3 frame
-  is self-describing). The trailing `:seg` selects the 0-indexed chunk:
-  for webm, `seg=0` returns the init concatenated with chunk 1 and
-  `seg=N>0` returns just chunk `N+1`; for mp3, `seg=N` returns chunk `N`
+  `audio/mp4` uses ffmpeg's DASH muxer with fragmented MP4 segments and
+  writes `init.mp4` + `chunk-NNNNN.m4s` (Chrome's MSE plays multi-segment
+  Opus more cleanly out of fMP4 than out of WebM); `audio/mpeg` uses the
+  segment muxer and writes standalone `chunk-NNNNN.mp3` files (no init
+  segment — every mp3 frame is self-describing). The trailing `:seg`
+  selects the 0-indexed chunk: for mp4, `seg=0` returns the init
+  concatenated with chunk 1 and `seg=N>0` returns just chunk `N+1`;
+  for mp3, `seg=N` returns chunk `N`
   verbatim. Requests for chunks that aren't on disk yet block until
   ffmpeg writes them. `HEAD` against the same URL returns the meta
   headers (`X-Lofify-Segments`, `X-Lofify-Segment-Duration`,

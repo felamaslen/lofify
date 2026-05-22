@@ -1,6 +1,7 @@
 import { ErrorToast } from '../components/error-toast.tsx';
 import { FormatPicker } from '../components/format-picker.tsx';
 import { PlaybackBar } from '../components/playback-bar.tsx';
+import { QualityPicker } from '../components/quality-picker.tsx';
 import { RescanButton } from '../components/rescan-button.tsx';
 import { TrackList } from '../components/track-list.tsx';
 
@@ -11,6 +12,7 @@ export function Home() {
         <h1 className="m-0 text-base font-semibold tracking-wide">Lofify</h1>
         <div className="flex items-center gap-3">
           <RescanButton />
+          <QualityPicker />
           <FormatPicker />
         </div>
       </header>

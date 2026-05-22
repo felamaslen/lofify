@@ -346,7 +346,7 @@ export function getSchema(): GraphQLSchema {
                     type: new GraphQLNonNull(TranscodeProgressType),
                     args: {
                         acceptHeaderValue: {
-                            description: "The exact value the client will send in the `Accept` header on `/play/...` \u2014 may be a comma-separated list. Defaults to `audio/webm` if omitted.",
+                            description: "The exact value the client will send in the `Accept` header on `/play/...` \u2014 may be a comma-separated list. Defaults to `audio/mp4` if omitted.",
                             type: GraphQLString
                         },
                         quality: {

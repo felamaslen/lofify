@@ -34,7 +34,7 @@ const Schema = z.object({
   /** How long a cached transcode survives after its last access. */
   TRANSCODE_CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(3600),
 
-  /** Scratch directory where ffmpeg writes per-track DASH chunk output. Each cached transcode owns a subdirectory `${trackId}__${target}/` containing `init.webm` + `chunk-NNNN.webm`. Override to point at a tmpfs mount in containerised environments. */
+  /** Scratch directory where ffmpeg writes per-track DASH chunk output. Each cached transcode owns a subdirectory `${trackId}__${target}/` containing `init.mp4` + `chunk-NNNNN.m4s` (opus) or `chunk-NNNNN.mp3`. Override to point at a tmpfs mount in containerised environments. */
   TRANSCODE_TMPDIR: z.string().optional(),
 
   /** OTLP/HTTP base URL. Receivers expose `/v1/traces`, `/v1/logs`, `/v1/metrics` under it. */
