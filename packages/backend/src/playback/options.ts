@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-const FORMAT_VALUES = [
+export const FORMAT_VALUES = [
   'original',
   'auto_hi',
   'auto_lo',

@@ -55,7 +55,7 @@ export function url(
 ): string {
   return signPlaybackUrl(track.id, {
     quality: quality ?? null,
-    format: format ?? null,
+    format: format ? (format.toLowerCase() as Lowercase<Format>) : null,
   });
 }
 

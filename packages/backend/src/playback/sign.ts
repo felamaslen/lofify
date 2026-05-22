@@ -1,31 +1,20 @@
 import crypto from 'node:crypto';
 
-import { z } from 'zod';
-
 import { env } from '../env.js';
+import type { ParsedOptions } from './options.js';
 
-const _PlaybackOptionsSchema = z.object({
-  quality: z.number().int().min(0).max(10).nullable(),
-  format: z.string().nullable(),
-});
-
-export type PlaybackOptions = z.infer<typeof _PlaybackOptionsSchema>;
-
-function encodeOptionsSegments(opts: PlaybackOptions): string[] {
+function encodeOptionsSegments(opts: ParsedOptions): string[] {
   const parts: string[] = [];
-  if (opts.format != null) parts.push(`f:${opts.format.toLowerCase()}`);
+  if (opts.format != null) parts.push(`f:${opts.format}`);
   if (opts.quality != null) parts.push(`q:${opts.quality}`);
   return parts;
 }
 
 export function signPayload(payload: string): string {
-  return crypto
-    .createHmac('sha256', env.PLAYBACK_SIGNING_SECRET)
-    .update(payload)
-    .digest('hex');
+  return crypto.createHmac('sha256', env.PLAYBACK_SIGNING_SECRET).update(payload).digest('hex');
 }
 
-export function signPlaybackUrl(id: string, opts: PlaybackOptions): string {
+export function signPlaybackUrl(id: string, opts: ParsedOptions): string {
   const segments = encodeOptionsSegments(opts);
   segments.push(id);
   const payload = segments.join('/');
