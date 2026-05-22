@@ -1,4 +1,4 @@
-import { Writable } from 'node:stream';
+import { Readable, Writable } from 'node:stream';
 
 import { SpanStatusCode, trace } from '@opentelemetry/api';
 import { eq } from 'drizzle-orm';
@@ -82,6 +82,7 @@ export function scanLibrary(root: string): ScanState {
   });
 
   const upsertScannedTrack = async (file: string) => {
+    if (state.abort.signal.aborted) return;
     try {
       await upsertTrack(file);
       state.scannedTotal += 1;
@@ -103,7 +104,7 @@ export function scanLibrary(root: string): ScanState {
       onlyFiles: true,
       caseSensitiveMatch: false,
       suppressErrors: true,
-    });
+    }) as Readable;
 
     const sink = createUpsertSink(upsertScannedTrack, env.SCAN_CONCURRENCY);
 
@@ -111,6 +112,14 @@ export function scanLibrary(root: string): ScanState {
     discovery.on('data', () => {
       discovered += 1;
     });
+
+    const onAbort = () => {
+      discovery.unpipe(sink);
+      discovery.destroy();
+      sink.end();
+    };
+    if (state.abort.signal.aborted) onAbort();
+    else state.abort.signal.addEventListener('abort', onAbort, { once: true });
 
     try {
       await new Promise<void>((resolve, reject) => {

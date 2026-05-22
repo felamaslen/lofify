@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { readFragment, type ResultOf } from 'gql.tada';
-import { AlertTriangle, Loader2, RefreshCw } from 'lucide-react';
+import { AlertTriangle, Loader2, RefreshCw, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { graphql } from '../lib/gql.ts';
@@ -30,6 +30,14 @@ const LibraryScanCurrentDocument = graphql(
   `,
   [LibraryScanProgressDocument],
 );
+
+const CancelLibraryScanDocument = graphql(`
+  mutation CancelLibraryScan($id: ID!) {
+    libraryScanCancel(id: $id) {
+      _
+    }
+  }
+`);
 
 const StartLibraryScanDocument = graphql(
   `
@@ -81,40 +89,37 @@ export function RescanButton() {
   const [phase, setPhase] = useState<Phase>('idle');
   const animatedPhase = useRef(phase);
   const phaseEnteredAt = useRef(0);
-  const setScanAndDesiredPhase = useCallback(
-    (data: Snapshot | null) => {
-      const desiredPhase: Phase = data?.isCompleted
-        ? 'completed'
-        : data?.filesTotal == null
-          ? 'indeterminate'
-          : data
-            ? 'determinate'
-            : 'idle';
-      const animateToNextPhase = () => {
-        const phaseDefIndex = phases.findIndex((p) => p.phase === animatedPhase.current);
-        const desiredPhaseDefIndex = phases.findIndex((p) => p.phase === desiredPhase);
-        const minHoldTimeMs = phases[phaseDefIndex]?.minHoldTimeMs;
-        const nextPhase = phases[phaseDefIndex + 1]?.phase;
-        if (minHoldTimeMs && nextPhase && phaseDefIndex < desiredPhaseDefIndex) {
-          const delay = Math.max(0, minHoldTimeMs - (Date.now() - phaseEnteredAt.current));
-          timer.current = setTimeout(() => {
-            phaseEnteredAt.current = Date.now();
-            setPhase(nextPhase);
-            animatedPhase.current = nextPhase;
-            if (nextPhase !== desiredPhase) animateToNextPhase();
-          }, delay);
-        } else {
-          clearTimeout(timer.current);
+  const setScanAndDesiredPhase = useCallback((data: Snapshot | null) => {
+    const desiredPhase: Phase = data?.isCompleted
+      ? 'completed'
+      : data?.filesTotal === null
+        ? 'indeterminate'
+        : data
+          ? 'determinate'
+          : 'idle';
+    const animateToNextPhase = () => {
+      const phaseDefIndex = phases.findIndex((p) => p.phase === animatedPhase.current);
+      const desiredPhaseDefIndex = phases.findIndex((p) => p.phase === desiredPhase);
+      const minHoldTimeMs = phases[phaseDefIndex]?.minHoldTimeMs;
+      const nextPhase = phases[phaseDefIndex + 1]?.phase;
+      if (minHoldTimeMs && nextPhase && phaseDefIndex < desiredPhaseDefIndex) {
+        const delay = Math.max(0, minHoldTimeMs - (Date.now() - phaseEnteredAt.current));
+        timer.current = setTimeout(() => {
           phaseEnteredAt.current = Date.now();
-          setPhase(desiredPhase);
-          animatedPhase.current = desiredPhase;
-        }
-      };
-      setScan(data);
-      animateToNextPhase();
-    },
-    [],
-  );
+          setPhase(nextPhase);
+          animatedPhase.current = nextPhase;
+          if (nextPhase !== desiredPhase) animateToNextPhase();
+        }, delay);
+      } else {
+        clearTimeout(timer.current);
+        phaseEnteredAt.current = Date.now();
+        setPhase(desiredPhase);
+        animatedPhase.current = desiredPhase;
+      }
+    };
+    setScan(data);
+    animateToNextPhase();
+  }, []);
   useEffect(() => () => clearTimeout(timer.current), []);
   const attachSubscription = useCallback(
     (id: string) => {
@@ -124,12 +129,15 @@ export function RescanButton() {
         { id },
         {
           next: (data) =>
-            setScanAndDesiredPhase(readFragment(LibraryScanProgressDocument, data.libraryScan)),
+            setScanAndDesiredPhase(
+              data.libraryScan ? readFragment(LibraryScanProgressDocument, data.libraryScan) : null,
+            ),
           error: () => {
             unsubRef.current = null;
           },
           complete: () => {
             unsubRef.current = null;
+            void queryClient.invalidateQueries({ queryKey: ['libraryScan', 'current'] });
             void queryClient.invalidateQueries({ queryKey: ['tracks'] });
           },
         },
@@ -142,11 +150,9 @@ export function RescanButton() {
     queryFn: async ({ signal }) => {
       const res = await gqlRequest(LibraryScanCurrentDocument, {}, signal);
       const current = readFragment(LibraryScanProgressDocument, res.libraryScan);
-      if (current) {
-        setScanAndDesiredPhase(current);
-        if (!current.isCompleted && !unsubRef.current) {
-          attachSubscription(current.id);
-        }
+      setScanAndDesiredPhase(current ?? null);
+      if (current && !current.isCompleted && !unsubRef.current) {
+        attachSubscription(current.id);
       }
       return current ?? null;
     },
@@ -163,6 +169,15 @@ export function RescanButton() {
     },
     [],
   );
+
+  const cancel = useCallback(async () => {
+    if (!scan || scan.isCompleted) return;
+    try {
+      await gqlRequest(CancelLibraryScanDocument, { id: scan.id });
+    } catch (err) {
+      console.error('library scan failed to cancel', err);
+    }
+  }, [scan]);
 
   const start = useCallback(async () => {
     if (unsubRef.current || phase === 'indeterminate' || phase === 'determinate') return;
@@ -199,41 +214,58 @@ export function RescanButton() {
             <TooltipContent>{scan?.errorMessage ?? 'Scan errors'}</TooltipContent>
           </Tooltip>
         )}
-        <Button
-          type="button"
-          variant="secondary"
-          size="sm"
-          onClick={start}
-          disabled={disabled}
-          className="relative isolate overflow-hidden min-w-[180px]"
-        >
-          {showProgress &&
-            (phase === 'indeterminate' ? (
-              <span
-                aria-hidden
-                className="absolute inset-0 -z-10 animate-progress-stripe"
-                style={{
-                  backgroundImage:
-                    'repeating-linear-gradient(45deg, hsl(var(--primary) / 0.3) 0 8px, hsl(var(--primary) / 0.1) 8px 16px)',
-                  backgroundSize: '24px 24px',
-                }}
-              />
-            ) : (
-              <span
-                aria-hidden
-                className="absolute inset-y-0 left-0 -z-10 bg-primary/25 transition-[width]"
-                style={{ width: `${fillPercent}%` }}
-              />
-            ))}
-          {showProgress ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-          <span className="relative">
-            {phase === 'determinate' && scan && scan.filesTotal != null
-              ? `Scanning ${scan.scannedTotal} / ${scan.filesTotal}`
-              : phase === 'indeterminate'
-                ? 'Scanning…'
-                : 'Rescan library'}
-          </span>
-        </Button>
+        <div className="group relative">
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={start}
+            disabled={disabled}
+            className="relative isolate overflow-hidden min-w-[180px] w-full"
+          >
+            {showProgress &&
+              (phase === 'indeterminate' ? (
+                <span
+                  aria-hidden
+                  className="absolute inset-0 -z-10 animate-progress-stripe"
+                  style={{
+                    backgroundImage:
+                      'repeating-linear-gradient(45deg, hsl(var(--primary) / 0.3) 0 8px, hsl(var(--primary) / 0.1) 8px 16px)',
+                    backgroundSize: '24px 24px',
+                  }}
+                />
+              ) : (
+                <span
+                  aria-hidden
+                  className="absolute inset-y-0 left-0 -z-10 bg-primary/25 transition-[width]"
+                  style={{ width: `${fillPercent}%` }}
+                />
+              ))}
+            {showProgress ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+            <span className="relative">
+              {phase === 'determinate' && scan && scan.filesTotal != null
+                ? `Scanning ${scan.scannedTotal} / ${scan.filesTotal}`
+                : phase === 'indeterminate'
+                  ? 'Scanning…'
+                  : 'Rescan library'}
+            </span>
+          </Button>
+          {showProgress && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={cancel}
+                  aria-label="Cancel scan"
+                  className="absolute right-1 top-1/2 -translate-y-1/2 inline-flex h-6 w-6 items-center justify-center rounded-sm text-foreground/70 hover:text-foreground hover:bg-foreground/10 opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&_svg]:size-4"
+                >
+                  <X />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>Cancel scan</TooltipContent>
+            </Tooltip>
+          )}
+        </div>
       </div>
     </TooltipProvider>
   );

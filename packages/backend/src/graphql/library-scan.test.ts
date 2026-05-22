@@ -137,6 +137,50 @@ test('Subscription.libraryScan: errorMessage reports failed files on the final f
   expect(last.errorMessage).toBe('1 file failed to scan');
 });
 
+const LibraryScanCancelMutation = graphql(`
+  mutation LibraryScanCancel($id: ID!) {
+    libraryScanCancel(id: $id) {
+      _
+    }
+  }
+`);
+
+test('Mutation.libraryScanCancel: the subscription emits a final null frame, Query.libraryScan returns null, and a fresh scan can be started', async () => {
+  await copyFile(path.join(fixturesDir, 'sample.mp3'), path.join(env.LIBRARY_PATH, 'one.mp3'));
+
+  const { data: started } = await gqlRequest(app)
+    .mutate(LibraryScanStartMutation)
+    .expectNoErrors();
+  const { id } = started.libraryScanStart;
+
+  const framesPromise = (async () => {
+    const frames: (Frame | null)[] = [];
+    for await (const event of gqlRequest(app)
+      .subscribe(LibraryScanSubscription)
+      .variables({ id })) {
+      frames.push(event.data?.libraryScan ?? null);
+    }
+    return frames;
+  })();
+
+  await gqlRequest(app)
+    .mutate(LibraryScanCancelMutation)
+    .variables({ id })
+    .expectNoErrors();
+
+  const frames = await framesPromise;
+  expect(frames.at(-1)).toBeNull();
+
+  const { data: afterCancel } = await gqlRequest(app).query(LibraryScanQuery).expectNoErrors();
+  expect(afterCancel.libraryScan).toBeNull();
+
+  const { data: restarted } = await gqlRequest(app)
+    .mutate(LibraryScanStartMutation)
+    .expectNoErrors();
+  expect(restarted.libraryScanStart.id).not.toBe(id);
+  await drainScanStream(restarted.libraryScanStart.id);
+});
+
 test('Query.libraryScan is null when no scan has run', async () => {
   const { data } = await gqlRequest(app).query(LibraryScanQuery).expectNoErrors();
   expect(data.libraryScan).toBeNull();

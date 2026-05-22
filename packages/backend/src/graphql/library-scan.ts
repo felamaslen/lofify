@@ -1,9 +1,10 @@
 import type { ID, Int } from 'grats';
 
 import { env } from '../env.js';
-import { getScan, onScanUpdate } from '../scanner/runner.js';
+import { cancelScan, getScan, onScanUpdate } from '../scanner/runner.js';
 import { getLatestScan, type ScanState } from '../scanner/runner.js';
 import { scanLibrary } from '../scanner/scan.js';
+import type { Void } from './types.js';
 
 /**
  * Snapshot of an ongoing or completed library scan.
@@ -61,14 +62,29 @@ export function libraryScanStart(): LibraryScan {
 }
 
 /**
- * Streams snapshots of the named scan every second until it completes. Yields no further events and closes the stream once the scan finishes or is evicted.
+ * Requests cancellation of the named in-progress scan. No-op when the scan is unknown or already completed.
+ *
+ * @gqlMutationField
+ */
+export function libraryScanCancel(args: { id: ID }): Void {
+  cancelScan(args.id);
+  return {};
+}
+
+/**
+ * Streams snapshots of the named scan every second until it completes. Closes the stream once the scan finishes normally (after yielding a final snapshot with `isCompleted: true`), or yields a single `null` and closes when the scan is cancelled or evicted.
  *
  * @gqlSubscriptionField libraryScan
  */
-export async function* libraryScanSubscription(args: { id: ID }): AsyncIterable<LibraryScan> {
+export async function* libraryScanSubscription(args: {
+  id: ID;
+}): AsyncIterable<LibraryScan | null> {
   for (;;) {
     const state = getScan(args.id);
-    if (!state) return;
+    if (!state) {
+      yield null;
+      return;
+    }
     yield new LibraryScan(state);
     if (state.completedAt != null) return;
     await new Promise<void>((resolve) => {

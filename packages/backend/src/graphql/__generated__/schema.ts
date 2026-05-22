@@ -4,7 +4,7 @@
  */
 
 import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, GraphQLInt, specifiedDirectives, GraphQLObjectType, GraphQLString, GraphQLID, GraphQLBoolean, GraphQLEnumType, GraphQLList } from "graphql";
-import { libraryScan as queryLibraryScanResolver, libraryScanStart as mutationLibraryScanStartResolver, libraryScanSubscription as subscriptionLibraryScanResolver } from "./../library-scan.js";
+import { libraryScan as queryLibraryScanResolver, libraryScanCancel as mutationLibraryScanCancelResolver, libraryScanStart as mutationLibraryScanStartResolver, libraryScanSubscription as subscriptionLibraryScanResolver } from "./../library-scan.js";
 import { ping as queryPingResolver, noop as mutationNoopResolver } from "./../root.js";
 import { url as trackUrlResolver } from "./../track.js";
 import { track as queryTrackResolver, tracks as queryTracksResolver } from "./../track-queries.js";
@@ -288,6 +288,19 @@ export function getSchema(): GraphQLSchema {
         name: "Mutation",
         fields() {
             return {
+                libraryScanCancel: {
+                    description: "Requests cancellation of the named in-progress scan. No-op when the scan is unknown or already completed.",
+                    name: "libraryScanCancel",
+                    type: new GraphQLNonNull(VoidType),
+                    args: {
+                        id: {
+                            type: new GraphQLNonNull(GraphQLID)
+                        }
+                    },
+                    resolve(_source, args) {
+                        return mutationLibraryScanCancelResolver(args);
+                    }
+                },
                 libraryScanStart: {
                     description: "Triggers a full scan of the configured library. Returns immediately with `filesTotal: null`; the file walk and parsing run in the background. Observe progress via `Subscription.libraryScan`.",
                     name: "libraryScanStart",
@@ -335,9 +348,9 @@ export function getSchema(): GraphQLSchema {
         fields() {
             return {
                 libraryScan: {
-                    description: "Streams snapshots of the named scan every second until it completes. Yields no further events and closes the stream once the scan finishes or is evicted.",
+                    description: "Streams snapshots of the named scan every second until it completes. Closes the stream once the scan finishes normally (after yielding a final snapshot with `isCompleted: true`), or yields a single `null` and closes when the scan is cancelled or evicted.",
                     name: "libraryScan",
-                    type: new GraphQLNonNull(LibraryScanType),
+                    type: LibraryScanType,
                     args: {
                         id: {
                             type: new GraphQLNonNull(GraphQLID)

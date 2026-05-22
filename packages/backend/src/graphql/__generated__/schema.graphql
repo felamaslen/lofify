@@ -43,6 +43,10 @@ type LibraryScan {
 
 type Mutation {
   """
+  Requests cancellation of the named in-progress scan. No-op when the scan is unknown or already completed.
+  """
+  libraryScanCancel(id: ID!): Void!
+  """
   Triggers a full scan of the configured library. Returns immediately with `filesTotal: null`; the file walk and parsing run in the background. Observe progress via `Subscription.libraryScan`.
   """
   libraryScanStart: LibraryScan!
@@ -85,9 +89,9 @@ type Query {
 
 type Subscription {
   """
-  Streams snapshots of the named scan every second until it completes. Yields no further events and closes the stream once the scan finishes or is evicted.
+  Streams snapshots of the named scan every second until it completes. Closes the stream once the scan finishes normally (after yielding a final snapshot with `isCompleted: true`), or yields a single `null` and closes when the scan is cancelled or evicted.
   """
-  libraryScan(id: ID!): LibraryScan!
+  libraryScan(id: ID!): LibraryScan
   """
   Stream progress snapshots of the transcode that backs a given `(trackId, quality, Accept)` playback stream. Pass the same `Accept` header value the client will send to `/play/...` — the server resolves it to the same transcode job key, so the subscription observes the actual encoder the player is consuming.
   

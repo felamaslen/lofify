@@ -16,6 +16,8 @@ export type ScanState = {
   errorsTotal: number;
   errors: ScanError[];
   completedAt: number | null;
+  cancelled: boolean;
+  abort: AbortController;
 };
 
 const GRACE_MS = 60_000;
@@ -44,6 +46,8 @@ export function createScan(): ScanState {
     errorsTotal: 0,
     errors: [],
     completedAt: null,
+    cancelled: false,
+    abort: new AbortController(),
   };
   scans.set(state.id, state);
   activeScanId = state.id;
@@ -78,6 +82,17 @@ export function recordScanError(id: string, file: string, err: unknown): void {
     file,
     message: err instanceof Error ? err.message : String(err),
   });
+}
+
+/** Request cancellation of an in-progress scan. Aborts the scan loop, evicts its state from memory immediately (so `getScan`/`getLatestScan` no longer return it), and notifies subscribers so they observe the disappearance and close their streams. In-flight async work observes the abort signal and finishes early; its eventual `completeScan` call is a no-op. */
+export function cancelScan(id: string): void {
+  const state = scans.get(id);
+  if (!state || state.completedAt != null || state.cancelled) return;
+  state.cancelled = true;
+  state.abort.abort();
+  if (activeScanId === id) activeScanId = null;
+  scans.delete(id);
+  notifyScanUpdate(id);
 }
 
 /** Mark the scan finished and schedule its eviction from memory after a grace period. */
