@@ -4,6 +4,7 @@ import fastifyApollo, { fastifyApolloDrainPlugin } from '@as-integrations/fastif
 import { createHandler as createSseHandler } from 'graphql-sse/lib/use/fastify';
 import { env } from './env.js';
 import { buildSchema } from './graphql/index.js';
+import { registerPlaybackRoute } from './playback/route.js';
 import { startScanSchedule } from './scanner/cron.js';
 import { watchLibrary } from './scanner/watch.js';
 
@@ -26,6 +27,8 @@ export async function buildApp(): Promise<FastifyInstance> {
   app.all('/graphql/stream', async (req, reply) => {
     await sseHandler(req, reply);
   });
+
+  await registerPlaybackRoute(app);
 
   const watcher = watchLibrary(env.LIBRARY_PATH);
   const stopSchedule = startScanSchedule();

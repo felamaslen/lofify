@@ -37,10 +37,7 @@ export async function deleteTrackByFile(file: string): Promise<void> {
 const tracer = trace.getTracer('lofify.scanner');
 
 /** Build an object-mode Writable that runs `task` over each chunk with at most `concurrency` in-flight calls. Backpressure: `_write`'s callback is held until a slot is free, so the upstream stream pauses naturally. */
-function createUpsertSink(
-  task: (file: string) => Promise<void>,
-  concurrency: number,
-): Writable {
+function createUpsertSink(task: (file: string) => Promise<void>, concurrency: number): Writable {
   let inFlight = 0;
   let waiting: (() => void) | null = null;
 
@@ -140,4 +137,3 @@ export function scanLibrary(root: string): ScanState {
 
   return state;
 }
-

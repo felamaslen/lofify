@@ -12,6 +12,9 @@ src/
   graphql/      GraphQL schema (grats source) and resolvers.
   db/           Drizzle schema, migrations, and shared pg pool.
   scanner/      Library scan + chokidar watcher (in-process).
+  playback/     `/play/...` HTTP route: HMAC-signed URLs, passthrough
+                streaming with Range support, ffmpeg transcoding with a
+                bounded LRU cache and a process semaphore.
   test/         Vitest behavioural tests driven by fastify.inject.
 ```
 
@@ -74,6 +77,17 @@ the resolver runs.
   [`graphql-sse`](https://github.com/enisdenjo/graphql-sse)
   (distinct-connections mode). Send a `subscription` operation with
   `Accept: text/event-stream`.
+- `GET /play/:signature/[:options.../]:id` — stream a track. The URL is
+  produced by `Track.url` and HMAC-signed with `PLAYBACK_SIGNING_SECRET`.
+  `:options` are zero or more `<key>:<value>` segments — `f:<format>`
+  (`original`, `auto_hi`, `auto_lo`, `flac`, `ogg`, `webm`, `aac`) and
+  `q:<0-10>`. Passthrough when the source matches the requested format
+  and quality is unset; otherwise the request transcodes through ffmpeg
+  (one process per arg-tuple, capped by `TRANSCODE_MAX_PARALLEL`,
+  results cached in memory under `TRANSCODE_CACHE_MAX_BYTES` /
+  `TRANSCODE_CACHE_TTL_SECONDS`). Passthrough honours `Range` with
+  `206 Partial Content`; transcode `Range` requests are served from the
+  cache once ffmpeg completes.
 
 ## Env
 
@@ -87,3 +101,7 @@ the resolver runs.
 | `LIBRARY_PATH`                 | _required_            | Absolute path to the music library. The chokidar watcher follows it at boot. |
 | `SCAN_CONCURRENCY`             | `4`                   | Max files parsed and upserted in parallel by the scanner. |
 | `SCAN_CRON`                    | `0 2 * * *`           | Cron expression for the recurring full library scan. Empty disables. |
+| `PLAYBACK_SIGNING_SECRET`      | `dev-secret`          | HMAC key used to sign and verify `/play` URLs. |
+| `TRANSCODE_MAX_PARALLEL`       | `2`                   | Maximum concurrent ffmpeg transcode processes. |
+| `TRANSCODE_CACHE_MAX_BYTES`    | `1073741824` (1 GiB)  | Soft cap on bytes held in the in-memory transcode cache. |
+| `TRANSCODE_CACHE_TTL_SECONDS`  | `3600`                | TTL after last access for cached transcodes. |

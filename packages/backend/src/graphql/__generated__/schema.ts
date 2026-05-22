@@ -12,11 +12,11 @@ import { libraryScan as subscriptionLibraryScanResolver } from "./../library-sca
 export function getSchema(): GraphQLSchema {
     const DurationType: GraphQLObjectType = new GraphQLObjectType({
         name: "Duration",
-        description: "Playback duration of a track.",
+        description: "A length of time, expressed in whole seconds.",
         fields() {
             return {
                 formatted: {
-                    description: "Human-readable form, e.g. `\"05:32\"` or `\"1:02:14\"` for tracks at least an hour long.",
+                    description: "Human-readable form, e.g. `\"05:32\"` or `\"1:02:14\"` for spans at least an hour long.",
                     name: "formatted",
                     type: new GraphQLNonNull(GraphQLString)
                 },

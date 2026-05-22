@@ -113,12 +113,13 @@ describe('watchLibrary', () => {
     await vi.waitFor(() => expect(getRow(file)).resolves.toMatchObject({ title: 'Test Song' }));
     const first = await getRow(file);
 
-    await copyFile(path.join(fixturesDir, 'sample.flac'), file);
-    await vi.waitFor(() => expect(getRow(file)).resolves.toMatchObject({ title: 'Lossless' }));
+    await copyFile(path.join(fixturesDir, 'sample-updated.mp3'), file);
+    await vi.waitFor(() => expect(getRow(file)).resolves.toMatchObject({ title: 'Updated' }));
 
     const second = await getRow(file);
     expect(second.id).toBe(first.id);
-    expect(second.isLossless).toBe(true);
+    expect(second.artist).toBe('Updated Artist');
+    expect(second.trackNumber).toBe(7);
 
     const rows = await db.select().from(tracks).where(eq(tracks.file, file));
     expect(rows).toHaveLength(1);

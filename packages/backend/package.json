@@ -38,6 +38,7 @@
     "grats": "^0.0.36",
     "music-metadata": "^11.12.3",
     "pg": "^8.13.1",
+    "range-parser": "^1.2.1",
     "uuid": "^14.0.0",
     "winston": "^3.19.0",
     "zod": "^4.4.3"
@@ -45,6 +46,7 @@
   "devDependencies": {
     "@types/node": "^25.9.1",
     "@types/pg": "^8.11.10",
+    "@types/range-parser": "^1.2.7",
     "drizzle-kit": "^0.31.10",
     "drizzle-pgkit-migrator": "^0.1.1",
     "fake-tag": "^5.0.0",

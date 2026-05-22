@@ -1,7 +1,7 @@
-import crypto from 'node:crypto';
 import type { ID, Int } from 'grats';
-import { env } from '../env.js';
 import type { Track as DbTrack } from '../db/schema/index.js';
+import { signPlaybackUrl } from '../playback/sign.js';
+import { Duration } from './duration.js';
 
 /**
  * Container/codec to deliver. `ORIGINAL` streams the source file untouched; `AUTO_HI` and `AUTO_LO` let the server pick a sensible high- or low-bandwidth target; the remaining members pin a specific format.
@@ -9,18 +9,6 @@ import type { Track as DbTrack } from '../db/schema/index.js';
  * @gqlEnum
  */
 export type Format = 'ORIGINAL' | 'AUTO_HI' | 'AUTO_LO' | 'AAC' | 'OGG' | 'WEBM' | 'FLAC';
-
-/**
- * Playback duration of a track.
- *
- * @gqlType
- */
-export type Duration = {
-  /** @gqlField */
-  seconds: Int;
-  /** Human-readable form, e.g. `"05:32"` or `"1:02:14"` for tracks at least an hour long. @gqlField */
-  formatted: string;
-};
 
 /**
  * A single audio file in the library.
@@ -78,15 +66,6 @@ export function deriveFormat(format: string, codec: string): string {
   return `${f} ${c}`;
 }
 
-export function formatDuration(seconds: number): string {
-  const s = Math.max(0, Math.floor(seconds));
-  const hh = Math.floor(s / 3600);
-  const mm = Math.floor((s % 3600) / 60);
-  const ss = s % 60;
-  const pad = (n: number) => n.toString().padStart(2, '0');
-  return hh > 0 ? `${hh}:${pad(mm)}:${pad(ss)}` : `${pad(mm)}:${pad(ss)}`;
-}
-
 export function toGqlTrack(row: DbTrack): Track {
   return {
     id: row.id,
@@ -97,25 +76,7 @@ export function toGqlTrack(row: DbTrack): Track {
     album: row.album,
     year: row.year,
     format: deriveFormat(row.format, row.codec),
-    duration: {
-      seconds: row.durationSeconds,
-      formatted: formatDuration(row.durationSeconds),
-    },
+    duration: new Duration(row.durationSeconds),
   };
 }
 
-export function signPlaybackUrl(
-  id: string,
-  opts: { quality: number | null; format: Format | null },
-): string {
-  const parts: string[] = [];
-  if (opts.format != null) parts.push(`f:${opts.format.toLowerCase()}`);
-  if (opts.quality != null) parts.push(`q:${opts.quality}`);
-  parts.push(id);
-  const payload = parts.join('/');
-  const signature = crypto
-    .createHmac('sha256', env.PLAYBACK_SIGNING_SECRET)
-    .update(payload)
-    .digest('hex');
-  return `/play/${signature}/${payload}`;
-}
