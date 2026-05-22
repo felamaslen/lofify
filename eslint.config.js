@@ -49,6 +49,12 @@ export default [
     },
   },
   {
+    files: ['*.mjs'],
+    languageOptions: {
+      globals: { ...globals.node },
+    },
+  },
+  {
     files: ['packages/backend/**/*.{ts,tsx}'],
     languageOptions: {
       globals: { ...globals.node },

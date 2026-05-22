@@ -15,6 +15,8 @@
     "dev": "pnpm -r --parallel dev",
     "build": "pnpm -r build",
     "codegen": "pnpm -r --parallel codegen",
+    "prepare": "husky",
+    "precommit:codegen": "sh scripts/precommit-codegen.sh",
     "db:generate": "pnpm --filter @lofify/backend db:generate",
     "db:migrate": "pnpm --filter @lofify/backend db:migrate",
     "db:migrate:create": "pnpm --filter @lofify/backend db:generate && pnpm --filter @lofify/backend db:migrate:create",
@@ -27,6 +29,8 @@
     "eslint-config-prettier": "^9.1.0",
     "eslint-plugin-simple-import-sort": "^13.0.0",
     "globals": "^17.6.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.0.5",
     "prettier": "^3.3.3",
     "typescript": "^5.6.2"
   }
