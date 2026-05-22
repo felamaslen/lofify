@@ -19,6 +19,26 @@ type TrackNode = NonNullable<ResultOf<typeof TrackByIdQuery>['track']>;
 
 export type Format = NonNullable<VariablesOf<typeof TracksQuery>['format']>;
 
+const FORMAT_STORAGE_KEY = 'lofify.player.format';
+const FORMAT_VALUES: readonly Format[] = [
+  'AAC',
+  'AUTO_HI',
+  'AUTO_LO',
+  'FLAC',
+  'OGG',
+  'ORIGINAL',
+  'WEBM',
+];
+
+function loadStoredFormat(): Format {
+  if (typeof window === 'undefined') return 'AUTO_HI';
+  const stored = window.localStorage.getItem(FORMAT_STORAGE_KEY);
+  if (stored && (FORMAT_VALUES as readonly string[]).includes(stored)) {
+    return stored as Format;
+  }
+  return 'AUTO_HI';
+}
+
 type PlayerCtx = {
   current: TrackNode | null;
   isPlaying: boolean;
@@ -48,7 +68,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const [current, setCurrent] = useState<TrackNode | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [positionSeconds, setPositionSeconds] = useState(0);
-  const [format, setFormat] = useState<Format>('AUTO_HI');
+  const [format, setFormatState] = useState<Format>(loadStoredFormat);
+  const setFormat = useCallback((f: Format) => {
+    setFormatState(f);
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(FORMAT_STORAGE_KEY, f);
+    }
+  }, []);
   const nextRef = useRef<() => void>(() => undefined);
 
   useEffect(() => {
