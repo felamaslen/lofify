@@ -37,6 +37,9 @@ const Schema = z.object({
   /** Scratch directory where ffmpeg writes per-track DASH chunk output. Each cached transcode owns a subdirectory `${trackId}__${target}/` containing `init.mp4` + `chunk-NNNNN.m4s` (opus) or `chunk-NNNNN.mp3`. Override to point at a tmpfs mount in containerised environments. */
   TRANSCODE_TMPDIR: z.string().optional(),
 
+  /** Absolute path to the built web client (`vite build` output). When unset, defaults to the workspace's `packages/web/dist`. The backend serves these as a catch-all SPA route when the directory exists. */
+  WEB_DIST_PATH: z.string().optional(),
+
   /** OTLP/HTTP base URL. Receivers expose `/v1/traces`, `/v1/logs`, `/v1/metrics` under it. */
   OTEL_EXPORTER_OTLP_ENDPOINT: z.string().url().default('http://otel-lgtm:4318'),
 

@@ -1,9 +1,11 @@
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 import { ApolloServer } from '@apollo/server';
 import fastifyApollo, { fastifyApolloDrainPlugin } from '@as-integrations/fastify';
 import fastifyCors from '@fastify/cors';
+import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { createHandler as createSseHandler } from 'graphql-sse/lib/use/fastify';
 
@@ -51,6 +53,24 @@ async function buildApp(): Promise<FastifyInstance> {
   });
 
   await registerPlaybackRoute(app);
+
+  const webDistPath = env.WEB_DIST_PATH
+    ? env.WEB_DIST_PATH
+    : fileURLToPath(new URL('../../web/dist', import.meta.url));
+  if (existsSync(webDistPath)) {
+    await app.register(fastifyStatic, { root: webDistPath, wildcard: false });
+    app.setNotFoundHandler((req, reply) => {
+      const isApi =
+        req.url.startsWith('/graphql') ||
+        req.url.startsWith('/play') ||
+        req.url.startsWith('/healthz');
+      if (req.method !== 'GET' || isApi) {
+        reply.code(404).send({ error: 'not found' });
+        return;
+      }
+      reply.type('text/html').sendFile('index.html');
+    });
+  }
 
   const watcher = watchLibrary(env.LIBRARY_PATH);
   const stopSchedule = startScanSchedule();

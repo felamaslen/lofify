@@ -9,31 +9,25 @@ WORKDIR /app
 
 # ---------- deps ----------
 FROM base AS deps
-COPY pnpm-workspace.yaml package.json pnpm-lock.yaml* ./
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml* tsconfig.json tsconfig.build.json ./
 COPY packages ./packages
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
     pnpm install --frozen-lockfile || pnpm install
 
-# ---------- backend build ----------
-FROM deps AS backend-build
-RUN pnpm --filter "./packages/backend..." build || true
+# ---------- build (web) ----------
+FROM deps AS build
+RUN pnpm --filter ./packages/web build
 
-# ---------- web build ----------
-FROM deps AS web-build
-RUN pnpm --filter "./packages/web..." build || true
-
-# ---------- backend runtime ----------
+# ---------- runtime ----------
 FROM node:24-bookworm-slim AS backend
-RUN apt-get update && apt-get install -y --no-install-recommends \
+ENV PNPM_HOME=/pnpm
+ENV PATH=$PNPM_HOME:$PATH
+RUN corepack enable \
+ && apt-get update && apt-get install -y --no-install-recommends \
       ffmpeg ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY --from=backend-build /app /app
+COPY --from=build /app /app
 ENV NODE_ENV=production
 EXPOSE 4000
-CMD ["node", "packages/backend/dist/index.js"]
-
-# ---------- web runtime (nginx static) ----------
-FROM nginx:1.27-alpine AS web
-COPY --from=web-build /app/packages/web/dist /usr/share/nginx/html
-EXPOSE 80
+CMD ["pnpm", "--filter", "./packages/backend", "start"]

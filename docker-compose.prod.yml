@@ -7,54 +7,30 @@ services:
       POSTGRES_PASSWORD: lofify
       POSTGRES_DB: lofify
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - ./var/db:/var/lib/postgresql
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U lofify']
       interval: 5s
       timeout: 5s
       retries: 10
 
-  otel-lgtm:
-    image: grafana/otel-lgtm:latest
-    restart: unless-stopped
-    ports:
-      - '3000:3000'
-
   backend:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: backend
+    image: ${IMAGE:-felamaslen/lofify}:${TAG:-latest}
     restart: unless-stopped
+    env_file:
+      - .env
     environment:
-      DATABASE_URL: ${DATABASE_URL}
-      BACKEND_HOST: 0.0.0.0
-      BACKEND_PORT: 4000
+      DATABASE_URL: ${DATABASE_URL:-postgres://lofify:lofify@postgres:5432/lofify}
+      BACKEND_HOST: ${BACKEND_HOST:-0.0.0.0}
+      BACKEND_PORT: 4002
       LIBRARY_PATH: /music
-      PLAYBACK_SIGNING_SECRET: ${PLAYBACK_SIGNING_SECRET}
-      TRANSCODE_MAX_PARALLEL: ${TRANSCODE_MAX_PARALLEL:-2}
-      TRANSCODE_CACHE_MAX_BYTES: ${TRANSCODE_CACHE_MAX_BYTES:-1073741824}
-      TRANSCODE_CACHE_TTL_SECONDS: ${TRANSCODE_CACHE_TTL_SECONDS:-3600}
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-lgtm:4318
-      OTEL_SERVICE_NAME: lofify-backend
+      TRANSCODE_TMPDIR: /transcode
     ports:
-      - '4000:4000'
+      - '4002:4002'
     volumes:
       - ${LIBRARY_PATH}:/music:ro
+    tmpfs:
+      - /transcode:size=${TRANSCODE_TMPFS_SIZE:-2g}
     depends_on:
       postgres:
         condition: service_healthy
-
-  web:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: web
-    restart: unless-stopped
-    ports:
-      - '8080:80'
-    depends_on:
-      - backend
-
-volumes:
-  postgres-data:

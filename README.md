@@ -33,7 +33,22 @@ pnpm db:migrate          # apply migrations
 ```
 
 `docker compose` reads `docker-compose.yml`. Production uses
-`docker-compose.prod.yml`.
+`docker-compose.prod.yml`; in prod the backend serves the built web
+client itself as a catch-all SPA route, so there is no separate web
+container.
+
+## Deploy
+
+```sh
+cp .env.example .env.production   # then edit secrets
+scripts/deploy.sh --host my-server # builds, pushes, ships compose + .env
+```
+
+`scripts/deploy.sh` builds and pushes `felamaslen/lofify:latest`, copies
+`docker-compose.prod.yml` to `{directory}/docker-compose.yml` on the
+remote (default `/opt/lofify`), and copies `.env.production` to
+`{directory}/.env`. Backend listens on host port `4002`. Postgres data
+persists at `{directory}/var/db`. `.env.production` is git-ignored.
 
 ## Root scripts
 
