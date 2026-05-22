@@ -9,6 +9,7 @@ import parseRange from 'range-parser';
 import { db } from '../db/client.js';
 import type { Track as DbTrack } from '../db/schema/index.js';
 import { tracks as tracksTable } from '../db/schema/index.js';
+import { env } from '../env.js';
 import { type ParsedOptions, parseOptionSegments, type RequestedFormat } from './options.js';
 import { verifySignature } from './sign.js';
 import {
@@ -180,16 +181,34 @@ async function streamEntryToRaw(
 
   const writeChunk = async (chunk: Buffer): Promise<void> => {
     if (closed) return;
-    if (raw.write(chunk)) return;
-    await new Promise<void>((resolve) => {
-      const done = (): void => {
-        raw.off('drain', done);
-        raw.off('close', done);
-        resolve();
-      };
-      raw.once('drain', done);
-      raw.once('close', done);
-    });
+    if (!raw.write(chunk)) {
+      await new Promise<void>((resolve) => {
+        const done = (): void => {
+          raw.off('drain', done);
+          raw.off('close', done);
+          resolve();
+        };
+        raw.once('drain', done);
+        raw.once('close', done);
+      });
+    }
+    // TESTING ONLY — simulate a slow client link. Delay the next write by the
+    // wall-clock cost of `chunk.length` at the configured bitrate so callers
+    // see effective throughput at or below `PLAYBACK_MAX_BITRATE`.
+    if (env.PLAYBACK_MAX_BITRATE > 0 && !closed) {
+      const delayMs = (chunk.length * 8 * 1000) / env.PLAYBACK_MAX_BITRATE;
+      await new Promise<void>((resolve) => {
+        const onCloseDuringDelay = (): void => {
+          clearTimeout(timer);
+          resolve();
+        };
+        const timer = setTimeout(() => {
+          raw.off('close', onCloseDuringDelay);
+          resolve();
+        }, delayMs);
+        raw.once('close', onCloseDuringDelay);
+      });
+    }
   };
 
   let remaining = maxBytes;
