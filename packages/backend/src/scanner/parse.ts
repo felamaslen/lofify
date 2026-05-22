@@ -27,7 +27,10 @@ export async function parseTrack(file: string): Promise<ParsedTrack> {
     span.setAttribute('scanner.file', file);
     try {
       await assertAudioHeader(file);
-      const [metadata, st] = await Promise.all([parseFile(file), stat(file)]);
+      const [metadata, st] = await Promise.all([
+        parseFile(file, { skipCovers: true }),
+        stat(file),
+      ]);
       const { common, format } = metadata;
 
       const container =
