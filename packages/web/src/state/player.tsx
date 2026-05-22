@@ -10,33 +10,27 @@ import {
   useState,
 } from 'react';
 
-import { TracksQuery } from '../components/track-list.tsx';
+import { PlaybackBarDocument } from '../components/playback-bar.tsx';
+import { TracksDocument } from '../components/track-list.tsx';
 import { graphql, type ResultOf, type VariablesOf } from '../lib/gql.ts';
 import { gqlRequest } from '../lib/gql-request.ts';
 import { createPlayer, type Player as MsePlayer } from '../lib/mse.ts';
 import { subscribe } from '../lib/sse-client.ts';
 
-export const TrackByIdQuery = graphql(`
-  query TrackById($id: ID!, $format: Format, $quality: Int) {
-    track(id: $id) {
-      id
-      title
-      trackNumber
-      discNumber
-      artist
-      album
-      year
-      format
-      duration {
-        seconds
-        formatted
+export const TrackByIdDocument = graphql(
+  `
+    query TrackById($id: ID!, $format: Format, $quality: Int) {
+      track(id: $id) {
+        id
+        url(format: $format, quality: $quality)
+        ...PlaybackBar
       }
-      url(format: $format, quality: $quality)
     }
-  }
-`);
+  `,
+  [PlaybackBarDocument],
+);
 
-const TranscodeProgressSubscription = graphql(`
+const TranscodeProgressDocument = graphql(`
   subscription TranscodeProgress($trackId: ID!, $format: Format, $quality: Int) {
     transcodeProgress(trackId: $trackId, format: $format, quality: $quality) {
       secondsTranscoded
@@ -46,9 +40,9 @@ const TranscodeProgressSubscription = graphql(`
   }
 `);
 
-type TrackNode = NonNullable<ResultOf<typeof TrackByIdQuery>['track']>;
+type TrackNode = NonNullable<ResultOf<typeof TrackByIdDocument>['track']>;
 
-export type Format = NonNullable<VariablesOf<typeof TracksQuery>['format']>;
+export type Format = NonNullable<VariablesOf<typeof TrackByIdDocument>['format']>;
 
 const FORMAT_STORAGE_KEY = 'lofify.player.format';
 const FORMAT_VALUES: readonly Format[] = [
@@ -183,22 +177,26 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
   const prefetchNext = useCallback(
     (currentId: string) => {
-      void queryClient.prefetchQuery({
-        queryKey: ['step', 'next', currentId, format],
-        queryFn: ({ signal }) =>
-          gqlRequest(
-            TracksQuery,
-            {
-              first: 1,
-              last: null,
-              after: currentId,
-              before: null,
-              format,
-              quality: null,
-            },
-            signal,
-          ),
-      });
+      void (async () => {
+        const data = await queryClient.fetchQuery({
+          queryKey: ['step', 'next', currentId],
+          queryFn: ({ signal }) =>
+            gqlRequest(
+              TracksDocument,
+              { first: 1, last: null, after: currentId, before: null },
+              signal,
+            ),
+        });
+        const nextId = data.tracks?.edges[0]?.node.id;
+        if (!nextId) return;
+        // Also warm the full track-by-id (with the signed URL) so stepping to
+        // the next track skips the network entirely.
+        await queryClient.prefetchQuery({
+          queryKey: ['track', nextId, format],
+          queryFn: ({ signal }) =>
+            gqlRequest(TrackByIdDocument, { id: nextId, format, quality: null }, signal),
+        });
+      })();
     },
     [queryClient, format],
   );
@@ -215,7 +213,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       playerRef.current = null;
       transcodeUnsubRef.current?.();
       transcodeUnsubRef.current = subscribe(
-        TranscodeProgressSubscription,
+        TranscodeProgressDocument,
         { trackId: track.id, format, quality: null },
         {
           next: (data) => {
@@ -242,7 +240,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     async (id: string) => {
       const data = await queryClient.fetchQuery({
         queryKey: ['track', id, format],
-        queryFn: ({ signal }) => gqlRequest(TrackByIdQuery, { id, format, quality: null }, signal),
+        queryFn: ({ signal }) => gqlRequest(TrackByIdDocument, { id, format, quality: null }, signal),
       });
       if (data.track) await loadTrack(data.track);
     },
@@ -275,16 +273,16 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       if (!current) return;
       const variables =
         direction === 'next'
-          ? { first: 1, last: null, after: current.id, before: null, format, quality: null }
-          : { first: null, last: 1, after: null, before: current.id, format, quality: null };
+          ? { first: 1, last: null, after: current.id, before: null }
+          : { first: null, last: 1, after: null, before: current.id };
       const data = await queryClient.fetchQuery({
-        queryKey: ['step', direction, current.id, format],
-        queryFn: ({ signal }) => gqlRequest(TracksQuery, variables, signal),
+        queryKey: ['step', direction, current.id],
+        queryFn: ({ signal }) => gqlRequest(TracksDocument, variables, signal),
       });
-      const node = data.tracks?.edges[0]?.node;
-      if (node) await loadTrack(node);
+      const nextId = data.tracks?.edges[0]?.node.id;
+      if (nextId) await playTrack(nextId);
     },
-    [queryClient, current, format, loadTrack],
+    [queryClient, current, playTrack],
   );
 
   const next = useCallback(() => void step('next'), [step]);

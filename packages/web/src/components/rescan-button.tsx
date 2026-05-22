@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import type { ResultOf } from 'gql.tada';
+import { readFragment, type ResultOf } from 'gql.tada';
 import { AlertTriangle, Loader2, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -9,46 +9,51 @@ import { subscribe } from '../lib/sse-client.ts';
 import { Button } from './ui/button.tsx';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip.tsx';
 
-const LibraryScanQuery = graphql(`
-  query LibraryScanCurrent {
-    libraryScan {
-      id
-      filesTotal
-      scannedTotal
-      errorsTotal
-      isCompleted
-      errorMessage
-    }
+const LibraryScanProgressDocument = graphql(`
+  fragment LibraryScanProgress on LibraryScan {
+    id
+    filesTotal
+    scannedTotal
+    errorsTotal
+    isCompleted
+    errorMessage
   }
 `);
 
-const StartLibraryScanMutation = graphql(`
-  mutation StartLibraryScan {
-    libraryScanStart {
-      id
-      filesTotal
-      scannedTotal
-      errorsTotal
-      isCompleted
-      errorMessage
+const LibraryScanCurrentDocument = graphql(
+  `
+    query LibraryScanCurrent {
+      libraryScan {
+        ...LibraryScanProgress
+      }
     }
-  }
-`);
+  `,
+  [LibraryScanProgressDocument],
+);
 
-const LibraryScanSubscription = graphql(`
-  subscription LibraryScan($id: ID!) {
-    libraryScan(id: $id) {
-      id
-      filesTotal
-      scannedTotal
-      errorsTotal
-      isCompleted
-      errorMessage
+const StartLibraryScanDocument = graphql(
+  `
+    mutation StartLibraryScan {
+      libraryScanStart {
+        ...LibraryScanProgress
+      }
     }
-  }
-`);
+  `,
+  [LibraryScanProgressDocument],
+);
 
-type Snapshot = ResultOf<typeof LibraryScanSubscription>['libraryScan'];
+const LibraryScanDocument = graphql(
+  `
+    subscription LibraryScan($id: ID!) {
+      libraryScan(id: $id) {
+        ...LibraryScanProgress
+      }
+    }
+  `,
+  [LibraryScanProgressDocument],
+);
+
+type Snapshot = ResultOf<typeof LibraryScanProgressDocument>;
 
 type Phase = 'idle' | 'indeterminate' | 'determinate' | 'completed';
 
@@ -77,7 +82,7 @@ export function RescanButton() {
   const animatedPhase = useRef(phase);
   const phaseEnteredAt = useRef(0);
   const setScanAndDesiredPhase = useCallback(
-    (data: ResultOf<typeof LibraryScanQuery>['libraryScan']) => {
+    (data: Snapshot | null) => {
       const desiredPhase: Phase = data?.isCompleted
         ? 'completed'
         : data?.filesTotal == null
@@ -115,10 +120,11 @@ export function RescanButton() {
     (id: string) => {
       unsubRef.current?.();
       unsubRef.current = subscribe(
-        LibraryScanSubscription,
+        LibraryScanDocument,
         { id },
         {
-          next: (data) => setScanAndDesiredPhase(data.libraryScan),
+          next: (data) =>
+            setScanAndDesiredPhase(readFragment(LibraryScanProgressDocument, data.libraryScan)),
           error: () => {
             unsubRef.current = null;
           },
@@ -134,8 +140,8 @@ export function RescanButton() {
   useQuery({
     queryKey: ['libraryScan', 'current'],
     queryFn: async ({ signal }) => {
-      const res = await gqlRequest(LibraryScanQuery, {}, signal);
-      const current = res.libraryScan;
+      const res = await gqlRequest(LibraryScanCurrentDocument, {}, signal);
+      const current = readFragment(LibraryScanProgressDocument, res.libraryScan);
       if (current) {
         setScanAndDesiredPhase(current);
         if (!current.isCompleted && !unsubRef.current) {
@@ -161,8 +167,8 @@ export function RescanButton() {
   const start = useCallback(async () => {
     if (unsubRef.current || phase === 'indeterminate' || phase === 'determinate') return;
     try {
-      const res = await gqlRequest(StartLibraryScanMutation, {});
-      const initial = res.libraryScanStart;
+      const res = await gqlRequest(StartLibraryScanDocument, {});
+      const initial = readFragment(LibraryScanProgressDocument, res.libraryScanStart);
       setScan(initial);
       attachSubscription(initial.id);
     } catch (err) {

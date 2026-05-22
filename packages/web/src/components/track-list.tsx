@@ -1,50 +1,51 @@
 import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { readFragment } from 'gql.tada';
 import { useEffect, useMemo, useRef } from 'react';
 
 import { graphql } from '../lib/gql.ts';
 import { gqlRequest } from '../lib/gql-request.ts';
 import { cn } from '../lib/utils.ts';
-import { TrackByIdQuery, usePlayer } from '../state/player.tsx';
+import { TrackByIdDocument, usePlayer } from '../state/player.tsx';
 
-export const TracksQuery = graphql(`
-  query Tracks(
-    $first: Int
-    $last: Int
-    $after: String
-    $before: String
-    $format: Format
-    $quality: Int
-  ) {
-    tracks(first: $first, last: $last, after: $after, before: $before) {
-      totalCount
-      pageInfo {
-        hasNextPage
-        hasPreviousPage
-        startCursor
-        endCursor
-      }
-      edges {
-        cursor
-        node {
-          id
-          title
-          trackNumber
-          discNumber
-          artist
-          album
-          year
-          format
-          duration {
-            seconds
-            formatted
-          }
-          url(format: $format, quality: $quality)
-        }
-      }
+const TrackListRowDocument = graphql(`
+  fragment TrackListRow on Track {
+    title
+    trackNumber
+    discNumber
+    artist
+    album
+    year
+    duration {
+      seconds
+      formatted
     }
   }
 `);
+
+export const TracksDocument = graphql(
+  `
+    query Tracks($first: Int, $last: Int, $after: String, $before: String) {
+      tracks(first: $first, last: $last, after: $after, before: $before) {
+        totalCount
+        pageInfo {
+          hasNextPage
+          hasPreviousPage
+          startCursor
+          endCursor
+        }
+        edges {
+          cursor
+          node {
+            id
+            ...TrackListRow
+          }
+        }
+      }
+    }
+  `,
+  [TrackListRowDocument],
+);
 
 const PAGE_SIZE = 100;
 const ROW_HEIGHT = 36;
@@ -58,19 +59,12 @@ export function TrackList() {
   const queryClient = useQueryClient();
 
   const query = useInfiniteQuery({
-    queryKey: ['tracks', format],
+    queryKey: ['tracks'],
     initialPageParam: null as string | null,
     queryFn: ({ pageParam, signal }) =>
       gqlRequest(
-        TracksQuery,
-        {
-          first: PAGE_SIZE,
-          last: null,
-          after: pageParam,
-          before: null,
-          format,
-          quality: null,
-        },
+        TracksDocument,
+        { first: PAGE_SIZE, last: null, after: pageParam, before: null },
         signal,
       ),
     getNextPageParam: (last) =>
@@ -92,7 +86,7 @@ export function TrackList() {
       void queryClient.prefetchQuery({
         queryKey: ['track', id, format],
         queryFn: ({ signal }) =>
-          gqlRequest(TrackByIdQuery, { id, format, quality: null }, signal),
+          gqlRequest(TrackByIdDocument, { id, format, quality: null }, signal),
       });
     }, HOVER_PREFETCH_MS);
   };
@@ -163,8 +157,8 @@ export function TrackList() {
           {items.map((virtualRow) => {
             const edge = edges[virtualRow.index];
             if (!edge) return null;
-            const t = edge.node;
-            const active = current?.id === t.id;
+            const t = readFragment(TrackListRowDocument, edge.node);
+            const active = current?.id === edge.node.id;
             return (
               <div
                 key={edge.cursor}
@@ -172,9 +166,9 @@ export function TrackList() {
                 onMouseDown={(e) => {
                   if (e.detail >= 2) e.preventDefault();
                 }}
-                onMouseEnter={() => onRowEnter(t.id)}
+                onMouseEnter={() => onRowEnter(edge.node.id)}
                 onMouseLeave={onRowLeave}
-                onDoubleClick={() => play(t.id)}
+                onDoubleClick={() => play(edge.node.id)}
                 className={cn(
                   COLS,
                   'cursor-pointer text-sm hover:bg-accent/40',

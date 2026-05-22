@@ -1,9 +1,23 @@
+import { readFragment } from 'gql.tada';
 import { Pause, Play, SkipBack, SkipForward } from 'lucide-react';
 import { useMemo } from 'react';
 
+import { graphql } from '../lib/gql.ts';
 import { usePlayer } from '../state/player.tsx';
 import { Button } from './ui/button.tsx';
 import { Slider } from './ui/slider.tsx';
+
+export const PlaybackBarDocument = graphql(`
+  fragment PlaybackBar on Track {
+    title
+    artist
+    album
+    duration {
+      seconds
+      formatted
+    }
+  }
+`);
 
 function fmt(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));
@@ -25,11 +39,9 @@ export function PlaybackBar() {
     seek,
   } = usePlayer();
 
-  const total = current?.duration.seconds ?? 0;
-  const sliderValue = useMemo(
-    () => [Math.min(positionSeconds, total)],
-    [positionSeconds, total],
-  );
+  const meta = current ? readFragment(PlaybackBarDocument, current) : null;
+  const total = meta?.duration.seconds ?? 0;
+  const sliderValue = useMemo(() => [Math.min(positionSeconds, total)], [positionSeconds, total]);
 
   return (
     <div className="grid grid-cols-[auto_1fr_auto] items-center gap-4 border-t border-border bg-card/60 px-4 py-3 backdrop-blur">
@@ -63,14 +75,12 @@ export function PlaybackBar() {
         </Button>
       </div>
       <div className="flex min-w-0 flex-col">
-        {current ? (
+        {meta ? (
           <>
-            <span className="truncate text-sm font-medium">
-              {current.title ?? '(untitled)'}
-            </span>
+            <span className="truncate text-sm font-medium">{meta.title ?? '(untitled)'}</span>
             <span className="truncate text-xs text-muted-foreground">
-              {current.artist ?? 'Unknown artist'}
-              {current.album ? ` — ${current.album}` : ''}
+              {meta.artist ?? 'Unknown artist'}
+              {meta.album ? ` — ${meta.album}` : ''}
             </span>
           </>
         ) : (
@@ -96,7 +106,7 @@ export function PlaybackBar() {
           aria-label="Scrub"
           className="flex-1"
         />
-        <span className="w-10">{current?.duration.formatted ?? '00:00'}</span>
+        <span className="w-10">{meta?.duration.formatted ?? '00:00'}</span>
       </div>
     </div>
   );
