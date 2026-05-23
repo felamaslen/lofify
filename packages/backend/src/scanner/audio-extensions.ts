@@ -9,6 +9,7 @@ export const AUDIO_EXTENSIONS = [
   'wav',
   'wma',
   'webm',
+  'ape',
 ] as const;
 
 export const AUDIO_EXTENSION_RE = new RegExp(
