@@ -114,6 +114,20 @@ describe('watchLibrary', () => {
     expect(row.durationSeconds).toBeGreaterThan(0);
   });
 
+  it('strips NUL padding and trims whitespace from tag values', async () => {
+    const file = path.join(root, 'padded.flac');
+    await copyFile(path.join(fixturesDir, 'sample-padded.flac'), file);
+
+    await vi.waitFor(() =>
+      expect(getRow(file)).resolves.toMatchObject({
+        file,
+        title: 'Padded Title',
+        artist: 'Padded Artist',
+        album: 'Padded Album',
+      }),
+    );
+  });
+
   it('updates the existing row when the file changes', async () => {
     const file = path.join(root, 'song.mp3');
     await copyFile(path.join(fixturesDir, 'sample.mp3'), file);

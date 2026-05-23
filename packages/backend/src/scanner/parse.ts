@@ -13,6 +13,13 @@ export type ParsedTrack = Omit<NewTrack, 'id' | 'createdAt' | 'updatedAt' | 'sca
 const tracer = trace.getTracer('lofify.scanner');
 const AUDIO_EXT_SET = new Set<string>(AUDIO_EXTENSIONS);
 
+/** Strip NUL bytes (which Postgres text columns reject) and surrounding whitespace from a tag value, collapsing empties to null. Some FLAC tags in the wild include trailing U+0000 padding. */
+function cleanTag(value: string | undefined): string | null {
+  if (value == null) return null;
+  const cleaned = value.replaceAll('\u0000', '').trim();
+  return cleaned === '' ? null : cleaned;
+}
+
 /** Sniff `file`'s magic bytes via `file-type` and throw when the detected container isn't one we accept. Gating against `AUDIO_EXTENSIONS` keeps us from upserting a non-audio file just because its extension matched the walker's glob. */
 async function assertAudioHeader(file: string): Promise<void> {
   const type = await fileTypeFromFile(file);
@@ -37,11 +44,11 @@ export async function parseTrack(file: string): Promise<ParsedTrack> {
         format.container?.toLowerCase() ?? path.extname(file).slice(1).toLowerCase();
 
       return {
-        title: common.title ?? null,
+        title: cleanTag(common.title),
         trackNumber: common.track?.no ?? null,
         discNumber: common.disk?.no ?? null,
-        artist: common.artist ?? null,
-        album: common.album ?? null,
+        artist: cleanTag(common.artist),
+        album: cleanTag(common.album),
         year: common.year != null ? String(common.year) : null,
         format: container,
         codec: format.codec?.toLowerCase() ?? container,
