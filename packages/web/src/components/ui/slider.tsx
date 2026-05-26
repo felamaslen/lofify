@@ -21,7 +21,7 @@ export const Slider = React.forwardRef<React.ElementRef<typeof SliderPrimitive.R
         ref={ref}
         min={min}
         max={max}
-        className={cn('relative flex w-full touch-none select-none items-center', className)}
+        className={cn('group relative flex w-full touch-none select-none items-center', className)}
         {...props}
       >
         <SliderPrimitive.Track className="relative h-1.5 w-full grow overflow-hidden rounded-full bg-secondary cursor-pointer">
@@ -47,7 +47,7 @@ export const Slider = React.forwardRef<React.ElementRef<typeof SliderPrimitive.R
           ))}
           <SliderPrimitive.Range className="absolute cursor-pointer h-full bg-primary" />
         </SliderPrimitive.Track>
-        <SliderPrimitive.Thumb className="cursor-pointer block h-4 w-4 rounded-full border border-primary/60 bg-primary shadow-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50" />
+        <SliderPrimitive.Thumb className="block h-3 w-3 cursor-pointer rounded-full bg-white opacity-0 shadow outline-none transition-opacity group-hover:opacity-100 focus-visible:opacity-100 disabled:pointer-events-none disabled:opacity-0" />
       </SliderPrimitive.Root>
     );
   },
