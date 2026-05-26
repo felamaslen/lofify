@@ -7,8 +7,12 @@
 import { EventEmitter } from 'node:events';
 import { open, rename, stat, writeFile } from 'node:fs/promises';
 
+import { SpanStatusCode, trace } from '@opentelemetry/api';
+
 import { logger } from '../logger.js';
 import type { ChunkRange, Scanner } from './scan-types.js';
+
+const tracer = trace.getTracer('lofify.playback.liveTail');
 
 export type IndexChunk = {
   /** Byte range in the `.bin`. */
@@ -98,28 +102,55 @@ export function startLiveTail(opts: LiveTailOptions): LiveTailHandle {
     const tail = await readTail();
     if (!tail && !isFinal) return false;
     const buf = tail?.buf ?? Buffer.alloc(0);
-    const result = scanner.scan(buf, resumeOffset, isFinal);
-    let changed = false;
-    if (result.init && !index.init) {
-      index.init = result.init;
-      changed = true;
-    }
-    for (const c of result.chunks) {
-      const endSeconds = index.durationSeconds + c.durationSeconds;
-      index.chunks.push({ byte: c.byte, endSeconds });
-      index.durationSeconds = endSeconds;
-      changed = true;
-    }
-    resumeOffset = result.resumeOffset;
-    if (isFinal && !index.done) {
-      index.done = true;
-      changed = true;
-    }
-    if (changed) {
-      await persist();
-      emitter.emit('update', snapshot());
-    }
-    return changed;
+    // Skip spanning no-op polls (no new bytes, not a final flush) — keeps trace cardinality bounded under the 250 ms polling cadence.
+    if (buf.length === 0 && !isFinal) return false;
+
+    return tracer.startActiveSpan(
+      'playback.liveTail.tick',
+      {
+        attributes: {
+          'playback.liveTail.binPath': binPath,
+          'playback.liveTail.isFinal': isFinal,
+          'playback.liveTail.bytesRead': buf.length,
+          'playback.liveTail.resumeOffset': resumeOffset,
+        },
+      },
+      async (span): Promise<boolean> => {
+        try {
+          const result = scanner.scan(buf, resumeOffset, isFinal);
+          let changed = false;
+          if (result.init && !index.init) {
+            index.init = result.init;
+            changed = true;
+          }
+          for (const c of result.chunks) {
+            const endSeconds = index.durationSeconds + c.durationSeconds;
+            index.chunks.push({ byte: c.byte, endSeconds });
+            index.durationSeconds = endSeconds;
+            changed = true;
+          }
+          resumeOffset = result.resumeOffset;
+          if (isFinal && !index.done) {
+            index.done = true;
+            changed = true;
+          }
+          span.setAttribute('playback.liveTail.chunksEmitted', result.chunks.length);
+          span.setAttribute('playback.liveTail.totalChunks', index.chunks.length);
+          if (changed) {
+            await persist();
+            emitter.emit('update', snapshot());
+          }
+          return changed;
+        } catch (err) {
+          const error = err instanceof Error ? err : new Error(String(err));
+          span.recordException(error);
+          span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+          throw error;
+        } finally {
+          span.end();
+        }
+      },
+    );
   }
 
   async function persist(): Promise<void> {

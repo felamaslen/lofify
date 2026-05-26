@@ -37,6 +37,9 @@ const Schema = z.object({
   /** Scratch directory where ffmpeg writes per-track DASH chunk output. Each cached transcode owns a subdirectory `${trackId}__${target}/` containing `init.mp4` + `chunk-NNNNN.m4s` (opus) or `chunk-NNNNN.mp3`. Override to point at a tmpfs mount in containerised environments. */
   TRANSCODE_TMPDIR: z.string().optional(),
 
+  /** Persistent directory where the unified per-entry cache writes `<trackId>-<mtimeMs>/<targetKey>.{bin,idx}`. Survives process restarts; the `.idx` sidecar is the durable manifest. Defaults to `${os.tmpdir()}/lofify-cache`. */
+  PLAYBACK_CACHE_DIR: z.string().optional(),
+
   /** Persistent directory where pre-baked flac re-encodes of lossless non-flac sources are written. Unlike `TRANSCODE_TMPDIR`, the contents are meant to outlive process restarts. Defaults to `${os.tmpdir()}/lofify-bakes`. */
   TRANSCODE_BAKE_DIR: z.string().optional(),
 

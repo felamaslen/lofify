@@ -27,11 +27,13 @@ services:
       TRANSCODE_TMPDIR: /transcode
       TRANSCODE_BAKE_DIR: /bakes
       TRANSCODE_BAKE_PARALLEL: ${TRANSCODE_BAKE_PARALLEL:-1}
+      PLAYBACK_CACHE_DIR: /playback-cache
     ports:
       - '4002:4002'
     volumes:
       - ${LIBRARY_PATH}:/music:ro
       - ./var/bakes:/bakes
+      - ./var/cache:/playback-cache
     tmpfs:
       - /transcode:size=${TRANSCODE_TMPFS_SIZE:-2g}
     depends_on:
