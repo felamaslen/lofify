@@ -1,0 +1,17 @@
+diff --git a/lib/apev2/APEv2Parser.js b/lib/apev2/APEv2Parser.js
+index 9e4cf4fdda1aa8e1746fd5f1546a29f4582f596b..d86f6877e59acd0f23c12619fb073053dddbf892 100644
+--- a/lib/apev2/APEv2Parser.js
++++ b/lib/apev2/APEv2Parser.js
+@@ -61,8 +61,10 @@ export class APEv2Parser extends BasicParser {
+     }
+     static parseTagFooter(metadata, buffer, options) {
+         const footer = TagFooter.get(buffer, buffer.length - TagFooter.len);
+-        if (footer.ID !== preamble)
+-            throw new ApeContentError('Unexpected APEv2 Footer ID preamble value');
++        if (footer.ID !== preamble) {
++            metadata.addWarning('No APEv2 tag footer found; skipping tags');
++            return;
++        }
+         strtok3.fromBuffer(buffer);
+         const apeParser = new APEv2Parser(metadata, strtok3.fromBuffer(buffer), options);
+         return apeParser.parseTags(footer);
