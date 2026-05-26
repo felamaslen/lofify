@@ -12,7 +12,11 @@ src/
   config.ts     Static code-level constants (chunk duration, etc.).
   graphql/      GraphQL schema (grats source) and resolvers.
   db/           Drizzle schema, migrations, and shared pg pool.
-  scanner/      Library scan + chokidar watcher (in-process).
+  scanner/      Library scan + chokidar watcher (in-process). A scan
+                walks every library root, classifies discovered files
+                against `Tracks` in batches, and feeds a priority queue:
+                new files are parsed first, changed files next, and
+                unchanged files are skipped.
   playback/     `/play/...` HTTP route, HMAC-signed URLs, unified
                 per-entry encoded cache (.bin + .idx live-tail), and
                 ffmpeg encoder.
@@ -140,7 +144,7 @@ true` snapshot and complete.
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://otel-lgtm:4318`                       | OTLP/HTTP base URL                                                                                                                          |
 | `OTEL_SERVICE_NAME`           | `lofify-backend`                              |                                                                                                                                             |
 | `DATABASE_URL`                | _(unset)_                                     | Postgres connection string for the Drizzle pool.                                                                                            |
-| `LIBRARY_PATH`                | _required_                                    | Absolute path to the music library. The chokidar watcher follows it at boot.                                                                |
+| `LIBRARY_PATH`                | _required_                                    | Comma-separated list of absolute paths to the music library roots. The scanner and chokidar watcher cover every listed directory at boot.   |
 | `SCAN_CONCURRENCY`            | `4`                                           | Max files parsed and upserted in parallel by the scanner.                                                                                   |
 | `SCAN_CRON`                   | `0 2 * * *`                                   | Cron expression for the recurring full library scan. Empty disables.                                                                        |
 | `CORS_ALLOW_ORIGINS`          | `http://localhost:5173,http://127.0.0.1:5173` | Comma-separated allowlist of browser origins. `*` allows any.                                                                               |

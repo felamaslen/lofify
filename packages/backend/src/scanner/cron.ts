@@ -1,7 +1,7 @@
 import { SpanStatusCode, trace } from '@opentelemetry/api';
 import { Cron } from 'croner';
 
-import { env } from '../env.js';
+import { env, libraryPaths } from '../env.js';
 import { logger } from '../logger.js';
 import { scanLibrary } from './scan.js';
 
@@ -20,12 +20,12 @@ export function startScanSchedule(): () => void {
         {
           attributes: {
             'scanner.cron': expression,
-            'scanner.root': env.LIBRARY_PATH,
+            'scanner.roots': libraryPaths.join(','),
           },
         },
         (span) => {
           try {
-            const state = scanLibrary(env.LIBRARY_PATH);
+            const state = scanLibrary(libraryPaths);
             span.setAttribute('scanner.id', state.id);
           } catch (err) {
             logger.warn(

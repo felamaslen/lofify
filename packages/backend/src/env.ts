@@ -10,7 +10,7 @@ const Schema = z.object({
   /** TCP port the HTTP server listens on. */
   BACKEND_PORT: z.coerce.number().int().positive().default(4000),
 
-  /** Absolute path to the music library root. */
+  /** Comma-separated list of absolute paths to the music library roots. The scanner and chokidar watcher cover every listed directory; a single path (no comma) is the common case. */
   LIBRARY_PATH: z.string(),
 
   /** Maximum number of files the scanner parses and upserts in parallel. */
@@ -43,3 +43,8 @@ const Schema = z.object({
 
 export const env = Schema.parse(process.env);
 export type Env = typeof env;
+
+/** The configured music library roots, parsed from the comma-separated `LIBRARY_PATH`. */
+export const libraryPaths: string[] = env.LIBRARY_PATH.split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);

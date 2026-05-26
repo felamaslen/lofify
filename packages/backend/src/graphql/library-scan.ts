@@ -1,6 +1,6 @@
 import type { ID, Int } from 'grats';
 
-import { env } from '../env.js';
+import { libraryPaths } from '../env.js';
 import { cancelScan, getScan, onScanUpdate } from '../scanner/runner.js';
 import { getLatestScan, type ScanState } from '../scanner/runner.js';
 import { scanLibrary } from '../scanner/scan.js';
@@ -58,7 +58,7 @@ export function libraryScan(): LibraryScan | null {
  * @gqlMutationField
  */
 export function libraryScanStart(): LibraryScan {
-  return new LibraryScan(scanLibrary(env.LIBRARY_PATH));
+  return new LibraryScan(scanLibrary(libraryPaths));
 }
 
 /**

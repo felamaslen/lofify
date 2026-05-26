@@ -35,7 +35,7 @@ describe('watchLibrary', () => {
   beforeEach(async () => {
     await db.delete(tracks);
     root = await mkdtemp(path.join(tmpdir(), 'lofify-watch-test-'));
-    watcher = watchLibrary(root);
+    watcher = watchLibrary([root]);
     await waitForReady(watcher);
   });
 

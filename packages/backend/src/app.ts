@@ -9,7 +9,7 @@ import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { createHandler as createSseHandler } from 'graphql-sse/lib/use/fastify';
 
-import { env } from './env.js';
+import { env, libraryPaths } from './env.js';
 import { buildSchema } from './graphql/index.js';
 import { registerPlaybackRoute } from './playback/route.js';
 import { startScanSchedule } from './scanner/cron.js';
@@ -72,7 +72,7 @@ async function buildApp(): Promise<FastifyInstance> {
     });
   }
 
-  const watcher = watchLibrary(env.LIBRARY_PATH);
+  const watcher = watchLibrary(libraryPaths);
   const stopSchedule = startScanSchedule();
   app.addHook('onClose', async () => {
     stopSchedule();

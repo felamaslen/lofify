@@ -28,9 +28,9 @@ function withSpan(name: string, file: string, work: (span: Span) => Promise<void
   });
 }
 
-/** Start a chokidar watcher over `root`. Add/change events upsert the affected track; unlink deletes it. Non-audio files are ignored. Caller must `close()` the returned watcher on shutdown. */
-export function watchLibrary(root: string): FSWatcher {
-  const watcher = chokidar.watch(root, {
+/** Start a chokidar watcher over every path in `roots`. Add/change events upsert the affected track; unlink deletes it. Non-audio files are ignored. Caller must `close()` the returned watcher on shutdown. */
+export function watchLibrary(roots: string[]): FSWatcher {
+  const watcher = chokidar.watch(roots, {
     ignoreInitial: true,
     persistent: true,
     awaitWriteFinish: {
