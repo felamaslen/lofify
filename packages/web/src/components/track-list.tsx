@@ -18,6 +18,7 @@ import {
 const TrackListRowDocument = graphql(`
   fragment TrackListRow on Track {
     title
+    path
     trackNumber
     discNumber
     artist
@@ -255,7 +256,11 @@ export function TrackList() {
                       {t.trackNumber ?? ''}
                     </span>
                     <span className={cn('truncate', t.isLossless && 'font-medium')}>
-                      {t.title ?? '(untitled)'}
+                      {t.title ?? (
+                        <>
+                          (untitled) <span className="text-muted-foreground/60">{t.path}</span>
+                        </>
+                      )}
                     </span>
                     <span className="tabular-nums text-muted-foreground">
                       {t.duration.formatted}

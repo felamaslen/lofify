@@ -147,6 +147,10 @@ type Track {
   """Whether the source file is a lossless format (flac, alac, wav, etc.)."""
   isLossless: Boolean!
   """
+  Absolute path to the source file on disk. Primarily a fallback label for tracks that carry no title tag.
+  """
+  path: String!
+  """
   Source codec of the file on disk, lower-cased, e.g. `"flac"`, `"alac"`, `"mp3"`, `"opus"`.
   """
   sourceFormat: String!

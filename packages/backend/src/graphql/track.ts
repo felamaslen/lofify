@@ -55,6 +55,15 @@ export function url(track: Track, format?: TrackFormat | null): string {
   return signPlaybackUrl(track.id, { quality: f.quality, formatLossy: f.formatLossy });
 }
 
+/**
+ * Absolute path to the source file on disk. Primarily a fallback label for tracks that carry no title tag.
+ *
+ * @gqlField
+ */
+export function path(track: Track): string {
+  return track.file;
+}
+
 export function deriveFormat(format: string, codec: string): string {
   const f = format.toLowerCase();
   const c = codec.toLowerCase();

@@ -321,3 +321,46 @@ test('Track.url rejects quality values outside the Quality enum', async () => {
     .expectErrors();
   expect(errors[0]?.message).toMatch(/Quality/);
 });
+
+const TracksPathQuery = graphql(`
+  query TracksPath {
+    tracks(first: 100) {
+      edges {
+        node {
+          title
+          path
+        }
+      }
+    }
+  }
+`);
+
+test('Query.tracks orders untagged tracks by file path and exposes Track.path', async () => {
+  await db.insert(tracks).values(
+    ['/library/c.mp3', '/library/a.mp3', '/library/b.mp3'].map((file) => ({
+      title: null,
+      trackNumber: null,
+      discNumber: null,
+      artist: null,
+      album: null,
+      year: null,
+      format: 'mp3',
+      codec: 'mp3',
+      bitRate: null,
+      sampleRate: 44_100,
+      isLossless: false,
+      file,
+      sizeBytes: 1024,
+      durationSeconds: 60,
+      sourceMtime: new Date(0),
+    })),
+  );
+
+  const { data } = await gqlRequest(app).query(TracksPathQuery).expectNoErrors();
+  expect(data.tracks!.edges.map((e) => e.node.path)).toEqual([
+    '/library/a.mp3',
+    '/library/b.mp3',
+    '/library/c.mp3',
+  ]);
+  expect(data.tracks!.edges.every((e) => e.node.title === null)).toBe(true);
+});

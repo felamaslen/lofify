@@ -100,8 +100,8 @@ export async function tracks(
     }
   }
 
-  const sortKey = sql`(coalesce(${tracksTable.artistOverride}, ${tracksTable.artist}, ''), coalesce(${tracksTable.albumOverride}, ${tracksTable.album}, ''), coalesce(${tracksTable.discNumberOverride}, ${tracksTable.discNumber}, 0), coalesce(${tracksTable.trackNumberOverride}, ${tracksTable.trackNumber}, 0), ${tracksTable.id})`;
-  const cursorSortKey = sql`(select coalesce(c."artistOverride", c.artist, ''), coalesce(c."albumOverride", c.album, ''), coalesce(c."discNumberOverride", c."discNumber", 0), coalesce(c."trackNumberOverride", c."trackNumber", 0), c.id from "Tracks" c where c.id = ${cursorId})`;
+  const sortKey = sql`(coalesce(${tracksTable.artistOverride}, ${tracksTable.artist}, ''), coalesce(${tracksTable.albumOverride}, ${tracksTable.album}, ''), coalesce(${tracksTable.discNumberOverride}, ${tracksTable.discNumber}, 0), coalesce(${tracksTable.trackNumberOverride}, ${tracksTable.trackNumber}, 0), ${tracksTable.file}, ${tracksTable.id})`;
+  const cursorSortKey = sql`(select coalesce(c."artistOverride", c.artist, ''), coalesce(c."albumOverride", c.album, ''), coalesce(c."discNumberOverride", c."discNumber", 0), coalesce(c."trackNumberOverride", c."trackNumber", 0), c.file, c.id from "Tracks" c where c.id = ${cursorId})`;
 
   const where = cursorId
     ? isBackward
@@ -110,7 +110,7 @@ export async function tracks(
     : undefined;
 
   const direction = isBackward ? sql`desc` : sql`asc`;
-  const orderBy = sql`coalesce(${tracksTable.artistOverride}, ${tracksTable.artist}, '') ${direction}, coalesce(${tracksTable.albumOverride}, ${tracksTable.album}, '') ${direction}, coalesce(${tracksTable.discNumberOverride}, ${tracksTable.discNumber}, 0) ${direction}, coalesce(${tracksTable.trackNumberOverride}, ${tracksTable.trackNumber}, 0) ${direction}, ${tracksTable.id} ${direction}`;
+  const orderBy = sql`coalesce(${tracksTable.artistOverride}, ${tracksTable.artist}, '') ${direction}, coalesce(${tracksTable.albumOverride}, ${tracksTable.album}, '') ${direction}, coalesce(${tracksTable.discNumberOverride}, ${tracksTable.discNumber}, 0) ${direction}, coalesce(${tracksTable.trackNumberOverride}, ${tracksTable.trackNumber}, 0) ${direction}, ${tracksTable.file} ${direction}, ${tracksTable.id} ${direction}`;
 
   const rows = await db
     .select()
