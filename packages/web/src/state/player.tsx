@@ -298,14 +298,18 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       const contentType = contentTypeFor(actual);
       setActualFormat(actual);
 
-      const created = await createPlayer(audio, resolvePlaybackUrl(track.url), contentType, {
-        onError: (err) => setError({ message: errorMessageFor(err) }),
-      });
-      if (!created) return;
-      playerRef.current = created;
-
       const meta = readFragment(PlaybackBarDocument, track);
       const totalSeconds = meta.duration.seconds;
+
+      const created = await createPlayer(
+        audio,
+        resolvePlaybackUrl(track.url),
+        contentType,
+        totalSeconds,
+        { onError: (err) => setError({ message: errorMessageFor(err) }) },
+      );
+      if (!created) return;
+      playerRef.current = created;
 
       manifestUnsubRef.current = subscribe(
         TrackManifestDocument,
@@ -362,7 +366,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     const player = playerRef.current;
     if (!audio || !player) return;
     setPositionSeconds(seconds);
-    await player.seekTo(seconds);
+    player.seekTo(seconds);
     await audio.play().catch(() => undefined);
   }, []);
 
