@@ -53,7 +53,9 @@ test('init-only buffer: timescale is read from moov, no chunks yet', () => {
   expect(r.init).toBeNull(); // no moof yet → init end unknown
   expect(r.timescale).toBe(TS);
   expect(r.chunks).toEqual([]);
-  expect(r.resumeOffset).toBe(buf.length);
+  // No moof yet, so the init range isn't known — rewind to 0 to re-scan from the start once the
+  // first fragment lands, rather than advancing past the moov and losing the init forever.
+  expect(r.resumeOffset).toBe(0);
 });
 
 test('second moof finalises the first fragment with a tfdt-delta rawDuration', () => {

@@ -197,6 +197,13 @@ function scan(buf: Buffer, baseOffset: number, isFinal: boolean): ScanResult {
       // Park the cursor at the in-progress fragment so the next call re-observes its `moof` (and `tfdt`) and can finalise it when a subsequent `moof` arrives.
       resumeOffset = pendingMoofOffset;
     }
+  } else if (baseOffset === 0 && !isFinal) {
+    // We've read the init region (`ftyp`/`moov`) but no `moof` has landed yet, so `firstMoofOffset`
+    // — and therefore the init byte range — is still unknown. `init` is only ever emitted on a
+    // `baseOffset === 0` scan, so advancing the cursor past the `moov` here would lose the init
+    // segment permanently (the symptom: opus/flac tracks whose init never gets appended and so
+    // never decode). Rewind to 0 to re-scan from the start once the first fragment is written.
+    resumeOffset = 0;
   }
   return { init, timescale, chunks, resumeOffset };
 }
