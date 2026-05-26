@@ -211,18 +211,19 @@ describe('real flac-in-mp4 fixture', () => {
   test('durations come from real tfdt deltas — uneven, not a flat nominal value', () => {
     const r = mp4Scanner.scan(bytes, 0, true);
     const ts = r.timescale!;
-    const withDuration = r.chunks.slice(0, -1);
-    expect(withDuration.every((c) => c.rawDuration !== null)).toBe(true);
-    expect(r.chunks.at(-1)!.rawDuration).toBeNull();
+    // Every fragment carries a real duration, including the trailing one (recovered from its
+    // own trun sample durations rather than left null to fall back to nominal).
+    expect(r.chunks.every((c) => c.rawDuration !== null)).toBe(true);
 
-    const seconds = withDuration.map((c) => c.rawDuration! / ts);
+    const seconds = r.chunks.map((c) => c.rawDuration! / ts);
     // Regression guard: the fragment durations are NOT all the nominal 0.2 s — that uniform
     // assumption is exactly the drift that broke seeking on long lossless tracks.
     expect(seconds.every((s) => Math.abs(s - FRAG_SECONDS) < 1e-6)).toBe(false);
-    // Cumulative tfdt (sum of deltas) is the start of the trailing fragment, inside the 1 s source.
+    // Summed durations cover the whole 1.0 s source — the trailing fragment's real (short)
+    // remainder is included, so the manifest's total matches the audio that actually decodes.
     const cumulative = seconds.reduce((a, b) => a + b, 0);
-    expect(cumulative).toBeGreaterThan(0.3);
-    expect(cumulative).toBeLessThan(1.0);
+    expect(cumulative).toBeGreaterThan(0.95);
+    expect(cumulative).toBeLessThanOrEqual(1.0 + 1e-6);
   });
 
   test('two-slice scan yields the same chunks as a single pass (live-tail resumption)', () => {
