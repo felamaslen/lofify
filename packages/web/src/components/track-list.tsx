@@ -98,6 +98,9 @@ export function TrackList() {
       const from = Math.min(anchorRef.current, index);
       const to = Math.max(anchorRef.current, index);
       setSelected(new Set(edges.slice(from, to + 1).map((edge) => edge.node.id)));
+      // The browser extends a text selection from the prior click's caret on
+      // shift-click; drop it so range-selecting rows doesn't highlight text.
+      window.getSelection()?.removeAllRanges();
       return;
     }
     if (e.metaKey || e.ctrlKey) {
@@ -223,7 +226,10 @@ export function TrackList() {
                     role="row"
                     aria-selected={isSelected}
                     onMouseDown={(e) => {
-                      if (e.detail >= 2) e.preventDefault();
+                      // Suppress the browser's native text-selection on
+                      // double-click and shift-click (range select); plain
+                      // click-and-drag selection is left untouched.
+                      if (e.detail >= 2 || e.shiftKey) e.preventDefault();
                     }}
                     onClick={(e) => selectRow(e, virtualRow.index, edge.node.id)}
                     onContextMenu={() => {
