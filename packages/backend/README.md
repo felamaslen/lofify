@@ -81,7 +81,7 @@ the resolver runs.
 
 ### Playback
 
-`GET /play/:signature/q:<l|m|h|max>/f:<opus|mp3>/:id`
+`GET /play/:signature/q:<min|l|m|h|max>/f:<opus|mp3>/:id`
 
 Range-based playback over a single encoded `.bin` per `(track, format,
 quality)`. The URL is produced by `Track.url(format: TrackFormat)` and
@@ -97,7 +97,7 @@ Target resolution:
 | --------- | -------------- | -------------------------------------- |
 | `MAX`     | lossless       | `audio/mp4; codecs="flac"` (passthrough for flac sources, re-encode for ape/alac/wv/etc.) |
 | `MAX`     | lossy          | highest lossy preset in `formatLossy`  |
-| `LOW`/`MEDIUM`/`HIGH` | any | lossy preset in `formatLossy`          |
+| `MIN`/`LOW`/`MEDIUM`/`HIGH` | any | lossy preset in `formatLossy`    |
 
 Each `(track, format, quality)` maps to one cache entry under
 `PLAYBACK_CACHE_DIR/<trackId>-<sourceMtimeMs>/<targetKey>.{bin,idx}`.

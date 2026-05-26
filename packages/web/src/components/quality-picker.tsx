@@ -14,6 +14,7 @@ const CHOICES: { value: Quality; label: string }[] = [
   { value: 'HIGH', label: 'High' },
   { value: 'MEDIUM', label: 'Medium' },
   { value: 'LOW', label: 'Low' },
+  { value: 'MIN', label: 'Min' },
 ];
 
 const MAX_TOOLTIP_FLAC_OK =

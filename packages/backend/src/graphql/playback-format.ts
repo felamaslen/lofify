@@ -3,11 +3,12 @@
  */
 
 /**
- * Coarse playback quality. `LOW` / `MEDIUM` / `HIGH` map to lossy presets; `MAX` asks for lossless when the source is lossless and the highest lossy preset (in `formatLossy`) when it isn't.
+ * Coarse playback quality. `MIN` / `LOW` / `MEDIUM` / `HIGH` map to lossy presets in ascending bitrate; `MAX` asks for lossless when the source is lossless and the highest lossy preset (in `formatLossy`) when it isn't.
  *
  * @gqlEnum
  */
 export enum Quality {
+  MIN = 'MIN',
   LOW = 'LOW',
   MEDIUM = 'MEDIUM',
   HIGH = 'HIGH',

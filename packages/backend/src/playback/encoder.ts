@@ -72,18 +72,14 @@ export interface FfmpegHandle {
 }
 
 function opusBitrateKbps(q: Quality): number {
-  return { LOW: 64, MEDIUM: 128, HIGH: 192, MAX: 256 }[q];
+  return { MIN: 16, LOW: 64, MEDIUM: 128, HIGH: 192, MAX: 256 }[q];
 }
 
 function mp3BitrateKbps(q: Quality): number {
-  return { LOW: 128, MEDIUM: 192, HIGH: 256, MAX: 320 }[q];
+  return { MIN: 64, LOW: 128, MEDIUM: 192, HIGH: 256, MAX: 320 }[q];
 }
 
-function mp4CodecArgs(
-  codec: 'opus' | 'flac',
-  quality: Quality,
-  passthrough: boolean,
-): string[] {
+function mp4CodecArgs(codec: 'opus' | 'flac', quality: Quality, passthrough: boolean): string[] {
   switch (codec) {
     case 'opus':
       return [
@@ -102,9 +98,7 @@ function mp4CodecArgs(
         '48000',
       ];
     case 'flac':
-      return passthrough
-        ? ['-c:a', 'copy']
-        : ['-c:a', 'flac', '-compression_level', '5'];
+      return passthrough ? ['-c:a', 'copy'] : ['-c:a', 'flac', '-compression_level', '5'];
   }
 }
 

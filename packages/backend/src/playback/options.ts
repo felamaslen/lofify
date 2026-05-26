@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { FormatLossy, Quality } from '../graphql/playback-format.js';
 
 const QUALITY_TO_URL = {
+  [Quality.MIN]: 'min',
   [Quality.LOW]: 'l',
   [Quality.MEDIUM]: 'm',
   [Quality.HIGH]: 'h',
@@ -37,7 +38,7 @@ const OptionsSchema = z.object({
 export type ParsedOptions = z.infer<typeof OptionsSchema>;
 
 /**
- * Parse the option segments of a `/play/...` URL. The grammar is `q:<l|m|h|max>` and `f:<opus|mp3>`, in any order — both are required. Returns `null` if a key repeats, an unknown key appears, a value is outside the supported set, or a required key is missing.
+ * Parse the option segments of a `/play/...` URL. The grammar is `q:<min|l|m|h|max>` and `f:<opus|mp3>`, in any order — both are required. Returns `null` if a key repeats, an unknown key appears, a value is outside the supported set, or a required key is missing.
  */
 export function parseOptionSegments(segments: string[]): ParsedOptions | null {
   let quality: Quality | undefined;

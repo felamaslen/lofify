@@ -104,7 +104,7 @@ export function defaultFormatLossy(caps: Capabilities = capabilities): FormatLos
 }
 
 const QUALITY_STORAGE_KEY = 'lofify.player.quality';
-const QUALITY_VALUES: readonly Quality[] = ['MAX', 'HIGH', 'MEDIUM', 'LOW'];
+const QUALITY_VALUES: readonly Quality[] = ['MAX', 'HIGH', 'MEDIUM', 'LOW', 'MIN'];
 const FORMAT_STORAGE_KEY = 'lofify.player.format-lossy';
 const FORMAT_VALUES: readonly FormatLossy[] = ['OPUS', 'MP3'];
 

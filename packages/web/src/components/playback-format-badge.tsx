@@ -1,4 +1,4 @@
-import { Gem, Wifi, WifiHigh, WifiLow } from 'lucide-react';
+import { Gem, Wifi, WifiHigh, WifiLow, WifiZero } from 'lucide-react';
 import type { ComponentType, SVGProps } from 'react';
 
 import { type ActualFormat, type Quality, usePlayer } from '../state/player.tsx';
@@ -19,11 +19,12 @@ const FORMAT_LABEL: Record<ActualFormat, string> = {
   mp3: 'MP3',
 };
 
-// Lucide's wifi family has four levels (full → zero). With three lossy tiers we map high/medium/low onto the upper three so "low" still shows a visible arc rather than the bare dot.
+// Lucide's wifi family has four levels (full → zero). The four lossy tiers map one-to-one onto them, descending: high → full, medium, low, min → the bare dot.
 const LOSSY_TIER_ICON: Record<Exclude<Quality, 'MAX'>, IconComponent> = {
   HIGH: Wifi,
   MEDIUM: WifiHigh,
   LOW: WifiLow,
+  MIN: WifiZero,
 };
 
 function badgeFor(quality: Quality, actual: ActualFormat | null): BadgeShape | null {

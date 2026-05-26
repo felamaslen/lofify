@@ -77,7 +77,7 @@ export function getSchema(): GraphQLSchema {
         }
     });
     const QualityType: GraphQLEnumType = new GraphQLEnumType({
-        description: "Coarse playback quality. `LOW` / `MEDIUM` / `HIGH` map to lossy presets; `MAX` asks for lossless when the source is lossless and the highest lossy preset (in `formatLossy`) when it isn't.",
+        description: "Coarse playback quality. `MIN` / `LOW` / `MEDIUM` / `HIGH` map to lossy presets in ascending bitrate; `MAX` asks for lossless when the source is lossless and the highest lossy preset (in `formatLossy`) when it isn't.",
         name: "Quality",
         values: {
             HIGH: {
@@ -91,6 +91,9 @@ export function getSchema(): GraphQLSchema {
             },
             MEDIUM: {
                 value: "MEDIUM"
+            },
+            MIN: {
+                value: "MIN"
             }
         }
     });
