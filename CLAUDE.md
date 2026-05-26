@@ -15,7 +15,7 @@ without being reminded.
 ## Style
 
 - British English in all prose (code, comments, docs, commit messages).
-- Default to writing no code comments. Only add one when the *why* is
+- Default to writing no code comments. Only add one when the _why_ is
   non-obvious.
 - JSDoc paragraph rule: no newlines inside a JSDoc comment except to
   separate paragraphs. Applies to both Drizzle and GraphQL schemas.
@@ -51,7 +51,6 @@ without being reminded.
   `queries.ts`). Each operation and fragment is bound to a JS const
   suffixed `Document`; the GraphQL operation/fragment name itself does
   **not** carry the suffix (`const PlaybackBarDocument = graphql(\`fragment PlaybackBar on Track { ... }\`)`).
-  Each consumer declares a fragment with exactly the fields it needs and
-  reads them via `readFragment(FragmentDocument, ref)` — never use
-  `@_unmask`. Parent documents compose by spreading the child fragments
-  and listing them as dependencies in the `graphql()` second argument.
+Each consumer declares a fragment with exactly the fields it needs and
+reads them via `readFragment(FragmentDocument, ref)`— never use`@\_unmask`. Parent documents compose by spreading the child fragments
+and listing them as dependencies in the `graphql()` second argument.

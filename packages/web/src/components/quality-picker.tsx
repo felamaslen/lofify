@@ -1,12 +1,6 @@
 import { capabilities } from '../lib/capabilities.ts';
 import { type Quality, usePlayer } from '../state/player.tsx';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from './ui/select.tsx';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select.tsx';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip.tsx';
 
 const CHOICES: { value: Quality; label: string }[] = [

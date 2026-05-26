@@ -165,4 +165,3 @@ test('listening to update events sees chunks land as the encoder produces them',
   // Final observed count matches the final idx.
   expect(observedChunkCounts.at(-1)).toBe(entry.index.chunks.length);
 });
-

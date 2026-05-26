@@ -4,7 +4,7 @@
  * Per-chunk duration comes from the real media timeline, not a nominal constant: the timescale is read from the init segment's `mdhd`, and each fragment's `tfdt` (track-fragment base-media-decode-time) gives its start. A fragment's `rawDuration` is `tfdt[next] - tfdt[this]`. ffmpeg's `-frag_duration` only cuts on frame boundaries, so fragments overshoot the nominal duration (notably for FLAC's large frames); reading the true `tfdt` keeps the manifest's time axis aligned with the bytes, which is what seeking relies on. The trailing fragment has no next `tfdt`, so its duration is recovered from its own `trun` sample durations (the last fragment is usually a short remainder, far below nominal — getting this right is what lets the player detect end-of-track); `rawDuration` is `null` only when no `trun`/`tfhd` timing can be parsed, and the driver then falls back to the nominal duration.
  */
 
-import type { ChunkRange, ScannedChunk, Scanner,ScanResult } from './scan-types.js';
+import type { ChunkRange, ScannedChunk, Scanner, ScanResult } from './scan-types.js';
 
 type BoxHeader = { type: string; size: number; headerSize: number };
 

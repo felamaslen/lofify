@@ -1,4 +1,4 @@
-import { type Span,SpanStatusCode, trace } from '@opentelemetry/api';
+import { type Span, SpanStatusCode, trace } from '@opentelemetry/api';
 import chokidar, { type FSWatcher } from 'chokidar';
 
 import { logger } from '../logger.js';

@@ -6,8 +6,9 @@
 import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, GraphQLInt, specifiedDirectives, GraphQLObjectType, GraphQLString, GraphQLID, GraphQLBoolean, GraphQLInputObjectType, GraphQLEnumType, GraphQLList, GraphQLFloat } from "graphql";
 import { libraryScan as queryLibraryScanResolver, libraryScanCancel as mutationLibraryScanCancelResolver, libraryScanStart as mutationLibraryScanStartResolver, libraryScanSubscription as subscriptionLibraryScanResolver } from "./../library-scan.js";
 import { ping as queryPingResolver, noop as mutationNoopResolver } from "./../root.js";
-import { url as trackUrlResolver } from "./../track.js";
+import { path as trackPathResolver, url as trackUrlResolver } from "./../track.js";
 import { track as queryTrackResolver, tracks as queryTracksResolver } from "./../track-queries.js";
+import { trackUpdate as mutationTrackUpdateResolver } from "./../track-mutations.js";
 import { trackManifestSubscription as subscriptionTrackManifestResolver } from "./../track-manifest.js";
 export function getSchema(): GraphQLSchema {
     const LibraryScanType: GraphQLObjectType = new GraphQLObjectType({
@@ -147,6 +148,14 @@ export function getSchema(): GraphQLSchema {
                     description: "Whether the source file is a lossless format (flac, alac, wav, etc.).",
                     name: "isLossless",
                     type: new GraphQLNonNull(GraphQLBoolean)
+                },
+                path: {
+                    description: "Absolute path to the source file on disk. Primarily a fallback label for tracks that carry no title tag.",
+                    name: "path",
+                    type: new GraphQLNonNull(GraphQLString),
+                    resolve(source) {
+                        return trackPathResolver(source);
+                    }
                 },
                 sourceFormat: {
                     description: "Source codec of the file on disk, lower-cased, e.g. `\"flac\"`, `\"alac\"`, `\"mp3\"`, `\"opus\"`.",
@@ -348,6 +357,37 @@ export function getSchema(): GraphQLSchema {
                     type: new GraphQLNonNull(VoidType),
                     resolve() {
                         return mutationNoopResolver();
+                    }
+                },
+                trackUpdate: {
+                    description: "Override one or more tags on a single track. Each supplied tag is stored as an override that takes precedence over the value read from the file on disk and survives rescans \u2014 the scanner never touches it.\n\nOmit an argument to leave its current override untouched; pass an explicit `null` to clear the override and fall back to the scanned tag.\n\nThrows when no track with the given id exists.",
+                    name: "trackUpdate",
+                    type: new GraphQLNonNull(TrackType),
+                    args: {
+                        album: {
+                            type: GraphQLString
+                        },
+                        artist: {
+                            type: GraphQLString
+                        },
+                        discNumber: {
+                            type: GraphQLInt
+                        },
+                        id: {
+                            type: new GraphQLNonNull(GraphQLID)
+                        },
+                        title: {
+                            type: GraphQLString
+                        },
+                        trackNumber: {
+                            type: GraphQLInt
+                        },
+                        year: {
+                            type: GraphQLString
+                        }
+                    },
+                    resolve(_source, args) {
+                        return mutationTrackUpdateResolver(args.id, args.title, args.trackNumber, args.discNumber, args.artist, args.album, args.year);
                     }
                 }
             };

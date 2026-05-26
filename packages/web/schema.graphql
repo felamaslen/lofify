@@ -68,6 +68,14 @@ type Mutation {
   libraryScanStart: LibraryScan!
   """Does nothing."""
   noop: Void!
+  """
+  Override one or more tags on a single track. Each supplied tag is stored as an override that takes precedence over the value read from the file on disk and survives rescans — the scanner never touches it.
+  
+  Omit an argument to leave its current override untouched; pass an explicit `null` to clear the override and fall back to the scanned tag.
+  
+  Throws when no track with the given id exists.
+  """
+  trackUpdate(album: String, artist: String, discNumber: Int, id: ID!, title: String, trackNumber: Int, year: String): Track!
 }
 
 """Boundary metadata for a `TrackConnection`."""
@@ -138,6 +146,10 @@ type Track {
   id: ID!
   """Whether the source file is a lossless format (flac, alac, wav, etc.)."""
   isLossless: Boolean!
+  """
+  Absolute path to the source file on disk. Primarily a fallback label for tracks that carry no title tag.
+  """
+  path: String!
   """
   Source codec of the file on disk, lower-cased, e.g. `"flac"`, `"alac"`, `"mp3"`, `"opus"`.
   """

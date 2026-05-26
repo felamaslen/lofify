@@ -3,17 +3,12 @@
 // the source so gql.tada / graphqlsp can type-check operations.
 
 import { writeFile } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const url =
-  process.env.SCHEMA_URL ?? 'http://localhost:4000/graphql/schema.graphql';
+const url = process.env.SCHEMA_URL ?? 'http://localhost:4000/graphql/schema.graphql';
 
-const dest = resolve(
-  dirname(fileURLToPath(import.meta.url)),
-  '..',
-  'schema.graphql',
-);
+const dest = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'schema.graphql');
 
 const res = await fetch(url);
 if (!res.ok) {

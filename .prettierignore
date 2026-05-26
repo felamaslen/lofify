@@ -4,3 +4,9 @@
 **/target
 **/*.generated.ts
 pnpm-lock.yaml
+
+# Code-generator output — kept in its generator's own formatting, never
+# reflowed by Prettier (mirrors the ESLint `**/__generated__/**` ignore).
+**/__generated__
+packages/web/schema.graphql
+packages/web/src/graphql-env.d.ts

@@ -106,11 +106,56 @@ async function seed(rows: Seed[]) {
 
 test('Query.tracks paginates forward in artist/album/disc/track order', async () => {
   await seed([
-    { artist: 'B', album: 'B1', discNumber: 1, trackNumber: 1, title: 'b1-1', format: 'mp3', codec: 'mp3', durationSeconds: 100 },
-    { artist: 'A', album: 'A2', discNumber: 1, trackNumber: 1, title: 'a2-1', format: 'mp3', codec: 'mp3', durationSeconds: 100 },
-    { artist: 'A', album: 'A1', discNumber: 2, trackNumber: 1, title: 'a1-2-1', format: 'mp3', codec: 'mp3', durationSeconds: 100 },
-    { artist: 'A', album: 'A1', discNumber: 1, trackNumber: 2, title: 'a1-1-2', format: 'mp3', codec: 'mp3', durationSeconds: 100 },
-    { artist: 'A', album: 'A1', discNumber: 1, trackNumber: 1, title: 'a1-1-1', format: 'mp3', codec: 'mp3', durationSeconds: 100 },
+    {
+      artist: 'B',
+      album: 'B1',
+      discNumber: 1,
+      trackNumber: 1,
+      title: 'b1-1',
+      format: 'mp3',
+      codec: 'mp3',
+      durationSeconds: 100,
+    },
+    {
+      artist: 'A',
+      album: 'A2',
+      discNumber: 1,
+      trackNumber: 1,
+      title: 'a2-1',
+      format: 'mp3',
+      codec: 'mp3',
+      durationSeconds: 100,
+    },
+    {
+      artist: 'A',
+      album: 'A1',
+      discNumber: 2,
+      trackNumber: 1,
+      title: 'a1-2-1',
+      format: 'mp3',
+      codec: 'mp3',
+      durationSeconds: 100,
+    },
+    {
+      artist: 'A',
+      album: 'A1',
+      discNumber: 1,
+      trackNumber: 2,
+      title: 'a1-1-2',
+      format: 'mp3',
+      codec: 'mp3',
+      durationSeconds: 100,
+    },
+    {
+      artist: 'A',
+      album: 'A1',
+      discNumber: 1,
+      trackNumber: 1,
+      title: 'a1-1-1',
+      format: 'mp3',
+      codec: 'mp3',
+      durationSeconds: 100,
+    },
   ]);
 
   const { data: first } = await gqlRequest(app)
@@ -145,10 +190,46 @@ test('Query.tracks paginates forward in artist/album/disc/track order', async ()
 
 test('Query.tracks paginates backward with last/before', async () => {
   await seed([
-    { artist: 'A', album: 'A1', discNumber: 1, trackNumber: 1, title: 't1', format: 'mp3', codec: 'mp3', durationSeconds: 60 },
-    { artist: 'A', album: 'A1', discNumber: 1, trackNumber: 2, title: 't2', format: 'mp3', codec: 'mp3', durationSeconds: 60 },
-    { artist: 'A', album: 'A1', discNumber: 1, trackNumber: 3, title: 't3', format: 'mp3', codec: 'mp3', durationSeconds: 60 },
-    { artist: 'A', album: 'A1', discNumber: 1, trackNumber: 4, title: 't4', format: 'mp3', codec: 'mp3', durationSeconds: 60 },
+    {
+      artist: 'A',
+      album: 'A1',
+      discNumber: 1,
+      trackNumber: 1,
+      title: 't1',
+      format: 'mp3',
+      codec: 'mp3',
+      durationSeconds: 60,
+    },
+    {
+      artist: 'A',
+      album: 'A1',
+      discNumber: 1,
+      trackNumber: 2,
+      title: 't2',
+      format: 'mp3',
+      codec: 'mp3',
+      durationSeconds: 60,
+    },
+    {
+      artist: 'A',
+      album: 'A1',
+      discNumber: 1,
+      trackNumber: 3,
+      title: 't3',
+      format: 'mp3',
+      codec: 'mp3',
+      durationSeconds: 60,
+    },
+    {
+      artist: 'A',
+      album: 'A1',
+      discNumber: 1,
+      trackNumber: 4,
+      title: 't4',
+      format: 'mp3',
+      codec: 'mp3',
+      durationSeconds: 60,
+    },
   ]);
 
   const { data: tail } = await gqlRequest(app)
@@ -171,7 +252,17 @@ test('Query.tracks paginates backward with last/before', async () => {
 test('Query.track returns derived format/duration and a signed url', async () => {
   const id = '01934567-89ab-7cde-8123-456789abcdef';
   await seed([
-    { id, artist: 'A', album: 'A1', discNumber: 1, trackNumber: 1, title: 'only', format: 'ogg', codec: 'vorbis', durationSeconds: 332 },
+    {
+      id,
+      artist: 'A',
+      album: 'A1',
+      discNumber: 1,
+      trackNumber: 1,
+      title: 'only',
+      format: 'ogg',
+      codec: 'vorbis',
+      durationSeconds: 332,
+    },
   ]);
 
   const { data: single } = await gqlRequest(app)
@@ -206,7 +297,16 @@ test('Query.track returns null when id is unknown', async () => {
 
 test('Track.url rejects quality values outside the Quality enum', async () => {
   await seed([
-    { artist: 'A', album: 'A1', discNumber: 1, trackNumber: 1, title: 'only', format: 'mp3', codec: 'mp3', durationSeconds: 60 },
+    {
+      artist: 'A',
+      album: 'A1',
+      discNumber: 1,
+      trackNumber: 1,
+      title: 'only',
+      format: 'mp3',
+      codec: 'mp3',
+      durationSeconds: 60,
+    },
   ]);
   const { data: list } = await gqlRequest(app)
     .query(TracksQuery)
@@ -220,4 +320,47 @@ test('Track.url rejects quality values outside the Quality enum', async () => {
     .variables({ id, format: { quality: 'ULTRA' as 'LOW', formatLossy: 'OPUS' } })
     .expectErrors();
   expect(errors[0]?.message).toMatch(/Quality/);
+});
+
+const TracksPathQuery = graphql(`
+  query TracksPath {
+    tracks(first: 100) {
+      edges {
+        node {
+          title
+          path
+        }
+      }
+    }
+  }
+`);
+
+test('Query.tracks orders untagged tracks by file path and exposes Track.path', async () => {
+  await db.insert(tracks).values(
+    ['/library/c.mp3', '/library/a.mp3', '/library/b.mp3'].map((file) => ({
+      title: null,
+      trackNumber: null,
+      discNumber: null,
+      artist: null,
+      album: null,
+      year: null,
+      format: 'mp3',
+      codec: 'mp3',
+      bitRate: null,
+      sampleRate: 44_100,
+      isLossless: false,
+      file,
+      sizeBytes: 1024,
+      durationSeconds: 60,
+      sourceMtime: new Date(0),
+    })),
+  );
+
+  const { data } = await gqlRequest(app).query(TracksPathQuery).expectNoErrors();
+  expect(data.tracks!.edges.map((e) => e.node.path)).toEqual([
+    '/library/a.mp3',
+    '/library/b.mp3',
+    '/library/c.mp3',
+  ]);
+  expect(data.tracks!.edges.every((e) => e.node.title === null)).toBe(true);
 });

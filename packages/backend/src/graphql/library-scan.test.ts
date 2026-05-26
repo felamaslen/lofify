@@ -181,6 +181,55 @@ test('Query.libraryScan is null when no scan has run', async () => {
   expect(data.libraryScan).toBeNull();
 });
 
+const TrackUpdateMutation = graphql(`
+  mutation TrackUpdate($id: ID!, $title: String) {
+    trackUpdate(id: $id, title: $title) {
+      id
+    }
+  }
+`);
+
+const TrackTitleQuery = graphql(`
+  query TrackTitle($id: ID!) {
+    track(id: $id) {
+      title
+    }
+  }
+`);
+
+const FirstTrackQuery = graphql(`
+  query FirstTrack {
+    tracks(first: 1) {
+      edges {
+        node {
+          id
+        }
+      }
+    }
+  }
+`);
+
+test('a rescan preserves a tag override set between scans', async () => {
+  await copyFile(path.join(fixturesDir, 'sample.mp3'), path.join(env.LIBRARY_PATH, 'song.mp3'));
+
+  const { data: first } = await gqlRequest(app).mutate(LibraryScanStartMutation).expectNoErrors();
+  await drainScanStream(first.libraryScanStart.id);
+
+  const { data: listed } = await gqlRequest(app).query(FirstTrackQuery).expectNoErrors();
+  const id = listed.tracks!.edges[0]!.node.id;
+
+  await gqlRequest(app)
+    .mutate(TrackUpdateMutation)
+    .variables({ id, title: 'My Override' })
+    .expectNoErrors();
+
+  const { data: second } = await gqlRequest(app).mutate(LibraryScanStartMutation).expectNoErrors();
+  await drainScanStream(second.libraryScanStart.id);
+
+  const { data } = await gqlRequest(app).query(TrackTitleQuery).variables({ id }).expectNoErrors();
+  expect(data.track!.title).toBe('My Override');
+});
+
 test('Query.libraryScan exposes the in-progress scan and the completed scan within its grace period', async () => {
   await copyFile(path.join(fixturesDir, 'sample.mp3'), path.join(env.LIBRARY_PATH, 'one.mp3'));
 

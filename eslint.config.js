@@ -49,7 +49,7 @@ export default [
     },
   },
   {
-    files: ['*.mjs'],
+    files: ['*.mjs', '**/scripts/*.mjs'],
     languageOptions: {
       globals: { ...globals.node },
     },

@@ -86,8 +86,7 @@ export async function tracks(
     throw new Error('Pass either `first` or `last`, not both.');
   }
   const isBackward = last != null;
-  const limit =
-    clampLimit(isBackward ? last : first) ?? DEFAULT_PAGE_SIZE;
+  const limit = clampLimit(isBackward ? last : first) ?? DEFAULT_PAGE_SIZE;
 
   const cursorId = isBackward ? before : after;
   if (cursorId) {
@@ -101,8 +100,8 @@ export async function tracks(
     }
   }
 
-  const sortKey = sql`(coalesce(${tracksTable.artist}, ''), coalesce(${tracksTable.album}, ''), coalesce(${tracksTable.discNumber}, 0), coalesce(${tracksTable.trackNumber}, 0), ${tracksTable.id})`;
-  const cursorSortKey = sql`(select coalesce(c.artist, ''), coalesce(c.album, ''), coalesce(c."discNumber", 0), coalesce(c."trackNumber", 0), c.id from "Tracks" c where c.id = ${cursorId})`;
+  const sortKey = sql`(coalesce(${tracksTable.artistOverride}, ${tracksTable.artist}, ''), coalesce(${tracksTable.albumOverride}, ${tracksTable.album}, ''), coalesce(${tracksTable.discNumberOverride}, ${tracksTable.discNumber}, 0), coalesce(${tracksTable.trackNumberOverride}, ${tracksTable.trackNumber}, 0), ${tracksTable.file}, ${tracksTable.id})`;
+  const cursorSortKey = sql`(select coalesce(c."artistOverride", c.artist, ''), coalesce(c."albumOverride", c.album, ''), coalesce(c."discNumberOverride", c."discNumber", 0), coalesce(c."trackNumberOverride", c."trackNumber", 0), c.file, c.id from "Tracks" c where c.id = ${cursorId})`;
 
   const where = cursorId
     ? isBackward
@@ -111,7 +110,7 @@ export async function tracks(
     : undefined;
 
   const direction = isBackward ? sql`desc` : sql`asc`;
-  const orderBy = sql`coalesce(${tracksTable.artist}, '') ${direction}, coalesce(${tracksTable.album}, '') ${direction}, coalesce(${tracksTable.discNumber}, 0) ${direction}, coalesce(${tracksTable.trackNumber}, 0) ${direction}, ${tracksTable.id} ${direction}`;
+  const orderBy = sql`coalesce(${tracksTable.artistOverride}, ${tracksTable.artist}, '') ${direction}, coalesce(${tracksTable.albumOverride}, ${tracksTable.album}, '') ${direction}, coalesce(${tracksTable.discNumberOverride}, ${tracksTable.discNumber}, 0) ${direction}, coalesce(${tracksTable.trackNumberOverride}, ${tracksTable.trackNumber}, 0) ${direction}, ${tracksTable.file} ${direction}, ${tracksTable.id} ${direction}`;
 
   const rows = await db
     .select()
@@ -129,9 +128,7 @@ export async function tracks(
     cursor: row.id,
   }));
 
-  const totalRow = await db
-    .select({ count: sql<number>`count(*)::int` })
-    .from(tracksTable);
+  const totalRow = await db.select({ count: sql<number>`count(*)::int` }).from(tracksTable);
   const totalCount = totalRow[0]?.count ?? 0;
 
   return {

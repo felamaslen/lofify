@@ -12,7 +12,7 @@ Types: `feat`, `fix`, `refactor`, `perf`, `docs`, `test`, `build`, `ci`,
 `chore`, `style`, `revert`. Scopes are monorepo packages (`backend`,
 `ui`) or areas (`db`, `infra`, `plan`).
 
-Body (optional, blank line after subject, ~72 char wrap): explain *why*
+Body (optional, blank line after subject, ~72 char wrap): explain _why_
 when non-obvious. Don't narrate the diff. Skip for trivial commits.
 
 ```
