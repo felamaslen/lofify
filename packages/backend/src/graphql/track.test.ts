@@ -61,10 +61,10 @@ const TrackQuery = graphql(`
 `);
 
 const TrackUrlQuery = graphql(`
-  query TrackUrl($id: ID!, $quality: Quality) {
+  query TrackUrl($id: ID!, $format: TrackFormat) {
     track(id: $id) {
       id
-      url(quality: $quality)
+      url(format: $format)
     }
   }
 `);
@@ -182,16 +182,17 @@ test('Query.track returns derived format/duration and a signed url', async () =>
   expect(t.format).toBe('ogg vorbis');
   expect(t.duration).toEqual({ seconds: 332, formatted: '05:32' });
 
+  // Default url() with no format yields the canonical q:max/f:opus path.
   expect(t.url).toMatchInlineSnapshot(
-    `"/play/be5ca606a3a5d4d82dbe6a389d521e03f983bff315b2546866e46fabc43aab59/01934567-89ab-7cde-8123-456789abcdef"`,
+    `"/play/5daebd929253c90023440fa891febcdd1ce4604e4b2236cc82e4603e9a17a425/q:max/f:opus/01934567-89ab-7cde-8123-456789abcdef"`,
   );
 
   const { data: signed } = await gqlRequest(app)
     .query(TrackUrlQuery)
-    .variables({ id, quality: 'HIGH' })
+    .variables({ id, format: { quality: 'HIGH', formatLossy: 'MP3' } })
     .expectNoErrors();
   expect(signed.track!.url).toMatchInlineSnapshot(
-    `"/play/e0c61ae825a37abdb003210bab97b5c0fbff7d28a295c4b95852946d238edd8f/q:h/01934567-89ab-7cde-8123-456789abcdef"`,
+    `"/play/b3d71a400093a5a9a8e3e1db5ebd59c5a9640161adc8a7b2c0681422563d1506/q:h/f:mp3/01934567-89ab-7cde-8123-456789abcdef"`,
   );
 });
 
@@ -216,7 +217,7 @@ test('Track.url rejects quality values outside the Quality enum', async () => {
   const { errors } = await gqlRequest(app)
     .query(TrackUrlQuery)
     // Cast around gql.tada's literal-union typing so we can exercise the schema rejection at runtime.
-    .variables({ id, quality: 'ULTRA' as 'LOW' })
+    .variables({ id, format: { quality: 'ULTRA' as 'LOW', formatLossy: 'OPUS' } })
     .expectErrors();
   expect(errors[0]?.message).toMatch(/Quality/);
 });

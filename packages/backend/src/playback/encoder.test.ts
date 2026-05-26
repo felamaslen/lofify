@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { Quality } from '../graphql/track.js';
 import { type EncodeTarget,spawnEncoder, targetKey } from './encoder.js';
 import { makeMp3Scanner } from './scan-mp3.js';
 import { makeMp4Scanner } from './scan-mp4.js';
@@ -23,7 +24,7 @@ afterEach(async () => {
 
 test('opus-in-mp4 from flac source: writes a single fragmented mp4 the mp4 scanner can walk', async () => {
   const out = path.join(workDir, 'opus.bin');
-  const target: EncodeTarget = { format: { container: 'mp4', codec: 'opus' }, quality: 'medium' };
+  const target: EncodeTarget = { format: { container: 'mp4', codec: 'opus' }, quality: Quality.MEDIUM };
   const handle = spawnEncoder({
     source: SAMPLE_FLAC,
     target,
@@ -42,7 +43,7 @@ test('opus-in-mp4 from flac source: writes a single fragmented mp4 the mp4 scann
 
 test('flac-in-mp4 passthrough from flac source: yields a copy-muxed fmp4', async () => {
   const out = path.join(workDir, 'flac.bin');
-  const target: EncodeTarget = { format: { container: 'mp4', codec: 'flac' }, quality: 'max' };
+  const target: EncodeTarget = { format: { container: 'mp4', codec: 'flac' }, quality: Quality.MAX };
   const handle = spawnEncoder({
     source: SAMPLE_FLAC,
     target,
@@ -61,7 +62,7 @@ test('flac-in-mp4 passthrough from flac source: yields a copy-muxed fmp4', async
 
 test('mp3 from flac source: writes a frame stream the mp3 scanner can walk', async () => {
   const out = path.join(workDir, 'mp3.bin');
-  const target: EncodeTarget = { format: { container: 'mp3', codec: 'mp3' }, quality: 'medium' };
+  const target: EncodeTarget = { format: { container: 'mp3', codec: 'mp3' }, quality: Quality.MEDIUM };
   const handle = spawnEncoder({
     source: SAMPLE_FLAC,
     target,
@@ -82,7 +83,7 @@ test('mp3 from flac source: writes a frame stream the mp3 scanner can walk', asy
 
 test('mp3 passthrough from mp3 source: copy-muxes without re-encoding', async () => {
   const out = path.join(workDir, 'mp3-copy.bin');
-  const target: EncodeTarget = { format: { container: 'mp3', codec: 'mp3' }, quality: 'medium' };
+  const target: EncodeTarget = { format: { container: 'mp3', codec: 'mp3' }, quality: Quality.MEDIUM };
   const handle = spawnEncoder({
     source: SAMPLE_MP3,
     target,
@@ -101,7 +102,7 @@ test('kill() terminates the encoder and resolves done without throwing', async (
   const out = path.join(workDir, 'killed.bin');
   const handle = spawnEncoder({
     source: SAMPLE_FLAC,
-    target: { format: { container: 'mp4', codec: 'opus' }, quality: 'medium' },
+    target: { format: { container: 'mp4', codec: 'opus' }, quality: Quality.MEDIUM },
     outPath: out,
     chunkDurationSeconds: 0.2,
   });
@@ -111,12 +112,12 @@ test('kill() terminates the encoder and resolves done without throwing', async (
 
 test('targetKey() produces a stable filesystem-safe key per (codec, quality)', () => {
   expect(
-    targetKey({ format: { container: 'mp4', codec: 'opus' }, quality: 'high' }),
+    targetKey({ format: { container: 'mp4', codec: 'opus' }, quality: Quality.HIGH }),
   ).toBe('f-opus_q-high');
   expect(
-    targetKey({ format: { container: 'mp4', codec: 'flac' }, quality: 'max' }),
+    targetKey({ format: { container: 'mp4', codec: 'flac' }, quality: Quality.MAX }),
   ).toBe('f-flac_q-max');
   expect(
-    targetKey({ format: { container: 'mp3', codec: 'mp3' }, quality: 'low' }),
+    targetKey({ format: { container: 'mp3', codec: 'mp3' }, quality: Quality.LOW }),
   ).toBe('f-mp3_q-low');
 });

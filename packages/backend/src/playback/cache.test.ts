@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { Quality } from '../graphql/track.js';
 import { type Cache, createCache } from './cache.js';
 import { targetKey } from './encoder.js';
 
@@ -47,7 +48,7 @@ function flacReq(): Parameters<Cache['getOrStart']>[0] {
     sourceMtime: FLAC_MTIME,
     sourcePath: SAMPLE_FLAC,
     sourceCodec: 'flac',
-    target: { format: { container: 'mp4', codec: 'opus' }, quality: 'medium' },
+    target: { format: { container: 'mp4', codec: 'opus' }, quality: Quality.MEDIUM },
   };
 }
 
@@ -130,7 +131,7 @@ test('different targets for the same track land in distinct cache entries', asyn
   const opus = await cache.getOrStart(flacReq());
   const flac = await cache.getOrStart({
     ...flacReq(),
-    target: { format: { container: 'mp4', codec: 'flac' }, quality: 'max' },
+    target: { format: { container: 'mp4', codec: 'flac' }, quality: Quality.MAX },
   });
   expect(opus.binPath).not.toBe(flac.binPath);
   await opus.waitForEncoded(Number.POSITIVE_INFINITY);

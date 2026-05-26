@@ -25,26 +25,11 @@ const Schema = z.object({
   /** HMAC secret used to sign and verify playback URLs. */
   PLAYBACK_SIGNING_SECRET: z.string().default('dev-secret'),
 
-  /** Maximum number of concurrent ffmpeg transcode processes. */
+  /** Maximum number of concurrent ffmpeg encode processes. */
   TRANSCODE_MAX_PARALLEL: z.coerce.number().int().positive().default(12),
-
-  /** Soft upper bound on bytes held in the in-memory transcode cache. */
-  TRANSCODE_CACHE_MAX_BYTES: z.coerce.number().int().positive().default(1_073_741_824),
-
-  /** How long a cached transcode survives after its last access. */
-  TRANSCODE_CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(3600),
-
-  /** Scratch directory where ffmpeg writes per-track DASH chunk output. Each cached transcode owns a subdirectory `${trackId}__${target}/` containing `init.mp4` + `chunk-NNNNN.m4s` (opus) or `chunk-NNNNN.mp3`. Override to point at a tmpfs mount in containerised environments. */
-  TRANSCODE_TMPDIR: z.string().optional(),
 
   /** Persistent directory where the unified per-entry cache writes `<trackId>-<mtimeMs>/<targetKey>.{bin,idx}`. Survives process restarts; the `.idx` sidecar is the durable manifest. Defaults to `${os.tmpdir()}/lofify-cache`. */
   PLAYBACK_CACHE_DIR: z.string().optional(),
-
-  /** Persistent directory where pre-baked flac re-encodes of lossless non-flac sources are written. Unlike `TRANSCODE_TMPDIR`, the contents are meant to outlive process restarts. Defaults to `${os.tmpdir()}/lofify-bakes`. */
-  TRANSCODE_BAKE_DIR: z.string().optional(),
-
-  /** Maximum number of concurrent flac-bake ffmpeg processes. Kept separate from `TRANSCODE_MAX_PARALLEL` so that background bakes can't starve live playback transcodes. */
-  TRANSCODE_BAKE_PARALLEL: z.coerce.number().int().positive().default(1),
 
   /** Absolute path to the built web client (`vite build` output). When unset, defaults to the workspace's `packages/web/dist`. The backend serves these as a catch-all SPA route when the directory exists. */
   WEB_DIST_PATH: z.string().optional(),

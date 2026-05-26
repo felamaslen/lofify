@@ -1,310 +1,147 @@
+/**
+ * Range-based playback route. The client GETs `/play/<signature>/<options...>/<id>` with a `Range: bytes=…` header (issued from chunk byte ranges it learns from the `trackManifest` GraphQL subscription); the server resolves the encode target from `<options>`, ensures the cache entry is started, waits until the underlying `.bin` covers the requested range, and streams those bytes back as a `206 Partial Content`.
+ *
+ * Non-range requests are supported as a convenience for ad-hoc clients (curl, audio elements that don't speak MSE): the server waits for the whole encode to finish, then serves the full `.bin` with `200 OK` + `Content-Length`.
+ */
+
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import parseRange from 'range-parser';
 
 import { db } from '../db/client.js';
-import type { Track as DbTrack } from '../db/schema/index.js';
 import { tracks as tracksTable } from '../db/schema/index.js';
-import { bakeFileExists, bakePath, enqueueBake } from './bake.js';
-import { type ParsedOptions, parseOptionSegments } from './options.js';
+import type { CacheEntry } from './cache.js';
+import { defaultCache } from './cache.js';
+import { parseOptionSegments } from './options.js';
+import { contentTypeFor, resolveTarget } from './resolve.js';
 import { verifySignature } from './sign.js';
-import {
-  chunkLayout,
-  getOrStartTranscodeJob,
-  jobCacheKey,
-  readChunkFile,
-  SEGMENT_DURATION_SECONDS,
-  type TranscodeJob,
-  type TranscodeTarget,
-  waitForChunks,
-} from './transcode.js';
 
-/** Delivery-format identifiers used during Accept-header negotiation. */
-export type DeliveryFormat = 'flac' | 'mpeg' | 'mp4';
-
-const ACCEPT_MAP: Record<string, DeliveryFormat> = {
-  'audio/flac': 'flac',
-  'audio/mpeg': 'mpeg',
-  'audio/mp4': 'mp4',
-};
-
-// Order in which a wildcard (audio/* or */*) expands. flac comes first so plain
-// `<audio src=url>` playback (which sends Accept: */*) gets passthrough on
-// lossless sources.
-const WILDCARD_EXPANSION: readonly DeliveryFormat[] = ['flac', 'mp4', 'mpeg'];
-
-/**
- * Parse an Accept header into an ordered, de-duped list of supported delivery formats.
- *
- * Returns `null` if any media type is outside the supported set, or if the header is empty/missing. Standard wildcards expand to all three supported formats — that's what bare `<audio>` elements send when they fetch the playback URL directly, and rejecting them would force every consumer to inject a header.
- */
-export function parseAcceptHeader(header: string | undefined | null): DeliveryFormat[] | null {
-  if (!header) return null;
-  const parts = header.split(',').map((s) => s.trim()).filter(Boolean);
-  if (parts.length === 0) return null;
-  const seen = new Set<DeliveryFormat>();
-  const out: DeliveryFormat[] = [];
-  const push = (fmt: DeliveryFormat): void => {
-    if (!seen.has(fmt)) {
-      seen.add(fmt);
-      out.push(fmt);
-    }
-  };
-  for (const part of parts) {
-    // Strip any media-type parameters (e.g. `;q=0.9`) — we don't honour quality weighting; ordering is enough.
-    const mime = part.split(';')[0]!.trim().toLowerCase();
-    if (mime === '*/*' || mime === 'audio/*') {
-      for (const fmt of WILDCARD_EXPANSION) push(fmt);
-      continue;
-    }
-    const fmt = ACCEPT_MAP[mime];
-    if (!fmt) return null;
-    push(fmt);
-  }
-  return out;
-}
-
-export function contentTypeFor(format: DeliveryFormat): string {
-  switch (format) {
-    case 'flac':
-      return 'audio/flac';
-    case 'mpeg':
-      return 'audio/mpeg';
-    case 'mp4':
-      return 'audio/mp4; codecs="opus"';
-  }
-}
-
-export type ResolvedTarget =
-  | { kind: 'passthrough'; sourcePath: string; contentType: string }
-  | { kind: 'transcode'; target: TranscodeTarget; contentType: string };
-
-/**
- * Pick a delivery target given the source track, signed options, and the client's accepted formats.
- *
- * Setting any `q:*` on the URL is the client's signal that it wants a lossy encode at exactly that quality — `audio/flac` in `Accept` is ignored on that path (the first non-flac accept entry is used as the container instead). A q-less URL is the only way to get flac: flac passthrough when the source is flac, an already-baked flac cache when the source is lossless-non-flac, and otherwise the lossy fallback at `max` quality.
- *
- * For lossless-non-flac sources with a cold cache, this resolver triggers the bake and *waits* for it to finish before serving flac. The GraphQL resolver shields normal clients from that stall by minting `q:M` URLs in the cold-cache case; this branch only fires on hand-crafted URLs.
- */
-export async function resolveTarget(track: DbTrack, opts: ParsedOptions, accepts: DeliveryFormat[]): Promise<ResolvedTarget> {
-  if (opts.quality != null) {
-    // q-present URL: lock to lossy regardless of what `Accept` says.
-    const nonFlac = accepts.find((a) => a !== 'flac');
-    if (!nonFlac) throw new Error('unreachable: flac-only Accept on q-present URL');
-    return {
-      kind: 'transcode',
-      target: encodeTarget(nonFlac, opts.quality),
-      contentType: contentTypeFor(nonFlac),
-    };
-  }
-  const sourceIsFlac = track.format.toLowerCase() === 'flac';
-  if (accepts.includes('flac')) {
-    if (sourceIsFlac) {
-      return { kind: 'passthrough', sourcePath: track.file, contentType: contentTypeFor('flac') };
-    }
-    if (track.isLossless) {
-      const cachePath = bakePath(track.id, track.sourceMtime);
-      if (!(await bakeFileExists(track.id, track.sourceMtime))) {
-        // Cold cache, hand-crafted URL path: trigger and block until the bake
-        // finishes. The resolver doesn't normally mint this combo — it picks
-        // q:M instead — so the latency is bounded to whoever's poking at the
-        // URL directly.
-        await enqueueBake(track.id, track.file, track.sourceMtime);
-      }
-      return { kind: 'passthrough', sourcePath: cachePath, contentType: contentTypeFor('flac') };
-    }
-    const fallback = accepts.find((a) => a !== 'flac');
-    if (!fallback) throw new Error('unreachable: flac-only Accept');
-    return {
-      kind: 'transcode',
-      target: encodeTarget(fallback, 'max'),
-      contentType: contentTypeFor(fallback),
-    };
-  }
-  const fmt = accepts[0]!;
-  return { kind: 'transcode', target: encodeTarget(fmt, 'medium'), contentType: contentTypeFor(fmt) };
-}
-
-function encodeTarget(fmt: DeliveryFormat, quality: 'low' | 'medium' | 'high' | 'max'): TranscodeTarget {
-  if (fmt === 'flac') throw new Error('flac is passthrough-only');
-  return fmt === 'mp4'
-    ? { format: { container: 'mp4', codec: 'opus' }, quality }
-    : { format: { container: 'mp3', codec: 'mp3' }, quality };
-}
-
+/** Parse a Range header. Supports `bytes=START-END` and `bytes=START-` (open-ended). Returns `null` for malformed or suffix-byte (`bytes=-N`) forms, which clients shouldn't be sending against incomplete media. */
 function parseRangeHeader(
   header: string | undefined,
-  size: number,
-): { start: number; end: number } | null {
-  if (!header) return null;
-  const ranges = parseRange(size, header, { combine: true });
-  if (!Array.isArray(ranges) || ranges.type !== 'bytes' || ranges.length === 0) return null;
-  const { start, end } = ranges[0]!;
+): { start: number; end: number | null } | null {
+  if (!header || !header.startsWith('bytes=')) return null;
+  const spec = header.slice(6).split(',')[0]?.trim();
+  if (!spec) return null;
+  const m = /^(\d+)-(\d*)$/.exec(spec);
+  if (!m) return null;
+  const start = Number(m[1]);
+  const end = m[2] === '' ? null : Number(m[2]);
+  if (end !== null && end < start) return null;
   return { start, end };
 }
 
-async function sendPassthrough(
-  req: FastifyRequest,
-  reply: FastifyReply,
-  sourcePath: string,
-  contentType: string,
-): Promise<void> {
-  const st = await stat(sourcePath);
-  const total = st.size;
-
-  reply.header('Accept-Ranges', 'bytes');
-  reply.header('Content-Type', contentType);
-
-  if (req.method === 'HEAD') {
-    reply.code(200);
-    reply.header('Content-Length', String(total));
-    return reply.send();
-  }
-
-  const range = parseRangeHeader(req.headers.range, total);
-
-  if (range) {
-    const length = range.end - range.start + 1;
-    reply.code(206);
-    reply.header('Content-Range', `bytes ${range.start}-${range.end}/${total}`);
-    reply.header('Content-Length', String(length));
-    return reply.send(createReadStream(sourcePath, { start: range.start, end: range.end }));
-  }
-  reply.code(200);
-  reply.header('Content-Length', String(total));
-  return reply.send(createReadStream(sourcePath));
-}
-
-function parseSegIndex(value: string | null): number | null {
-  if (value == null) return 0;
-  if (!/^\d+$/.test(value)) return null;
-  const n = Number(value);
-  if (!Number.isInteger(n) || n < 0) return null;
-  return n;
-}
-
-function chunkFileName(target: TranscodeTarget, segIndex: number): string {
-  const { ext } = chunkLayout(target);
-  // The DASH muxer numbers media segments from 1; the mp3 segment muxer numbers from 0. Normalise both to the 0-indexed external API by adjusting here.
-  const onDiskIndex = target.format.container === 'mp4' ? segIndex + 1 : segIndex;
-  return `chunk-${String(onDiskIndex).padStart(5, '0')}.${ext}`;
-}
-
-async function sendTranscodeChunk(
-  req: FastifyRequest,
-  reply: FastifyReply,
-  track: DbTrack,
-  target: TranscodeTarget,
-  contentType: string,
-  segRaw: string | null,
-): Promise<void> {
-  const segCount = Math.max(1, Math.ceil(track.durationSeconds / SEGMENT_DURATION_SECONDS));
-  const { init: initName } = chunkLayout(target);
-
-  const setMetaHeaders = (job: TranscodeJob | null): void => {
-    reply.header('Content-Type', contentType);
-    reply.header('X-Lofify-Segments', String(segCount));
-    reply.header('X-Lofify-Segment-Duration', String(SEGMENT_DURATION_SECONDS));
-    reply.header('X-Lofify-Duration', String(track.durationSeconds));
-    reply.header('X-Lofify-Ready-Chunks', String(job?.readyChunks ?? 0));
-    reply.header(
-      'Access-Control-Expose-Headers',
-      'X-Lofify-Segments, X-Lofify-Segment-Duration, X-Lofify-Duration, X-Lofify-Ready-Chunks',
-    );
+/** Wait until the cache entry's `.bin` has reached at least `atLeast` bytes, or the encoder has finished (in which case the returned size may be smaller — caller's job to detect range-past-EOF). Rejects if the encoder errored. */
+async function waitForBinSize(entry: CacheEntry, atLeast: number): Promise<number> {
+  const check = async (): Promise<number | null> => {
+    const err = entry.error();
+    if (err) throw err;
+    const st = await stat(entry.binPath).catch(() => null);
+    if (st && st.size >= atLeast) return st.size;
+    if (entry.isDone()) return st?.size ?? 0;
+    return null;
   };
+  const initial = await check();
+  if (initial !== null) return initial;
+  return new Promise((resolve, reject) => {
+    const cleanup = (): void => {
+      entry.emitter.off('update', onWake);
+      entry.emitter.off('error', onError);
+    };
+    const onWake = (): void => {
+      check().then(
+        (size) => {
+          if (size !== null) {
+            cleanup();
+            resolve(size);
+          }
+        },
+        (err: unknown) => {
+          cleanup();
+          reject(err instanceof Error ? err : new Error(String(err)));
+        },
+      );
+    };
+    const onError = (err: unknown): void => {
+      cleanup();
+      reject(err instanceof Error ? err : new Error(String(err)));
+    };
+    entry.emitter.on('update', onWake);
+    entry.emitter.on('error', onError);
+  });
+}
 
-  if (req.method === 'HEAD') {
-    const job = await getOrStartTranscodeJob(jobCacheKey(track.id, target), track.file, target);
-    setMetaHeaders(job);
-    reply.code(200);
-    return reply.send();
-  }
-
-  const segIndex = parseSegIndex(segRaw);
-  if (segIndex == null) {
-    reply.code(400);
-    return reply.send({ error: 'invalid seg' });
-  }
-  if (segIndex >= segCount) {
-    reply.code(404);
-    return reply.send({ error: 'seg out of range' });
-  }
-
-  const job = await getOrStartTranscodeJob(jobCacheKey(track.id, target), track.file, target);
-  // For webm, on-disk index = segIndex + 1; for mp3 the indexes match. `waitForChunks` counts files irrespective of numbering, so the lower bound is the same.
-  await waitForChunks(job, segIndex + 1);
-  if (job.error) {
-    reply.code(500);
-    return reply.send({ error: job.error.message });
-  }
-  if (segIndex >= job.readyChunks) {
-    reply.code(404);
-    return reply.send({ error: 'chunk past end-of-track' });
-  }
-
-  let buf: Buffer;
+async function serveRange(
+  req: FastifyRequest,
+  reply: FastifyReply,
+  entry: CacheEntry,
+  contentType: string,
+  range: { start: number; end: number | null },
+): Promise<void> {
+  // For an open-ended range we just need the next byte after `start`; for a closed range we need bytes through `end` inclusive.
+  const minNeeded = range.end !== null ? range.end + 1 : range.start + 1;
+  let size: number;
   try {
-    const chunk = await readChunkFile(job, chunkFileName(target, segIndex));
-    if (initName && segIndex === 0) {
-      // The first chunk must be preceded by the init segment (fMP4 moov / WebM init) so the SourceBuffer learns the codec parameters; mp3 doesn't have one (every frame is self-describing).
-      const init = await readChunkFile(job, initName);
-      buf = Buffer.concat([init, chunk]);
-    } else {
-      buf = chunk;
-    }
+    size = await waitForBinSize(entry, minNeeded);
   } catch (err) {
     reply.code(500);
-    return reply.send({ error: err instanceof Error ? err.message : 'chunk read failed' });
+    return reply.send({ error: err instanceof Error ? err.message : 'encoder error' });
   }
+  if (range.start >= size) {
+    reply.code(416);
+    if (entry.isDone()) reply.header('Content-Range', `bytes */${size}`);
+    return reply.send({ error: 'range not satisfiable' });
+  }
+  const end = Math.min(range.end ?? size - 1, size - 1);
+  reply.code(206);
+  reply.header('Content-Type', contentType);
+  reply.header('Content-Range', `bytes ${range.start}-${end}/${entry.isDone() ? size : '*'}`);
+  reply.header('Content-Length', String(end - range.start + 1));
+  return reply.send(createReadStream(entry.binPath, { start: range.start, end }));
+}
 
-  setMetaHeaders(job);
+async function serveFull(
+  _req: FastifyRequest,
+  reply: FastifyReply,
+  entry: CacheEntry,
+  contentType: string,
+): Promise<void> {
+  try {
+    await entry.waitForEncoded(Number.POSITIVE_INFINITY);
+  } catch (err) {
+    reply.code(500);
+    return reply.send({ error: err instanceof Error ? err.message : 'encoder error' });
+  }
+  const st = await stat(entry.binPath);
   reply.code(200);
-  reply.header('Content-Length', String(buf.length));
-  reply.header('Cache-Control', 'private, max-age=3600');
-  return reply.send(buf);
+  reply.header('Content-Type', contentType);
+  reply.header('Content-Length', String(st.size));
+  return reply.send(createReadStream(entry.binPath));
 }
 
 export async function registerPlaybackRoute(app: FastifyInstance): Promise<void> {
   const handler = async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
     const params = req.params as { signature: string; '*': string };
-    const { signature } = params;
     const rest = params['*'] ?? '';
     const segments = rest.split('/').filter((s) => s !== '');
     if (segments.length === 0) {
       reply.code(404);
       return reply.send({ error: 'missing track id' });
     }
+    const id = segments[segments.length - 1]!;
+    const optionSegments = segments.slice(0, -1);
+    const payload = segments.join('/');
 
-    const last = segments[segments.length - 1]!;
-    const segRaw = /^\d+$/.test(last) && segments.length >= 2 ? last : null;
-    const idSegments = segRaw == null ? segments : segments.slice(0, -1);
-    const id = idSegments[idSegments.length - 1]!;
-    const optionSegments = idSegments.slice(0, -1);
-    const payload = idSegments.join('/');
-
-    if (!verifySignature(payload, signature)) {
+    if (!verifySignature(payload, params.signature)) {
       reply.code(403);
       return reply.send({ error: 'invalid signature' });
     }
-
     const opts = parseOptionSegments(optionSegments);
     if (opts == null) {
       reply.code(400);
       return reply.send({ error: 'invalid options' });
-    }
-
-    const acceptHeader = req.headers.accept;
-    const accepts = parseAcceptHeader(typeof acceptHeader === 'string' ? acceptHeader : undefined);
-    if (!accepts) {
-      reply.code(406);
-      return reply.send({ error: 'missing or unsupported Accept header' });
-    }
-    if (accepts.includes('flac') && accepts.length === 1) {
-      reply.code(406);
-      return reply.send({ error: 'audio/flac must be paired with at least one fallback format' });
     }
 
     const rows = await db.select().from(tracksTable).where(eq(tracksTable.id, id)).limit(1);
@@ -314,12 +151,34 @@ export async function registerPlaybackRoute(app: FastifyInstance): Promise<void>
       return reply.send({ error: 'unknown track' });
     }
 
-    const resolved = await resolveTarget(track, opts, accepts);
-    if (resolved.kind === 'passthrough') {
-      return sendPassthrough(req, reply, resolved.sourcePath, resolved.contentType);
+    const target = resolveTarget(track, opts);
+    const entry = await defaultCache.getOrStart({
+      trackId: track.id,
+      sourceMtime: track.sourceMtime,
+      sourcePath: track.file,
+      sourceCodec: track.codec.toLowerCase(),
+      target,
+    });
+
+    const contentType = contentTypeFor(target);
+    reply.header('Accept-Ranges', 'bytes');
+
+    if (req.method === 'HEAD') {
+      reply.code(200);
+      reply.header('Content-Type', contentType);
+      if (entry.isDone()) {
+        const st = await stat(entry.binPath);
+        reply.header('Content-Length', String(st.size));
+      }
+      return reply.send();
     }
-    return sendTranscodeChunk(req, reply, track, resolved.target, resolved.contentType, segRaw);
+
+    const range = parseRangeHeader(req.headers.range as string | undefined);
+    if (range) {
+      return serveRange(req, reply, entry, contentType, range);
+    }
+    return serveFull(req, reply, entry, contentType);
   };
 
-  app.get('/play/:signature/*', handler);
+  app.route({ method: ['GET', 'HEAD'], url: '/play/:signature/*', handler });
 }

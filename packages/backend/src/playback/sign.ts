@@ -1,12 +1,10 @@
 import crypto from 'node:crypto';
 
 import { env } from '../env.js';
-import { type ParsedOptions, qualityToChar } from './options.js';
+import { formatLossyToToken, type ParsedOptions, qualityToToken } from './options.js';
 
 function encodeOptionsSegments(opts: ParsedOptions): string[] {
-  const parts: string[] = [];
-  if (opts.quality != null) parts.push(`q:${qualityToChar(opts.quality)}`);
-  return parts;
+  return [`q:${qualityToToken(opts.quality)}`, `f:${formatLossyToToken(opts.formatLossy)}`];
 }
 
 export function signPayload(payload: string): string {
@@ -14,9 +12,7 @@ export function signPayload(payload: string): string {
 }
 
 export function signPlaybackUrl(id: string, opts: ParsedOptions): string {
-  const segments = encodeOptionsSegments(opts);
-  segments.push(id);
-  const payload = segments.join('/');
+  const payload = [...encodeOptionsSegments(opts), id].join('/');
   return `/play/${signPayload(payload)}/${payload}`;
 }
 

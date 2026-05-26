@@ -3,12 +3,12 @@
  * Do not manually edit. Regenerate by running `npx grats`.
  */
 
-import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, GraphQLInt, specifiedDirectives, GraphQLObjectType, GraphQLString, GraphQLID, GraphQLBoolean, GraphQLEnumType, GraphQLList } from "graphql";
+import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, GraphQLInt, specifiedDirectives, GraphQLObjectType, GraphQLString, GraphQLID, GraphQLBoolean, GraphQLInputObjectType, GraphQLEnumType, GraphQLList, GraphQLFloat } from "graphql";
 import { libraryScan as queryLibraryScanResolver, libraryScanCancel as mutationLibraryScanCancelResolver, libraryScanStart as mutationLibraryScanStartResolver, libraryScanSubscription as subscriptionLibraryScanResolver } from "./../library-scan.js";
 import { ping as queryPingResolver, noop as mutationNoopResolver } from "./../root.js";
 import { url as trackUrlResolver } from "./../track.js";
 import { track as queryTrackResolver, tracks as queryTracksResolver } from "./../track-queries.js";
-import { transcodeProgressSubscription as subscriptionTranscodeProgressResolver } from "./../transcode-progress.js";
+import { trackManifestSubscription as subscriptionTrackManifestResolver } from "./../track-manifest.js";
 export function getSchema(): GraphQLSchema {
     const LibraryScanType: GraphQLObjectType = new GraphQLObjectType({
         name: "LibraryScan",
@@ -64,8 +64,20 @@ export function getSchema(): GraphQLSchema {
             };
         }
     });
+    const FormatLossyType: GraphQLEnumType = new GraphQLEnumType({
+        description: "Codec the lossy delivery path uses.",
+        name: "FormatLossy",
+        values: {
+            MP3: {
+                value: "MP3"
+            },
+            OPUS: {
+                value: "OPUS"
+            }
+        }
+    });
     const QualityType: GraphQLEnumType = new GraphQLEnumType({
-        description: "Coarse delivery quality the client requests for an encoded stream. `MAX` is server-internal \u2014 clients ask for it implicitly by including `audio/flac` in their `Accept` header, not via this enum.",
+        description: "Coarse playback quality. `LOW` / `MEDIUM` / `HIGH` map to lossy presets; `MAX` asks for lossless when the source is lossless and the highest lossy preset (in `formatLossy`) when it isn't.",
         name: "Quality",
         values: {
             HIGH: {
@@ -74,9 +86,28 @@ export function getSchema(): GraphQLSchema {
             LOW: {
                 value: "LOW"
             },
+            MAX: {
+                value: "MAX"
+            },
             MEDIUM: {
                 value: "MEDIUM"
             }
+        }
+    });
+    const TrackFormatType: GraphQLInputObjectType = new GraphQLInputObjectType({
+        description: "How the client wants the track delivered. `formatLossy` is always required \u2014 even when `quality: MAX`, the server falls through to a lossy stream for non-lossless sources, so it always needs a codec to fall back to.",
+        name: "TrackFormat",
+        fields() {
+            return {
+                formatLossy: {
+                    name: "formatLossy",
+                    type: new GraphQLNonNull(FormatLossyType)
+                },
+                quality: {
+                    name: "quality",
+                    type: new GraphQLNonNull(QualityType)
+                }
+            };
         }
     });
     const TrackType: GraphQLObjectType = new GraphQLObjectType({
@@ -128,17 +159,16 @@ export function getSchema(): GraphQLSchema {
                     type: GraphQLInt
                 },
                 url: {
-                    description: "Signed URL the client should `GET` to stream this track. The container format is selected at request time via the `Accept` header; the signed URL is independent of it, so a single URL can be replayed with different `Accept` values to switch formats without re-querying GraphQL.\n\nWhen the caller doesn't pin a `quality`, the resolver picks one based on the source: lossy or flac sources get a q-less URL (the client can still get flac passthrough by listing `audio/flac` in `Accept`); lossless non-flac sources with a warm flac cache also get a q-less URL; cold lossless non-flac sources get `q:M`, which pins playback to the lossy pipeline while a background bake warms the cache for the next play.",
+                    description: "Signed URL the client should `GET` (with `Range:` headers) to stream this track. The URL bakes in `format` so a single URL is reusable for the lifetime of a playback session.\n\nDefaults to `{ quality: MAX, formatLossy: OPUS }`.",
                     name: "url",
                     type: new GraphQLNonNull(GraphQLString),
                     args: {
-                        quality: {
-                            description: "Coarse delivery quality.",
-                            type: QualityType
+                        format: {
+                            type: TrackFormatType
                         }
                     },
                     resolve(source, args) {
-                        return trackUrlResolver(source, args.quality);
+                        return trackUrlResolver(source, args.format);
                     }
                 },
                 year: {
@@ -320,25 +350,76 @@ export function getSchema(): GraphQLSchema {
             };
         }
     });
-    const TranscodeProgressType: GraphQLObjectType = new GraphQLObjectType({
-        name: "TranscodeProgress",
-        description: "Snapshot of how far the server has progressed transcoding a track's playback stream. Drives the \"still encoding\" overlay in the playback bar so the client knows which seek targets are reachable.",
+    const TrackManifestChunkType: GraphQLObjectType = new GraphQLObjectType({
+        name: "TrackManifestChunk",
+        description: "One finalised chunk of the encoded stream. Clients pick the chunk whose byte range covers a target seek time by binary-searching `endSeconds`, then issue a `Range: bytes=byteStart-byteEnd-1` request against the playback URL.",
+        fields() {
+            return {
+                byteEnd: {
+                    description: "Exclusive end byte offset.",
+                    name: "byteEnd",
+                    type: new GraphQLNonNull(GraphQLFloat)
+                },
+                byteStart: {
+                    description: "Inclusive start byte offset.",
+                    name: "byteStart",
+                    type: new GraphQLNonNull(GraphQLFloat)
+                },
+                endSeconds: {
+                    description: "Cumulative encoded end time of this chunk, in seconds. Strictly increasing across the `chunks` array.",
+                    name: "endSeconds",
+                    type: new GraphQLNonNull(GraphQLFloat)
+                }
+            };
+        }
+    });
+    const TrackManifestInitType: GraphQLObjectType = new GraphQLObjectType({
+        name: "TrackManifestInit",
+        description: "Byte range of the init segment in the encoded `.bin`. Clients fetch this range first and prepend it to the SourceBuffer before appending any chunk. Null on containers that have no init segment (mp3).",
+        fields() {
+            return {
+                byteEnd: {
+                    description: "Exclusive end byte offset.",
+                    name: "byteEnd",
+                    type: new GraphQLNonNull(GraphQLFloat)
+                },
+                byteStart: {
+                    description: "Inclusive start byte offset.",
+                    name: "byteStart",
+                    type: new GraphQLNonNull(GraphQLFloat)
+                }
+            };
+        }
+    });
+    const TrackManifestType: GraphQLObjectType = new GraphQLObjectType({
+        name: "TrackManifest",
+        description: "Live manifest snapshot for a `(track, quality, format)` cache entry. Grows monotonically as the encoder produces chunks: subscribers receive an initial snapshot of whatever's ready, then a fresh snapshot whenever the index changes, terminating with `done: true`.",
         fields() {
             return {
                 chunkDurationSeconds: {
-                    description: "Duration of a single transcode chunk, in seconds. Constant for the lifetime of the subscription.",
+                    description: "Nominal chunk duration the encoder is configured for, in seconds. Actual `endSeconds` deltas may run a few % longer (mp3 windows close on the next frame boundary after crossing the threshold).",
                     name: "chunkDurationSeconds",
-                    type: new GraphQLNonNull(GraphQLInt)
+                    type: new GraphQLNonNull(GraphQLFloat)
                 },
-                isDone: {
-                    description: "True once ffmpeg has finished (successfully or not). After this the snapshot is final.",
-                    name: "isDone",
+                chunks: {
+                    description: "Finalised chunks, in order.",
+                    name: "chunks",
+                    type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(TrackManifestChunkType)))
+                },
+                done: {
+                    description: "True once the encoder has finished and the trailing chunk has been emitted. After this, no more snapshots will arrive.",
+                    name: "done",
                     type: new GraphQLNonNull(GraphQLBoolean)
                 },
-                readyChunks: {
-                    description: "Number of equal-duration chunks that have been written to the transcode cache so far. Multiply by `chunkDurationSeconds` to get the seconds-ready cursor.",
-                    name: "readyChunks",
-                    type: new GraphQLNonNull(GraphQLInt)
+                durationSeconds: {
+                    description: "Cumulative encoded duration so far, equal to `chunks[last].endSeconds` or `0` when no chunks have landed yet.",
+                    name: "durationSeconds",
+                    type: new GraphQLNonNull(GraphQLFloat)
+                },
+                init: {
+                    description: "Init-segment byte range. `null` for mp3, and `null` for fmp4 until the first fragment boundary has been observed.",
+                    name: "init",
+                    type: TrackManifestInitType
                 }
             };
         }
@@ -363,25 +444,22 @@ export function getSchema(): GraphQLSchema {
                         return payload;
                     }
                 },
-                transcodeProgress: {
-                    description: "Stream progress snapshots of the transcode that backs a given `(trackId, quality, Accept)` playback stream. Pass the same `Accept` header value the client will send to `/play/...` \u2014 the server resolves it to the same transcode job key, so the subscription observes the actual encoder the player is consuming.\n\nEmits at most once per second while the transcode is running, then yields a final snapshot when it finishes. Passthrough streams (`audio/flac` accepted on a flac source) yield a single `isDone: true` snapshot.",
-                    name: "transcodeProgress",
-                    type: new GraphQLNonNull(TranscodeProgressType),
+                trackManifest: {
+                    description: "Stream manifest snapshots for `(trackId, quality, format)`. The same `(quality, format)` values the client baked into its signed playback URL drive cache-entry selection on the server, so the manifest describes exactly the bytes the playback route will serve.\n\nEmits at most once per second while the encoder runs, then a final snapshot when it finishes. For already-warm cache entries (or for tracks served by passthrough) the subscription emits a single `done: true` snapshot and completes.",
+                    name: "trackManifest",
+                    type: new GraphQLNonNull(TrackManifestType),
                     args: {
-                        acceptHeaderValue: {
-                            description: "The exact value the client will send in the `Accept` header on `/play/...` \u2014 may be a comma-separated list. Defaults to `audio/mp4` if omitted.",
-                            type: GraphQLString
-                        },
-                        quality: {
-                            description: "One of `low`, `medium`, `high`.",
-                            type: GraphQLString
+                        format: {
+                            description: "Same `(quality, formatLossy)` the client baked into its signed playback URL.",
+                            type: new GraphQLNonNull(TrackFormatType)
                         },
                         trackId: {
+                            description: "Track id.",
                             type: new GraphQLNonNull(GraphQLID)
                         }
                     },
                     subscribe(_source, args) {
-                        return subscriptionTranscodeProgressResolver(args);
+                        return subscriptionTrackManifestResolver(args);
                     },
                     resolve(payload) {
                         return payload;
@@ -407,6 +485,6 @@ export function getSchema(): GraphQLSchema {
         query: QueryType,
         mutation: MutationType,
         subscription: SubscriptionType,
-        types: [QualityType, DurationType, LibraryScanType, MutationType, PageInfoType, QueryType, SubscriptionType, TrackType, TrackConnectionType, TrackEdgeType, TranscodeProgressType, VoidType]
+        types: [FormatLossyType, QualityType, TrackFormatType, DurationType, LibraryScanType, MutationType, PageInfoType, QueryType, SubscriptionType, TrackType, TrackConnectionType, TrackEdgeType, TrackManifestType, TrackManifestChunkType, TrackManifestInitType, VoidType]
     });
 }

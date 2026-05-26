@@ -10,6 +10,7 @@ import { spawn } from 'node:child_process';
 import { SpanStatusCode, trace } from '@opentelemetry/api';
 
 import { env } from '../env.js';
+import type { Quality } from '../graphql/playback-format.js';
 
 const tracer = trace.getTracer('lofify.playback.encoder');
 
@@ -44,10 +45,7 @@ function release(sem: Semaphore): void {
 
 const encoderSem = makeSemaphore(() => env.TRANSCODE_MAX_PARALLEL);
 
-/** Client-facing playback quality preset. `max` is the highest-fidelity lossy preset; for lossless flac targets it's a placeholder (the codec has no quality knob). */
-export type EncodeQuality = 'low' | 'medium' | 'high' | 'max';
-
-/** Container + codec pairing the encoder is willing to produce. */
+/** Container + codec pairing the encoder is willing to produce. Internal — clients select via the GraphQL `Quality` × `FormatLossy` enums, which `resolve.ts` translates into one of these. */
 export type EncodeFormat =
   | { container: 'mp4'; codec: 'opus' }
   | { container: 'mp4'; codec: 'flac' }
@@ -55,7 +53,7 @@ export type EncodeFormat =
 
 export type EncodeTarget = {
   format: EncodeFormat;
-  quality: EncodeQuality;
+  quality: Quality;
 };
 
 export type EncoderOpts = {
@@ -73,17 +71,17 @@ export interface FfmpegHandle {
   kill(): void;
 }
 
-function opusBitrateKbps(q: EncodeQuality): number {
-  return { low: 64, medium: 128, high: 192, max: 256 }[q];
+function opusBitrateKbps(q: Quality): number {
+  return { LOW: 64, MEDIUM: 128, HIGH: 192, MAX: 256 }[q];
 }
 
-function mp3BitrateKbps(q: EncodeQuality): number {
-  return { low: 128, medium: 192, high: 256, max: 320 }[q];
+function mp3BitrateKbps(q: Quality): number {
+  return { LOW: 128, MEDIUM: 192, HIGH: 256, MAX: 320 }[q];
 }
 
 function mp4CodecArgs(
   codec: 'opus' | 'flac',
-  quality: EncodeQuality,
+  quality: Quality,
   passthrough: boolean,
 ): string[] {
   switch (codec) {
@@ -110,7 +108,7 @@ function mp4CodecArgs(
   }
 }
 
-function mp3CodecArgs(quality: EncodeQuality, passthrough: boolean): string[] {
+function mp3CodecArgs(quality: Quality, passthrough: boolean): string[] {
   return passthrough
     ? ['-c:a', 'copy']
     : ['-c:a', 'libmp3lame', '-b:a', `${mp3BitrateKbps(quality)}k`];
@@ -223,5 +221,5 @@ export function spawnEncoder(opts: EncoderOpts): FfmpegHandle {
 
 /** Cache key fragment derived from a target. Used by the cache module to build per-entry filenames. */
 export function targetKey(target: EncodeTarget): string {
-  return `f-${target.format.codec}_q-${target.quality}`;
+  return `f-${target.format.codec}_q-${target.quality.toLowerCase()}`;
 }

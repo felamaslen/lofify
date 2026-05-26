@@ -9,12 +9,13 @@ endpoint, the library scanner, and the database schema + migrations.
 src/
   app.ts        buildApp(): Fastify with /healthz, /graphql,
                 /graphql/stream. No listener bound — used by tests.
+  config.ts     Static code-level constants (chunk duration, etc.).
   graphql/      GraphQL schema (grats source) and resolvers.
   db/           Drizzle schema, migrations, and shared pg pool.
   scanner/      Library scan + chokidar watcher (in-process).
-  playback/     `/play/...` HTTP route: HMAC-signed URLs, passthrough
-                streaming with Range support, ffmpeg transcoding with a
-                bounded LRU cache and a process semaphore.
+  playback/     `/play/...` HTTP route, HMAC-signed URLs, unified
+                per-entry encoded cache (.bin + .idx live-tail), and
+                ffmpeg encoder.
   test/         Vitest behavioural tests driven by fastify.inject.
 ```
 
@@ -77,52 +78,47 @@ the resolver runs.
   [`graphql-sse`](https://github.com/enisdenjo/graphql-sse)
   (distinct-connections mode). Send a `subscription` operation with
   `Accept: text/event-stream`.
-- `GET /play/:signature/[q:<l|m|h>/]:id[/:seg]` — stream a track. The URL
-  is produced by `Track.url` and HMAC-signed with `PLAYBACK_SIGNING_SECRET`.
-  The only signed option is the quality (`q:l`, `q:m`, `q:h`, `q:M`); the
-  delivery container is negotiated at request time via the `Accept`
-  header, so a single signed URL can be replayed with different `Accept`
-  values to switch formats. Supported `Accept` entries: `audio/flac`,
-  `audio/mpeg`, `audio/mp4` (plus the standard wildcards). `audio/flac`
-  must always be paired with at least one fallback — flac alone returns
-  `406`. Resolution:
-  - Any `q:*` on the URL → lock to lossy: encode the first non-flac
-    `Accept` entry at the requested quality. `audio/flac` in `Accept` is
-    ignored on this path (q-present is the "I want lossy" signal).
-  - q-less URL, `audio/flac` accepted, flac source → passthrough (whole
-    file with `Accept-Ranges: bytes`, `Range` support,
-    `Content-Type: audio/flac`).
-  - q-less URL, `audio/flac` accepted, lossless non-flac source (e.g.
-    ape, alac) → serve the pre-baked flac at
-    `${TRANSCODE_BAKE_DIR}/${trackId}-${mtimeMs}.flac` via passthrough.
-    A missing bake is triggered and waited on inline; the GraphQL
-    resolver normally mints `q:M` for this case so clients don't stall.
-  - q-less URL, `audio/flac` accepted, lossy source → encode the first
-    non-flac `Accept` entry at the encoder's max preset.
-  - q-less URL, `audio/flac` not accepted → encode the first `Accept`
-    entry at medium.
 
-  Encoded paths kick off (or attach to) a single per-track ffmpeg job.
-  `audio/mp4` uses ffmpeg's DASH muxer with fragmented MP4 segments and
-  writes `init.mp4` + `chunk-NNNNN.m4s` (Chrome's MSE plays multi-segment
-  Opus more cleanly out of fMP4 than out of WebM); `audio/mpeg` uses the
-  segment muxer and writes standalone `chunk-NNNNN.mp3` files (no init
-  segment — every mp3 frame is self-describing). The trailing `:seg`
-  selects the 0-indexed chunk: for mp4, `seg=0` returns the init
-  concatenated with chunk 1 and `seg=N>0` returns just chunk `N+1`;
-  for mp3, `seg=N` returns chunk `N`
-  verbatim. Requests for chunks that aren't on disk yet block until
-  ffmpeg writes them. `HEAD` against the same URL returns the meta
-  headers (`X-Lofify-Segments`, `X-Lofify-Segment-Duration`,
-  `X-Lofify-Duration`, `X-Lofify-Ready-Chunks`) for the client to
-  discover the segmented-playback mode. The HMAC signature covers only
-  the `options/id` portion of the path — `:seg` is unsigned. Up to
-  `TRANSCODE_MAX_PARALLEL` ffmpeg processes run concurrently; jobs are
-  LRU-evicted (and their tmpdirs `rm`-ed) under `TRANSCODE_CACHE_*`.
-- `subscription transcodeProgress(trackId, acceptHeaderValue, quality)` — emits
-  `{ readyChunks, chunkDurationSeconds, isDone }` snapshots throttled
-  to ~1 Hz so the playback UI can clamp seeks to the encoded region
-  and overlay a "still encoding" stripe on the seek bar.
+### Playback
+
+`GET /play/:signature/q:<l|m|h|max>/f:<opus|mp3>/:id`
+
+Range-based playback over a single encoded `.bin` per `(track, format,
+quality)`. The URL is produced by `Track.url(format: TrackFormat)` and
+HMAC-signed with `PLAYBACK_SIGNING_SECRET`. The signature covers
+`q:.../f:.../id`; clients send `Range: bytes=START-END` (or
+`bytes=START-`) and the server slices the `.bin`. `HEAD` returns
+`Content-Type` + `Accept-Ranges`, plus `Content-Length` once the encode
+is complete.
+
+Target resolution:
+
+| `quality` | source         | served as                              |
+| --------- | -------------- | -------------------------------------- |
+| `MAX`     | lossless       | `audio/mp4; codecs="flac"` (passthrough for flac sources, re-encode for ape/alac/wv/etc.) |
+| `MAX`     | lossy          | highest lossy preset in `formatLossy`  |
+| `LOW`/`MEDIUM`/`HIGH` | any | lossy preset in `formatLossy`          |
+
+Each `(track, format, quality)` maps to one cache entry under
+`PLAYBACK_CACHE_DIR/<trackId>-<sourceMtimeMs>/<targetKey>.{bin,idx}`.
+The `.bin` is what the route streams from; the `.idx` is a
+live-updating JSON manifest (chunk byte ranges + cumulative
+`endSeconds`) maintained by `live-tail.ts` as ffmpeg writes.
+
+The chunk layout depends on the container — fragmented mp4 (`moof` +
+`mdat` fragments) for opus and flac, raw mp3 frame stream for mp3 — but
+the route doesn't care; it slices bytes. Up to `TRANSCODE_MAX_PARALLEL`
+ffmpeg encodes run concurrently.
+
+### Manifest subscription
+
+`subscription trackManifest(trackId, format: TrackFormat)` — streams
+manifest snapshots throttled to ~1 Hz: chunk count, cumulative
+duration, per-chunk `{ byteStart, byteEnd, endSeconds }`, optional
+init segment range, and a `done` flag. Clients use it to discover
+which byte ranges to ask the playback route for, and to map seek
+times to chunks. Already-warm cache entries emit a single `done:
+true` snapshot and complete.
 
 ## Env
 
@@ -136,10 +132,8 @@ the resolver runs.
 | `LIBRARY_PATH`                 | _required_            | Absolute path to the music library. The chokidar watcher follows it at boot. |
 | `SCAN_CONCURRENCY`             | `4`                   | Max files parsed and upserted in parallel by the scanner. |
 | `SCAN_CRON`                    | `0 2 * * *`           | Cron expression for the recurring full library scan. Empty disables. |
+| `CORS_ALLOW_ORIGINS`           | `http://localhost:5173,http://127.0.0.1:5173` | Comma-separated allowlist of browser origins. `*` allows any. |
 | `PLAYBACK_SIGNING_SECRET`      | `dev-secret`          | HMAC key used to sign and verify `/play` URLs. |
-| `TRANSCODE_MAX_PARALLEL`       | `4`                   | Maximum concurrent ffmpeg transcode processes. |
-| `TRANSCODE_CACHE_MAX_BYTES`    | `1073741824` (1 GiB)  | Soft cap on bytes held in the in-memory transcode cache. |
-| `TRANSCODE_CACHE_TTL_SECONDS`  | `3600`                | TTL after last access for cached transcodes. |
-| `TRANSCODE_TMPDIR`             | `${os.tmpdir()}/lofify-transcode` | Scratch directory for ffmpeg DASH output. Mount as tmpfs in containers (see `docker-compose.yml`). |
-| `TRANSCODE_BAKE_DIR`           | `${os.tmpdir()}/lofify-bakes`     | Persistent directory for pre-baked flac re-encodes of lossless non-flac sources. Survives restarts; point at durable storage in production. |
-| `TRANSCODE_BAKE_PARALLEL`      | `1`                   | Concurrent flac-bake ffmpeg processes. Separate from `TRANSCODE_MAX_PARALLEL` so bakes can't starve live playback. |
+| `TRANSCODE_MAX_PARALLEL`       | `12`                  | Maximum concurrent ffmpeg encode processes. |
+| `PLAYBACK_CACHE_DIR`           | `${os.tmpdir()}/lofify-cache` | Persistent root for cache entries (`<trackId>-<mtimeMs>/<targetKey>.{bin,idx}`). Survives restarts; point at durable storage in production. |
+| `WEB_DIST_PATH`                | `packages/web/dist`   | Built web client served as an SPA catch-all when present. |
