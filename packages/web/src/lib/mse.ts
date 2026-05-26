@@ -77,6 +77,14 @@ class MsePlayer implements Player {
   /** In-flight range fetches, keyed by chunk index (`-1` = init segment). */
   private pending = new Map<number, AbortController>();
   private appendQueue: Array<{ chunkIndex: number; data: Uint8Array; startSeconds: number }> = [];
+  /**
+   * Chunk index last fetched to cover an uncovered playhead, or `null`. Guards against an infinite
+   * wipe/refetch loop: fmp4 fragment decode times drift from the manifest's cumulative `endSeconds`
+   * estimate, so a seek can clamp to a `t` that `findChunkAtTime` maps to a chunk whose buffered
+   * range ends up starting just past `t` — leaving the playhead uncovered even after the right
+   * chunk lands. Reset once the playhead is covered.
+   */
+  private lastUncoveredFetch: number | null = null;
 
   constructor(
     private audio: HTMLAudioElement,
@@ -177,15 +185,27 @@ class MsePlayer implements Player {
       // very fetch that resolves this, and the next tick would re-issue it — an infinite loop.
       if (idx >= 0 && (this.pending.has(idx) || this.appendQueue.some((q) => q.chunkIndex === idx)))
         return;
+      // The chunk under the playhead has already been fetched and appended yet still doesn't cover
+      // it — snap onto the buffered data rather than wiping and refetching the same chunk forever.
+      if (idx >= 0 && idx === this.lastUncoveredFetch && ranges.length > 0) {
+        const target = ranges.find((r) => r.end > t) ?? ranges[0]!;
+        this.audio.currentTime = target.start;
+        return;
+      }
       this.cancelAllPending();
       this.appendQueue = [];
       if (ranges.length > 0) {
         this.tryRemove(0, Number.POSITIVE_INFINITY);
         return;
       }
-      if (idx >= 0) void this.fetchChunk(idx);
+      if (idx >= 0) {
+        this.lastUncoveredFetch = idx;
+        void this.fetchChunk(idx);
+      }
       return;
     }
+
+    this.lastUncoveredFetch = null;
 
     // 2. Trim buffered audio outside the keep window (one span per pass).
     const keepStart = t - BEHIND_WINDOW;
