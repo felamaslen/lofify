@@ -13,14 +13,10 @@ import {
 
 import { PlaybackBarDocument } from '../components/playback-bar.tsx';
 import { TracksDocument } from '../components/track-list.tsx';
-import { type Capabilities,capabilities } from '../lib/capabilities.ts';
+import { type Capabilities, capabilities } from '../lib/capabilities.ts';
 import { graphql, type ResultOf, type VariablesOf } from '../lib/gql.ts';
 import { gqlRequest } from '../lib/gql-request.ts';
-import {
-  createPlayer,
-  type CreatePlayerError,
-  type Player as MsePlayer,
-} from '../lib/mse.ts';
+import { createPlayer, type CreatePlayerError, type Player as MsePlayer } from '../lib/mse.ts';
 import { subscribe } from '../lib/sse-client.ts';
 
 export const TrackByIdDocument = graphql(
@@ -40,7 +36,6 @@ export const TrackByIdDocument = graphql(
 export const TrackManifestDocument = graphql(`
   subscription TrackManifest($trackId: ID!, $format: TrackFormat!) {
     trackManifest(trackId: $trackId, format: $format) {
-      chunkDurationSeconds
       durationSeconds
       done
       init {
@@ -62,9 +57,7 @@ export type Quality = TrackFormat['quality'];
 export type FormatLossy = TrackFormat['formatLossy'];
 
 /** Server-emitted manifest snapshot. The player consumes this shape directly. */
-export type ManifestSnapshot = NonNullable<
-  ResultOf<typeof TrackManifestDocument>['trackManifest']
->;
+export type ManifestSnapshot = NonNullable<ResultOf<typeof TrackManifestDocument>['trackManifest']>;
 export type ManifestChunk = ManifestSnapshot['chunks'][number];
 
 type TrackNode = NonNullable<ResultOf<typeof TrackByIdDocument>['track']>;
@@ -92,10 +85,7 @@ function contentTypeFor(actual: ActualFormat): string {
   }
 }
 
-export function isFormatLossyAvailable(
-  f: FormatLossy,
-  caps: Capabilities = capabilities,
-): boolean {
+export function isFormatLossyAvailable(f: FormatLossy, caps: Capabilities = capabilities): boolean {
   return f === 'OPUS' ? caps.opusInMp4 : caps.mp3;
 }
 
@@ -270,11 +260,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         await queryClient.prefetchQuery({
           queryKey: ['track', nextId, quality, formatLossy],
           queryFn: ({ signal }) =>
-            gqlRequest(
-              TrackByIdDocument,
-              { id: nextId, format: { quality, formatLossy } },
-              signal,
-            ),
+            gqlRequest(TrackByIdDocument, { id: nextId, format: { quality, formatLossy } }, signal),
         });
       })();
     },
@@ -311,6 +297,12 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       if (!created) return;
       playerRef.current = created;
 
+      // The subscription sends `chunks` as deltas (only the chunks finalised since the previous
+      // emission). Accumulate them into the full list the player consumes. This `chunks` is fresh
+      // per `loadTrack`, so a track/format change starts from empty. A transparent SSE reconnect,
+      // though, restarts the server stream and replays the whole list into this same closure — so
+      // merge idempotently, appending only chunks beyond our tail (endSeconds strictly increases).
+      let chunks: ManifestChunk[] = [];
       manifestUnsubRef.current = subscribe(
         TrackManifestDocument,
         { trackId: track.id, format: { quality, formatLossy } },
@@ -318,7 +310,15 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
           next: (data) => {
             const snap = data.trackManifest;
             if (!snap) return;
-            playerRef.current?.setManifest(snap);
+            if (snap.chunks.length > 0) {
+              const merged = chunks.slice();
+              for (const c of snap.chunks) {
+                const tailEnd = merged.length > 0 ? merged[merged.length - 1]!.endSeconds : 0;
+                if (c.endSeconds > tailEnd) merged.push(c);
+              }
+              chunks = merged;
+            }
+            playerRef.current?.setManifest({ ...snap, chunks });
             const ready = snap.done ? totalSeconds : snap.durationSeconds;
             setReadySeconds(Math.min(ready, totalSeconds));
           },
@@ -343,11 +343,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       const data = await queryClient.fetchQuery({
         queryKey: ['track', id, quality, formatLossy],
         queryFn: ({ signal }) =>
-          gqlRequest(
-            TrackByIdDocument,
-            { id, format: { quality, formatLossy } },
-            signal,
-          ),
+          gqlRequest(TrackByIdDocument, { id, format: { quality, formatLossy } }, signal),
       });
       if (data.track) await loadTrack(data.track);
     },

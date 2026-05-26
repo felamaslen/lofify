@@ -396,31 +396,26 @@ export function getSchema(): GraphQLSchema {
     });
     const TrackManifestType: GraphQLObjectType = new GraphQLObjectType({
         name: "TrackManifest",
-        description: "Live manifest snapshot for a `(track, quality, format)` cache entry. Grows monotonically as the encoder produces chunks: subscribers receive an initial snapshot of whatever's ready, then a fresh snapshot whenever the index changes, terminating with `done: true`.",
+        description: "One emission in the live manifest stream for a `(track, quality, format)` cache entry. `chunks` is a *delta* \u2014 only the chunks finalised since the previous emission \u2014 because the encoded stream grows append-only and re-sending the whole list every tick is O(events \u00D7 chunks). The client appends each delta to its running list in arrival order. The scalar fields (`durationSeconds`, `done`, `init`) carry the current absolute state on every emission, so a client that joined mid-stream is told where it stands without needing the full history.",
         fields() {
             return {
-                chunkDurationSeconds: {
-                    description: "Nominal chunk duration the encoder is configured for, in seconds. Actual `endSeconds` deltas may run a few % longer (mp3 windows close on the next frame boundary after crossing the threshold).",
-                    name: "chunkDurationSeconds",
-                    type: new GraphQLNonNull(GraphQLFloat)
-                },
                 chunks: {
-                    description: "Finalised chunks, in order.",
+                    description: "Chunks finalised since the previous emission, in order. A delta, not the full list \u2014 the client appends them to its accumulated manifest.",
                     name: "chunks",
                     type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(TrackManifestChunkType)))
                 },
                 done: {
-                    description: "True once the encoder has finished and the trailing chunk has been emitted. After this, no more snapshots will arrive.",
+                    description: "True once the encoder has finished and the trailing chunk has been emitted. After this, no more emissions will arrive.",
                     name: "done",
                     type: new GraphQLNonNull(GraphQLBoolean)
                 },
                 durationSeconds: {
-                    description: "Cumulative encoded duration so far, equal to `chunks[last].endSeconds` or `0` when no chunks have landed yet.",
+                    description: "Cumulative encoded duration so far, equal to the last chunk's `endSeconds` or `0` when no chunks have landed yet.",
                     name: "durationSeconds",
                     type: new GraphQLNonNull(GraphQLFloat)
                 },
                 init: {
-                    description: "Init-segment byte range. `null` for mp3, and `null` for fmp4 until the first fragment boundary has been observed.",
+                    description: "Init-segment byte range. `null` for mp3, and `null` for fmp4 until the first fragment boundary has been observed. Repeated on every emission until non-null, so it's never missed.",
                     name: "init",
                     type: TrackManifestInitType
                 }
@@ -448,7 +443,7 @@ export function getSchema(): GraphQLSchema {
                     }
                 },
                 trackManifest: {
-                    description: "Stream manifest snapshots for `(trackId, quality, format)`. The same `(quality, format)` values the client baked into its signed playback URL drive cache-entry selection on the server, so the manifest describes exactly the bytes the playback route will serve.\n\nEmits at most once per second while the encoder runs, then a final snapshot when it finishes. For already-warm cache entries (or for tracks served by passthrough) the subscription emits a single `done: true` snapshot and completes.",
+                    description: "Stream manifest snapshots for `(trackId, quality, format)`. The same `(quality, format)` values the client baked into its signed playback URL drive cache-entry selection on the server, so the manifest describes exactly the bytes the playback route will serve.\n\nEmits at most once per second while the encoder runs, then a final emission when it finishes. For already-warm cache entries (or for tracks served by passthrough) the subscription emits a single `done: true` emission and completes.\n\n`chunks` is a per-emission delta (see `TrackManifest`). Each subscription tracks its own sent-count starting at zero, so the first emission replays every chunk finalised so far and later emissions carry only new ones \u2014 restarting (or reconnecting) the subscription always yields the full list up front, then deltas.",
                     name: "trackManifest",
                     type: new GraphQLNonNull(TrackManifestType),
                     args: {

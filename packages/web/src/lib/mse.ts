@@ -64,7 +64,6 @@ function coversTime(ranges: readonly Range[], t: number): boolean {
 }
 
 const EMPTY_MANIFEST: ManifestSnapshot = {
-  chunkDurationSeconds: 0,
   durationSeconds: 0,
   done: false,
   init: null,

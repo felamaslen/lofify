@@ -111,7 +111,9 @@ type Subscription {
   """
   Stream manifest snapshots for `(trackId, quality, format)`. The same `(quality, format)` values the client baked into its signed playback URL drive cache-entry selection on the server, so the manifest describes exactly the bytes the playback route will serve.
   
-  Emits at most once per second while the encoder runs, then a final snapshot when it finishes. For already-warm cache entries (or for tracks served by passthrough) the subscription emits a single `done: true` snapshot and completes.
+  Emits at most once per second while the encoder runs, then a final emission when it finishes. For already-warm cache entries (or for tracks served by passthrough) the subscription emits a single `done: true` emission and completes.
+  
+  `chunks` is a per-emission delta (see `TrackManifest`). Each subscription tracks its own sent-count starting at zero, so the first emission replays every chunk finalised so far and later emissions carry only new ones — restarting (or reconnecting) the subscription always yields the full list up front, then deltas.
   """
   trackManifest(
     """
@@ -169,25 +171,23 @@ type TrackEdge {
 }
 
 """
-Live manifest snapshot for a `(track, quality, format)` cache entry. Grows monotonically as the encoder produces chunks: subscribers receive an initial snapshot of whatever's ready, then a fresh snapshot whenever the index changes, terminating with `done: true`.
+One emission in the live manifest stream for a `(track, quality, format)` cache entry. `chunks` is a *delta* — only the chunks finalised since the previous emission — because the encoded stream grows append-only and re-sending the whole list every tick is O(events × chunks). The client appends each delta to its running list in arrival order. The scalar fields (`durationSeconds`, `done`, `init`) carry the current absolute state on every emission, so a client that joined mid-stream is told where it stands without needing the full history.
 """
 type TrackManifest {
   """
-  Nominal chunk duration the encoder is configured for, in seconds. Actual `endSeconds` deltas may run a few % longer (mp3 windows close on the next frame boundary after crossing the threshold).
+  Chunks finalised since the previous emission, in order. A delta, not the full list — the client appends them to its accumulated manifest.
   """
-  chunkDurationSeconds: Float!
-  """Finalised chunks, in order."""
   chunks: [TrackManifestChunk!]!
   """
-  True once the encoder has finished and the trailing chunk has been emitted. After this, no more snapshots will arrive.
+  True once the encoder has finished and the trailing chunk has been emitted. After this, no more emissions will arrive.
   """
   done: Boolean!
   """
-  Cumulative encoded duration so far, equal to `chunks[last].endSeconds` or `0` when no chunks have landed yet.
+  Cumulative encoded duration so far, equal to the last chunk's `endSeconds` or `0` when no chunks have landed yet.
   """
   durationSeconds: Float!
   """
-  Init-segment byte range. `null` for mp3, and `null` for fmp4 until the first fragment boundary has been observed.
+  Init-segment byte range. `null` for mp3, and `null` for fmp4 until the first fragment boundary has been observed. Repeated on every emission until non-null, so it's never missed.
   """
   init: TrackManifestInit
 }

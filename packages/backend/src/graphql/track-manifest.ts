@@ -4,7 +4,7 @@ import type { Float, ID } from 'grats';
 import { db } from '../db/client.js';
 import { tracks as tracksTable } from '../db/schema/index.js';
 import { defaultCache } from '../playback/cache.js';
-import type { IndexChunk, IndexFile } from '../playback/live-tail.js';
+import type { IndexChunk } from '../playback/live-tail.js';
 import { resolveTarget } from '../playback/resolve.js';
 import type { TrackFormat } from './track.js';
 
@@ -47,40 +47,46 @@ export class TrackManifestChunk {
 }
 
 /**
- * Live manifest snapshot for a `(track, quality, format)` cache entry. Grows monotonically as the encoder produces chunks: subscribers receive an initial snapshot of whatever's ready, then a fresh snapshot whenever the index changes, terminating with `done: true`.
+ * One emission in the live manifest stream for a `(track, quality, format)` cache entry. `chunks` is a *delta* — only the chunks finalised since the previous emission — because the encoded stream grows append-only and re-sending the whole list every tick is O(events × chunks). The client appends each delta to its running list in arrival order. The scalar fields (`durationSeconds`, `done`, `init`) carry the current absolute state on every emission, so a client that joined mid-stream is told where it stands without needing the full history.
  *
  * @gqlType
  */
 export class TrackManifest {
-  constructor(private snap: IndexFile) {}
-  /** Nominal chunk duration the encoder is configured for, in seconds. Actual `endSeconds` deltas may run a few % longer (mp3 windows close on the next frame boundary after crossing the threshold). @gqlField */
-  chunkDurationSeconds(): Float {
-    return this.snap.chunkDurationSeconds;
-  }
-  /** Cumulative encoded duration so far, equal to `chunks[last].endSeconds` or `0` when no chunks have landed yet. @gqlField */
+  constructor(private emit: ManifestEmission) {}
+  /** Cumulative encoded duration so far, equal to the last chunk's `endSeconds` or `0` when no chunks have landed yet. @gqlField */
   durationSeconds(): Float {
-    return this.snap.durationSeconds;
+    return this.emit.durationSeconds;
   }
-  /** True once the encoder has finished and the trailing chunk has been emitted. After this, no more snapshots will arrive. @gqlField */
+  /** True once the encoder has finished and the trailing chunk has been emitted. After this, no more emissions will arrive. @gqlField */
   done(): boolean {
-    return this.snap.done;
+    return this.emit.done;
   }
-  /** Init-segment byte range. `null` for mp3, and `null` for fmp4 until the first fragment boundary has been observed. @gqlField */
+  /** Init-segment byte range. `null` for mp3, and `null` for fmp4 until the first fragment boundary has been observed. Repeated on every emission until non-null, so it's never missed. @gqlField */
   init(): TrackManifestInit | null {
-    return this.snap.init ? new TrackManifestInit(this.snap.init) : null;
+    return this.emit.init ? new TrackManifestInit(this.emit.init) : null;
   }
-  /** Finalised chunks, in order. @gqlField */
+  /** Chunks finalised since the previous emission, in order. A delta, not the full list — the client appends them to its accumulated manifest. @gqlField */
   chunks(): TrackManifestChunk[] {
-    return this.snap.chunks.map((c) => new TrackManifestChunk(c));
+    return this.emit.chunks.map((c) => new TrackManifestChunk(c));
   }
 }
+
+/** Snapshot captured at emission time: the chunk delta plus the current absolute scalar state. Captured eagerly (rather than reading the live `IndexFile`) so concurrent encoder appends can't race the GraphQL field resolution. */
+type ManifestEmission = {
+  chunks: readonly IndexChunk[];
+  durationSeconds: number;
+  done: boolean;
+  init: readonly [number, number] | null;
+};
 
 const THROTTLE_MS = 1000;
 
 /**
  * Stream manifest snapshots for `(trackId, quality, format)`. The same `(quality, format)` values the client baked into its signed playback URL drive cache-entry selection on the server, so the manifest describes exactly the bytes the playback route will serve.
  *
- * Emits at most once per second while the encoder runs, then a final snapshot when it finishes. For already-warm cache entries (or for tracks served by passthrough) the subscription emits a single `done: true` snapshot and completes.
+ * Emits at most once per second while the encoder runs, then a final emission when it finishes. For already-warm cache entries (or for tracks served by passthrough) the subscription emits a single `done: true` emission and completes.
+ *
+ * `chunks` is a per-emission delta (see `TrackManifest`). Each subscription tracks its own sent-count starting at zero, so the first emission replays every chunk finalised so far and later emissions carry only new ones — restarting (or reconnecting) the subscription always yields the full list up front, then deltas.
  *
  * @gqlSubscriptionField trackManifest
  */
@@ -90,11 +96,7 @@ export async function* trackManifestSubscription(args: {
   /** Same `(quality, formatLossy)` the client baked into its signed playback URL. */
   format: TrackFormat;
 }): AsyncIterable<TrackManifest> {
-  const rows = await db
-    .select()
-    .from(tracksTable)
-    .where(eq(tracksTable.id, args.trackId))
-    .limit(1);
+  const rows = await db.select().from(tracksTable).where(eq(tracksTable.id, args.trackId)).limit(1);
   const track = rows[0];
   if (!track) return;
 
@@ -111,10 +113,21 @@ export async function* trackManifestSubscription(args: {
   });
 
   let lastEmittedAt = 0;
+  let sentChunks = 0;
   for (;;) {
     const wait = Math.max(0, lastEmittedAt + THROTTLE_MS - Date.now());
     if (wait > 0) await new Promise<void>((r) => setTimeout(r, wait));
-    yield new TrackManifest(entry.index);
+    // Snapshot eagerly: capture the delta and scalars in one synchronous read so a concurrent
+    // encoder append can't grow the list between computing the slice and resolving the fields.
+    const index = entry.index;
+    const chunks = index.chunks.slice(sentChunks);
+    sentChunks = index.chunks.length;
+    yield new TrackManifest({
+      chunks,
+      durationSeconds: index.durationSeconds,
+      done: index.done,
+      init: index.init,
+    });
     lastEmittedAt = Date.now();
     if (entry.isDone() || entry.error()) return;
     await new Promise<void>((resolve) => {
