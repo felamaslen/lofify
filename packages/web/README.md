@@ -43,6 +43,17 @@ The quality picker in the header maps to a coarse preset:
 checks and `<audio>.canPlayType('audio/flac')`. MSE failures or
 unreachable endpoints raise a toast.
 
+## Tag editing
+
+Rows in the track list are selectable: click to select one, cmd/ctrl-click
+to toggle, shift-click to extend a range. Right-clicking opens a context
+menu with **Edit tags**, which opens a dialog over the selection. Editing a
+single track exposes every tag; with multiple tracks selected the dialog
+restricts to the album-shared tags (artist, album, CD, year) and leaves any
+blank field unchanged. Saving issues one `trackUpdate` mutation per selected
+track and refetches the list. Clearing a field on a single track reverts it
+to the tag scanned from the file.
+
 ## Env
 
 | Variable                  | Purpose                                       |

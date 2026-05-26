@@ -70,6 +70,17 @@ enforced at runtime by `applyConstraintDirective` (called from
 `buildSchema`). Out-of-range values fail with `BAD_USER_INPUT` before
 the resolver runs.
 
+## Tag overrides
+
+Each editable tag on `Tracks` (`title`, `trackNumber`, `discNumber`,
+`artist`, `album`, `year`) has a nullable `*Override` sibling column.
+`Mutation.trackUpdate(id, ...)` writes the supplied tags to those
+override columns; omit an argument to leave its override untouched, or
+pass an explicit `null` to clear it. The scanner only writes the base
+columns, so overrides survive rescans. Every read (`Query.track`,
+`Query.tracks`, including the pagination sort) returns the effective
+value, `coalesce(override, scanned)`.
+
 ## Endpoints
 
 - `GET /healthz` — liveness probe; returns `{ "status": "ok" }`.
