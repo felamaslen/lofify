@@ -93,6 +93,28 @@ describe('watchLibrary', () => {
     expect(row.durationSeconds).toBeGreaterThan(0);
   });
 
+  it('writes a monkey\'s audio row as lossless', async () => {
+    const file = path.join(root, 'tune.ape');
+    await copyFile(path.join(fixturesDir, 'sample.ape'), file);
+
+    await vi.waitFor(() =>
+      expect(getRow(file)).resolves.toMatchObject({
+        file,
+        title: 'Ape Tune',
+        artist: 'Ape Artist',
+        album: 'Ape Album',
+        trackNumber: 5,
+        year: '2025',
+        format: "monkey's audio",
+        isLossless: true,
+        sampleRate: 44100,
+      }),
+    );
+
+    const row = await getRow(file);
+    expect(row.durationSeconds).toBeGreaterThan(0);
+  });
+
   it('writes a flac row as lossless', async () => {
     const file = path.join(root, 'song.flac');
     await copyFile(path.join(fixturesDir, 'sample.flac'), file);
@@ -112,6 +134,20 @@ describe('watchLibrary', () => {
 
     const row = await getRow(file);
     expect(row.durationSeconds).toBeGreaterThan(0);
+  });
+
+  it('strips NUL padding and trims whitespace from tag values', async () => {
+    const file = path.join(root, 'padded.flac');
+    await copyFile(path.join(fixturesDir, 'sample-padded.flac'), file);
+
+    await vi.waitFor(() =>
+      expect(getRow(file)).resolves.toMatchObject({
+        file,
+        title: 'Padded Title',
+        artist: 'Padded Artist',
+        album: 'Padded Album',
+      }),
+    );
   });
 
   it('updates the existing row when the file changes', async () => {

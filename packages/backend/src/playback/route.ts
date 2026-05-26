@@ -8,6 +8,7 @@ import parseRange from 'range-parser';
 import { db } from '../db/client.js';
 import type { Track as DbTrack } from '../db/schema/index.js';
 import { tracks as tracksTable } from '../db/schema/index.js';
+import { bakeFileExists, bakePath, enqueueBake } from './bake.js';
 import { type ParsedOptions, parseOptionSegments } from './options.js';
 import { verifySignature } from './sign.js';
 import {
@@ -78,24 +79,45 @@ export function contentTypeFor(format: DeliveryFormat): string {
 }
 
 export type ResolvedTarget =
-  | { kind: 'passthrough'; contentType: string }
+  | { kind: 'passthrough'; sourcePath: string; contentType: string }
   | { kind: 'transcode'; target: TranscodeTarget; contentType: string };
 
 /**
  * Pick a delivery target given the source track, signed options, and the client's accepted formats.
  *
- * Rules:
- * - If `flac` is in the accept list and the source is flac → passthrough.
- * - If `flac` is in the accept list and the source is lossy → encode at max quality to the first non-flac accept entry.
- * - If `flac` is not in the accept list → encode at the requested quality (default `1`) to the first accept entry.
+ * Setting any `q:*` on the URL is the client's signal that it wants a lossy encode at exactly that quality — `audio/flac` in `Accept` is ignored on that path (the first non-flac accept entry is used as the container instead). A q-less URL is the only way to get flac: flac passthrough when the source is flac, an already-baked flac cache when the source is lossless-non-flac, and otherwise the lossy fallback at `max` quality.
+ *
+ * For lossless-non-flac sources with a cold cache, this resolver triggers the bake and *waits* for it to finish before serving flac. The GraphQL resolver shields normal clients from that stall by minting `q:M` URLs in the cold-cache case; this branch only fires on hand-crafted URLs.
  */
-export function resolveTarget(track: DbTrack, opts: ParsedOptions, accepts: DeliveryFormat[]): ResolvedTarget {
+export async function resolveTarget(track: DbTrack, opts: ParsedOptions, accepts: DeliveryFormat[]): Promise<ResolvedTarget> {
+  if (opts.quality != null) {
+    // q-present URL: lock to lossy regardless of what `Accept` says.
+    const nonFlac = accepts.find((a) => a !== 'flac');
+    if (!nonFlac) throw new Error('unreachable: flac-only Accept on q-present URL');
+    return {
+      kind: 'transcode',
+      target: encodeTarget(nonFlac, opts.quality),
+      contentType: contentTypeFor(nonFlac),
+    };
+  }
   const sourceIsFlac = track.format.toLowerCase() === 'flac';
   if (accepts.includes('flac')) {
-    if (sourceIsFlac) return { kind: 'passthrough', contentType: contentTypeFor('flac') };
+    if (sourceIsFlac) {
+      return { kind: 'passthrough', sourcePath: track.file, contentType: contentTypeFor('flac') };
+    }
+    if (track.isLossless) {
+      const cachePath = bakePath(track.id, track.sourceMtime);
+      if (!(await bakeFileExists(track.id, track.sourceMtime))) {
+        // Cold cache, hand-crafted URL path: trigger and block until the bake
+        // finishes. The resolver doesn't normally mint this combo — it picks
+        // q:M instead — so the latency is bounded to whoever's poking at the
+        // URL directly.
+        await enqueueBake(track.id, track.file, track.sourceMtime);
+      }
+      return { kind: 'passthrough', sourcePath: cachePath, contentType: contentTypeFor('flac') };
+    }
     const fallback = accepts.find((a) => a !== 'flac');
-    // Caller validates `accepts` (flac alone is rejected upstream) so a fallback always exists here.
-    if (!fallback) throw new Error('unreachable: flac without fallback');
+    if (!fallback) throw new Error('unreachable: flac-only Accept');
     return {
       kind: 'transcode',
       target: encodeTarget(fallback, 'max'),
@@ -103,8 +125,7 @@ export function resolveTarget(track: DbTrack, opts: ParsedOptions, accepts: Deli
     };
   }
   const fmt = accepts[0]!;
-  const q = opts.quality ?? 'medium';
-  return { kind: 'transcode', target: encodeTarget(fmt, q), contentType: contentTypeFor(fmt) };
+  return { kind: 'transcode', target: encodeTarget(fmt, 'medium'), contentType: contentTypeFor(fmt) };
 }
 
 function encodeTarget(fmt: DeliveryFormat, quality: 'low' | 'medium' | 'high' | 'max'): TranscodeTarget {
@@ -128,10 +149,10 @@ function parseRangeHeader(
 async function sendPassthrough(
   req: FastifyRequest,
   reply: FastifyReply,
-  track: DbTrack,
+  sourcePath: string,
   contentType: string,
 ): Promise<void> {
-  const st = await stat(track.file);
+  const st = await stat(sourcePath);
   const total = st.size;
 
   reply.header('Accept-Ranges', 'bytes');
@@ -150,11 +171,11 @@ async function sendPassthrough(
     reply.code(206);
     reply.header('Content-Range', `bytes ${range.start}-${range.end}/${total}`);
     reply.header('Content-Length', String(length));
-    return reply.send(createReadStream(track.file, { start: range.start, end: range.end }));
+    return reply.send(createReadStream(sourcePath, { start: range.start, end: range.end }));
   }
   reply.code(200);
   reply.header('Content-Length', String(total));
-  return reply.send(createReadStream(track.file));
+  return reply.send(createReadStream(sourcePath));
 }
 
 function parseSegIndex(value: string | null): number | null {
@@ -293,9 +314,9 @@ export async function registerPlaybackRoute(app: FastifyInstance): Promise<void>
       return reply.send({ error: 'unknown track' });
     }
 
-    const resolved = resolveTarget(track, opts, accepts);
+    const resolved = await resolveTarget(track, opts, accepts);
     if (resolved.kind === 'passthrough') {
-      return sendPassthrough(req, reply, track, resolved.contentType);
+      return sendPassthrough(req, reply, resolved.sourcePath, resolved.contentType);
     }
     return sendTranscodeChunk(req, reply, track, resolved.target, resolved.contentType, segRaw);
   };

@@ -79,7 +79,7 @@ export async function* transcodeProgressSubscription(args: {
   const opts = parseOptionSegments(optionSegments);
   if (opts == null) return;
 
-  const resolved = resolveTarget(track, opts, accepts);
+  const resolved = await resolveTarget(track, opts, accepts);
   if (resolved.kind === 'passthrough') {
     // Flac passthrough — no encoder job to watch.
     yield snapshot(null);

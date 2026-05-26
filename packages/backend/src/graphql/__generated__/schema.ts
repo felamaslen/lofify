@@ -128,7 +128,7 @@ export function getSchema(): GraphQLSchema {
                     type: GraphQLInt
                 },
                 url: {
-                    description: "Signed URL the client should `GET` to stream this track. The container format is selected at request time via the `Accept` header; the signed URL is independent of it, so a single URL can be replayed with different `Accept` values to switch formats without re-querying GraphQL.",
+                    description: "Signed URL the client should `GET` to stream this track. The container format is selected at request time via the `Accept` header; the signed URL is independent of it, so a single URL can be replayed with different `Accept` values to switch formats without re-querying GraphQL.\n\nWhen the caller doesn't pin a `quality`, the resolver picks one based on the source: lossy or flac sources get a q-less URL (the client can still get flac passthrough by listing `audio/flac` in `Accept`); lossless non-flac sources with a warm flac cache also get a q-less URL; cold lossless non-flac sources get `q:M`, which pins playback to the lossy pipeline while a background bake warms the cache for the next play.",
                     name: "url",
                     type: new GraphQLNonNull(GraphQLString),
                     args: {

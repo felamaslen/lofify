@@ -8,27 +8,37 @@ import type { TranscodeTarget } from './transcode.js';
 
 const tracer = trace.getTracer('lofify.playback');
 
-let activeProcesses = 0;
-const waitQueue: Array<() => void> = [];
+type Semaphore = {
+  active: number;
+  waiters: Array<() => void>;
+  getMax: () => number;
+};
 
-function acquireSlot(): Promise<void> {
-  if (activeProcesses < env.TRANSCODE_MAX_PARALLEL) {
-    activeProcesses += 1;
+function makeSemaphore(getMax: () => number): Semaphore {
+  return { active: 0, waiters: [], getMax };
+}
+
+function acquire(sem: Semaphore): Promise<void> {
+  if (sem.active < sem.getMax()) {
+    sem.active += 1;
     return Promise.resolve();
   }
   return new Promise((resolve) => {
-    waitQueue.push(() => {
-      activeProcesses += 1;
+    sem.waiters.push(() => {
+      sem.active += 1;
       resolve();
     });
   });
 }
 
-function releaseSlot(): void {
-  activeProcesses -= 1;
-  const next = waitQueue.shift();
+function release(sem: Semaphore): void {
+  sem.active -= 1;
+  const next = sem.waiters.shift();
   if (next) next();
 }
+
+const transcodeSem = makeSemaphore(() => env.TRANSCODE_MAX_PARALLEL);
+const bakeSem = makeSemaphore(() => env.TRANSCODE_BAKE_PARALLEL);
 
 type Quality = 'low' | 'medium' | 'high' | 'max';
 
@@ -91,10 +101,10 @@ export function spawnChunkedEncoder(
     },
     async (span) => {
       const semaphoreStart = Date.now();
-      await acquireSlot();
+      await acquire(transcodeSem);
       span.setAttribute('playback.semaphore.waitMs', Date.now() - semaphoreStart);
       if (killed) {
-        releaseSlot();
+        release(transcodeSem);
         span.end();
         return;
       }
@@ -181,7 +191,90 @@ export function spawnChunkedEncoder(
         span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
         throw error;
       } finally {
-        releaseSlot();
+        release(transcodeSem);
+        span.end();
+      }
+    },
+  );
+
+  return {
+    done,
+    kill: (): void => {
+      killed = true;
+      proc?.kill('SIGTERM');
+    },
+  };
+}
+
+/** Spawn ffmpeg to re-encode `source` as a single flac file at `outPath`. Used to bake a lossless cache of non-flac lossless sources (e.g. ape, alac) so subsequent plays can hit the existing flac-passthrough path with no further transcode. The encode uses libFLAC's default compression and writes directly to `outPath` — atomic-rename is the caller's job. Gated by the bake semaphore so a backlog of bakes never starves live playback transcodes. */
+export function spawnFlacBake(source: string, outPath: string): FfmpegHandle {
+  let killed = false;
+  let proc: ChildProcessWithoutNullStreams | null = null;
+  const done = tracer.startActiveSpan(
+    'playback.bake',
+    {
+      attributes: {
+        'playback.source': source,
+        'playback.target.container': 'flac',
+        'playback.target.codec': 'flac',
+      },
+    },
+    async (span) => {
+      const semaphoreStart = Date.now();
+      await acquire(bakeSem);
+      span.setAttribute('playback.semaphore.waitMs', Date.now() - semaphoreStart);
+      if (killed) {
+        release(bakeSem);
+        span.end();
+        return;
+      }
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const args = [
+            '-hide_banner',
+            '-loglevel',
+            'error',
+            '-i',
+            source,
+            '-vn',
+            '-c:a',
+            'flac',
+            '-compression_level',
+            '5',
+            // Force the container — `outPath` ends in `.tmp` while the bake is
+            // in flight, so ffmpeg can't infer "flac" from the extension.
+            '-f',
+            'flac',
+            '-y',
+            outPath,
+          ];
+          proc = spawn('ffmpeg', args);
+          let stderr = '';
+          proc.stderr.on('data', (c: Buffer) => {
+            stderr += c.toString();
+          });
+          proc.stdout.on('data', () => undefined);
+          proc.on('error', reject);
+          proc.on('close', (code, signal) => {
+            if (killed) return resolve();
+            if (code !== 0) {
+              reject(
+                new Error(
+                  `ffmpeg exited with code ${code} signal ${signal ?? '-'}: ${stderr.trim()}`,
+                ),
+              );
+              return;
+            }
+            resolve();
+          });
+        });
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        span.recordException(error);
+        span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+        throw error;
+      } finally {
+        release(bakeSem);
         span.end();
       }
     },

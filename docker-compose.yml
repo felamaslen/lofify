@@ -38,6 +38,8 @@ services:
       TRANSCODE_CACHE_MAX_BYTES: ${TRANSCODE_CACHE_MAX_BYTES:-1073741824}
       TRANSCODE_CACHE_TTL_SECONDS: ${TRANSCODE_CACHE_TTL_SECONDS:-3600}
       TRANSCODE_TMPDIR: /transcode
+      TRANSCODE_BAKE_DIR: /bakes
+      TRANSCODE_BAKE_PARALLEL: ${TRANSCODE_BAKE_PARALLEL:-1}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-lgtm:4318
       OTEL_SERVICE_NAME: lofify-backend
     ports:
@@ -47,6 +49,7 @@ services:
       - backend-node-modules:/app/node_modules
       - ${LIBRARY_PATH:-./music}:/music:ro
       - ./transcode-debug:/transcode
+      - bake-cache:/bakes
     depends_on:
       postgres:
         condition: service_healthy
@@ -70,3 +73,4 @@ volumes:
   postgres-data:
   backend-node-modules:
   web-node-modules:
+  bake-cache:

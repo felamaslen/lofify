@@ -1,17 +1,25 @@
-import { readFile, stat, writeFile } from 'node:fs/promises';
+import { readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { eq } from 'drizzle-orm';
 
 import { app } from '../app.js';
 import { db } from '../db/client.js';
 import { tracks } from '../db/schema/index.js';
+import { bakePath } from './bake.js';
 import { signPlaybackUrl } from './sign.js';
 import { _resetTranscodeCache } from './transcode.js';
 
 const spawnChunkedEncoderMock = vi.hoisted(() => vi.fn());
+const spawnFlacBakeMock = vi.hoisted(() => vi.fn());
 vi.mock('./ffmpeg.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./ffmpeg.js')>();
-  return { ...actual, spawnChunkedEncoder: spawnChunkedEncoderMock };
+  return {
+    ...actual,
+    spawnChunkedEncoder: spawnChunkedEncoderMock,
+    spawnFlacBake: spawnFlacBakeMock,
+  };
 });
 
 const fixturesDir = path.join(
@@ -28,6 +36,7 @@ beforeEach(async () => {
   await db.delete(tracks);
   _resetTranscodeCache();
   spawnChunkedEncoderMock.mockReset();
+  spawnFlacBakeMock.mockReset();
 });
 
 /** A controllable fake chunked encoder. Captures the outDir + target on first call so tests can write fake init + chunk files into it. */
@@ -108,6 +117,7 @@ async function seedTrack(opts: {
       file: opts.file,
       sizeBytes: st.size,
       durationSeconds: opts.durationSeconds ?? 1,
+      sourceMtime: st.mtime,
     })
     .returning({ id: tracks.id });
   return row!.id;
@@ -327,6 +337,115 @@ test('transcode — second request for same chunk hits cache (no second ffmpeg s
   await app.inject({ method: 'GET', url, headers: { accept: ACCEPT_MP4 } });
 
   expect(spawnChunkedEncoderMock).toHaveBeenCalledTimes(1);
+});
+
+/** Mirrors `fakeEncoder` but for `spawnFlacBake`. The bake module writes via tmp→rename; this fake creates whatever bytes the test wants at the tmp path before `finish` is called, so the bake module's `rename` step succeeds. */
+function fakeBakeEncoder(payload: Buffer | string = 'BAKED'): {
+  waitForStart: () => Promise<string>;
+  finish: () => Promise<void>;
+} {
+  let tmpPath: string | null = null;
+  let onStart: ((p: string) => void) | null = null;
+  let resolveDone!: () => void;
+  spawnFlacBakeMock.mockImplementation((_source: string, out: string) => {
+    tmpPath = out;
+    onStart?.(out);
+    return {
+      done: new Promise<void>((res) => {
+        resolveDone = res;
+      }),
+      kill: () => undefined,
+    };
+  });
+  return {
+    waitForStart: () =>
+      new Promise<string>((resolve) => {
+        if (tmpPath) resolve(tmpPath);
+        else onStart = resolve;
+      }),
+    finish: async () => {
+      if (!tmpPath) throw new Error('bake encoder not started');
+      await writeFile(tmpPath, payload);
+      resolveDone();
+    },
+  };
+}
+
+test('q-present + audio/flac in Accept → lossy transcode at q (flac ignored)', async () => {
+  const enc = fakeEncoder();
+  const id = await seedTrack({
+    file: SAMPLE_FLAC,
+    format: 'flac',
+    codec: 'flac',
+    isLossless: true,
+    durationSeconds: 60,
+  });
+  const url = `${signPlaybackUrl(id, { quality: 'medium' })}/0`;
+
+  const pending = app.inject({ method: 'GET', url, headers: { accept: ACCEPT_FLAC_MP4 } });
+  await enc.waitForStart();
+  await enc.writeInit('INIT');
+  await enc.writeChunk(0, 'C0');
+
+  const res = await pending;
+  expect(res.statusCode).toBe(200);
+  expect(res.headers['content-type']).toBe('audio/mp4; codecs="opus"');
+});
+
+test('lossless non-flac source + audio/flac + warm cache → serves cached flac via passthrough', async () => {
+  const id = await seedTrack({
+    // Source path is irrelevant — the warm-cache file at `bakePath` is what gets streamed.
+    file: SAMPLE_FLAC,
+    format: "monkey's audio",
+    codec: 'ape',
+    isLossless: true,
+  });
+  const [row] = await db.select().from(tracks).where(eq(tracks.id, id));
+  const cachePath = bakePath(id, row!.sourceMtime);
+  const cacheBytes = Buffer.from('FAKE_FLAC_CACHE_BYTES');
+  await writeFile(cachePath, cacheBytes);
+  try {
+    const url = signPlaybackUrl(id, { quality: null });
+    const res = await app.inject({
+      method: 'GET',
+      url,
+      headers: { accept: ACCEPT_FLAC_MP4 },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toBe('audio/flac');
+    expect(res.headers['accept-ranges']).toBe('bytes');
+    expect(res.rawPayload.equals(cacheBytes)).toBe(true);
+    // The bake encoder must not have been invoked — the cache was already warm.
+    expect(spawnFlacBakeMock).not.toHaveBeenCalled();
+  } finally {
+    await rm(cachePath, { force: true });
+  }
+});
+
+test('lossless non-flac source + audio/flac + cold cache → triggers bake, then serves it', async () => {
+  const bake = fakeBakeEncoder('NEWLY_BAKED');
+  const id = await seedTrack({
+    file: SAMPLE_FLAC,
+    format: "monkey's audio",
+    codec: 'ape',
+    isLossless: true,
+  });
+  const [row] = await db.select().from(tracks).where(eq(tracks.id, id));
+  const cachePath = bakePath(id, row!.sourceMtime);
+  try {
+    const url = signPlaybackUrl(id, { quality: null });
+    const pending = app.inject({ method: 'GET', url, headers: { accept: ACCEPT_FLAC_MP4 } });
+    await bake.waitForStart();
+    await bake.finish();
+
+    const res = await pending;
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toBe('audio/flac');
+    expect(res.rawPayload.toString()).toBe('NEWLY_BAKED');
+    expect(spawnFlacBakeMock).toHaveBeenCalledTimes(1);
+  } finally {
+    await rm(cachePath, { force: true });
+  }
 });
 
 test('rejects requests with an invalid signature', async () => {
