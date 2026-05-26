@@ -68,6 +68,14 @@ type Mutation {
   libraryScanStart: LibraryScan!
   """Does nothing."""
   noop: Void!
+  """
+  Override one or more tags on a single track. Each supplied tag is stored as an override that takes precedence over the value read from the file on disk and survives rescans — the scanner never touches it.
+  
+  Omit an argument to leave its current override untouched; pass an explicit `null` to clear the override and fall back to the scanned tag.
+  
+  Throws when no track with the given id exists.
+  """
+  trackUpdate(album: String, artist: String, discNumber: Int, id: ID!, title: String, trackNumber: Int, year: String): Track!
 }
 
 """Boundary metadata for a `TrackConnection`."""

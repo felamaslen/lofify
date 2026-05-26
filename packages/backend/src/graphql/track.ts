@@ -87,12 +87,12 @@ export function abbreviateCodec(raw: string): string {
 export function toGqlTrack(row: DbTrack): Track {
   return {
     id: row.id,
-    title: row.title,
-    trackNumber: row.trackNumber,
-    discNumber: row.discNumber,
-    artist: row.artist,
-    album: row.album,
-    year: row.year,
+    title: row.titleOverride ?? row.title,
+    trackNumber: row.trackNumberOverride ?? row.trackNumber,
+    discNumber: row.discNumberOverride ?? row.discNumber,
+    artist: row.artistOverride ?? row.artist,
+    album: row.albumOverride ?? row.album,
+    year: row.yearOverride ?? row.year,
     format: deriveFormat(row.format, row.codec),
     sourceFormat: abbreviateCodec(row.codec),
     isLossless: row.isLossless,
