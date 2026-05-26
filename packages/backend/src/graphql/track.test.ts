@@ -99,6 +99,7 @@ async function seed(rows: Seed[]) {
       file: `/library/${r.artist ?? 'unk'}/${r.album ?? 'unk'}/${r.title}.${r.format}`,
       sizeBytes: 1024,
       durationSeconds: r.durationSeconds,
+      sourceMtime: new Date(0),
     })),
   );
 }

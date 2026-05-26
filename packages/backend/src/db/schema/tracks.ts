@@ -44,6 +44,8 @@ export const tracks = pgTable(
     file: text('file').notNull(),
     sizeBytes: bigint('sizeBytes', { mode: 'number' }).notNull(),
     durationSeconds: integer('durationSeconds').notNull(),
+    /** mtime of the source file when last scanned. Used to detect out-of-band content changes and to invalidate derived state (e.g. cached transcodes). */
+    sourceMtime: timestamp('sourceMtime', { withTimezone: true, mode: 'date' }).notNull(),
   },
   (t) => [
     index('Tracks_artist_idx').on(t.artist),

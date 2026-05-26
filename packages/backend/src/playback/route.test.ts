@@ -108,6 +108,7 @@ async function seedTrack(opts: {
       file: opts.file,
       sizeBytes: st.size,
       durationSeconds: opts.durationSeconds ?? 1,
+      sourceMtime: st.mtime,
     })
     .returning({ id: tracks.id });
   return row!.id;

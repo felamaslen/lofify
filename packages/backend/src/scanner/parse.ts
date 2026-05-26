@@ -58,6 +58,7 @@ export async function parseTrack(file: string): Promise<ParsedTrack> {
         file,
         sizeBytes: st.size,
         durationSeconds: Math.round(format.duration ?? 0),
+        sourceMtime: st.mtime,
       };
     } catch (err) {
       span.recordException(err as Error);
