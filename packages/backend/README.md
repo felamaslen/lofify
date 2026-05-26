@@ -79,19 +79,28 @@ the resolver runs.
   `Accept: text/event-stream`.
 - `GET /play/:signature/[q:<l|m|h>/]:id[/:seg]` — stream a track. The URL
   is produced by `Track.url` and HMAC-signed with `PLAYBACK_SIGNING_SECRET`.
-  The only signed option is the quality (`q:l`, `q:m`, `q:h`); the
+  The only signed option is the quality (`q:l`, `q:m`, `q:h`, `q:M`); the
   delivery container is negotiated at request time via the `Accept`
   header, so a single signed URL can be replayed with different `Accept`
   values to switch formats. Supported `Accept` entries: `audio/flac`,
   `audio/mpeg`, `audio/mp4` (plus the standard wildcards). `audio/flac`
   must always be paired with at least one fallback — flac alone returns
   `406`. Resolution:
-  - `audio/flac` accepted + flac source → passthrough (whole file with
-    `Accept-Ranges: bytes`, `Range` support, `Content-Type: audio/flac`).
-  - `audio/flac` accepted + lossy source → encode the first non-flac
-    `Accept` entry at the encoder's max preset.
-  - `audio/flac` not accepted → encode the first `Accept` entry at the
-    requested quality (`low` / `medium` / `high`; defaults to medium).
+  - Any `q:*` on the URL → lock to lossy: encode the first non-flac
+    `Accept` entry at the requested quality. `audio/flac` in `Accept` is
+    ignored on this path (q-present is the "I want lossy" signal).
+  - q-less URL, `audio/flac` accepted, flac source → passthrough (whole
+    file with `Accept-Ranges: bytes`, `Range` support,
+    `Content-Type: audio/flac`).
+  - q-less URL, `audio/flac` accepted, lossless non-flac source (e.g.
+    ape, alac) → serve the pre-baked flac at
+    `${TRANSCODE_BAKE_DIR}/${trackId}-${mtimeMs}.flac` via passthrough.
+    A missing bake is triggered and waited on inline; the GraphQL
+    resolver normally mints `q:M` for this case so clients don't stall.
+  - q-less URL, `audio/flac` accepted, lossy source → encode the first
+    non-flac `Accept` entry at the encoder's max preset.
+  - q-less URL, `audio/flac` not accepted → encode the first `Accept`
+    entry at medium.
 
   Encoded paths kick off (or attach to) a single per-track ffmpeg job.
   `audio/mp4` uses ffmpeg's DASH muxer with fragmented MP4 segments and
