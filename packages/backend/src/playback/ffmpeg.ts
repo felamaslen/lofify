@@ -241,6 +241,10 @@ export function spawnFlacBake(source: string, outPath: string): FfmpegHandle {
             'flac',
             '-compression_level',
             '5',
+            // Force the container — `outPath` ends in `.tmp` while the bake is
+            // in flight, so ffmpeg can't infer "flac" from the extension.
+            '-f',
+            'flac',
             '-y',
             outPath,
           ];
