@@ -25,9 +25,11 @@ services:
       - '4318:4318'   # OTLP HTTP
 
   backend:
-    image: node:24-bookworm-slim
-    working_dir: /app
-    command: sh -c "apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates && rm -rf /var/lib/apt/lists/* && corepack enable && pnpm install && pnpm --filter ./packages/backend dev"
+    # Build from the local Dockerfile so dev and prod share the same base image, apt deps, and pinned ffmpeg 8.1.1. Source is mounted over `/app` and the command is overridden to run the tsx-watch dev server instead of the prod start command.
+    build:
+      context: .
+      target: backend
+    command: sh -c "pnpm install && pnpm --filter ./packages/backend dev"
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgres://lofify:lofify@postgres:5432/lofify}
       BACKEND_HOST: 0.0.0.0
