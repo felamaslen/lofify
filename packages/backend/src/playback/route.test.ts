@@ -1,3 +1,4 @@
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -170,6 +171,85 @@ test('HEAD returns Content-Type + Accept-Ranges (no Content-Length until done)',
   expect(res.headers['content-type']).toBe('audio/mp4; codecs="opus"');
   expect(res.headers['accept-ranges']).toBe('bytes');
   expect(Number(res.headers['content-length'])).toBeGreaterThan(0);
+}, 30_000);
+
+test('every response varies on Range so caches do not cross-serve byte slices', async () => {
+  const id = await seedTrack({
+    file: SAMPLE_FLAC,
+    format: 'flac',
+    codec: 'flac',
+    isLossless: true,
+  });
+  const url = signPlaybackUrl(id, { quality: Quality.MEDIUM, formatLossy: FormatLossy.OPUS });
+  const full = await app.inject({ method: 'GET', url });
+  expect(full.statusCode).toBe(200);
+  expect(full.headers['vary']).toBe('Range');
+
+  const slice = await app.inject({ method: 'GET', url, headers: { range: 'bytes=10-49' } });
+  expect(slice.statusCode).toBe(206);
+  expect(slice.headers['vary']).toBe('Range');
+
+  const head = await app.inject({ method: 'HEAD', url });
+  expect(head.headers['vary']).toBe('Range');
+}, 30_000);
+
+test('fully-transcoded responses are cacheable, in-progress ones are not', async () => {
+  const id = await seedTrack({
+    file: SAMPLE_FLAC,
+    format: 'flac',
+    codec: 'flac',
+    isLossless: true,
+  });
+  const url = signPlaybackUrl(id, { quality: Quality.MEDIUM, formatLossy: FormatLossy.OPUS });
+
+  // Hold the encoder open: ffmpeg writes the real .bin and exits, but we withhold its `close` event
+  // from the encoder so the cache entry never reports `done`. That pins the entry in its
+  // in-progress state for as long as we want, making the no-store assertions deterministic.
+  const realSpawn = spawnSpy.getMockImplementation() as (
+    ...args: unknown[]
+  ) => ChildProcessWithoutNullStreams;
+  let releaseClose: (() => void) | undefined;
+  spawnSpy.mockImplementation((...callArgs: unknown[]) => {
+    const child = realSpawn(...callArgs);
+    if (callArgs[0] === 'ffmpeg') {
+      const realOn = child.on.bind(child);
+      const closeReleased = new Promise<void>((res) => {
+        releaseClose = res;
+      });
+      child.on = ((event: string, listener: (...a: unknown[]) => void) =>
+        event === 'close'
+          ? realOn('close', (...a: unknown[]) => void closeReleased.then(() => listener(...a)))
+          : realOn(event, listener)) as typeof child.on;
+    }
+    return child;
+  });
+
+  try {
+    const slice = await app.inject({ method: 'GET', url, headers: { range: 'bytes=0-49' } });
+    expect(slice.statusCode).toBe(206);
+    expect(slice.headers['content-range']).toMatch(/\/\*$/); // total still unknown
+    expect(slice.headers['cache-control']).toBe('no-store');
+
+    const head = await app.inject({ method: 'HEAD', url });
+    expect(head.headers['content-length']).toBeUndefined();
+    expect(head.headers['cache-control']).toBe('no-store');
+  } finally {
+    releaseClose?.(); // let the encode complete
+    spawnSpy.mockImplementation(realSpawn);
+  }
+
+  // Once the encode is done every response is immutable-cacheable.
+  await app.inject({ method: 'GET', url }); // serveFull waits for done
+  const full = await app.inject({ method: 'GET', url });
+  expect(full.statusCode).toBe(200);
+  expect(full.headers['cache-control']).toBe('public, max-age=31536000, immutable');
+
+  const doneSlice = await app.inject({ method: 'GET', url, headers: { range: 'bytes=10-49' } });
+  expect(doneSlice.statusCode).toBe(206);
+  expect(doneSlice.headers['cache-control']).toBe('public, max-age=31536000, immutable');
+
+  const doneHead = await app.inject({ method: 'HEAD', url });
+  expect(doneHead.headers['cache-control']).toBe('public, max-age=31536000, immutable');
 }, 30_000);
 
 test('q:max on a flac source delivers flac-in-mp4 (passthrough)', async () => {

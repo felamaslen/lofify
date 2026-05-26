@@ -18,6 +18,13 @@ import { parseOptionSegments } from './options.js';
 import { contentTypeFor, resolveTarget } from './resolve.js';
 import { verifySignature } from './sign.js';
 
+// A still-encoding entry's bytes (and its total length) keep growing, so its responses must never
+// be cached — a stored partial would be replayed as if complete. Once the encode is done the `.bin`
+// is final; the signed URL is deterministic over `(options, id)` with no expiry, so the bytes for a
+// given URL are stable and safe to cache aggressively.
+const CACHE_WHILE_ENCODING = 'no-store';
+const CACHE_WHEN_DONE = 'public, max-age=31536000, immutable';
+
 /** Parse a Range header. Supports `bytes=START-END` and `bytes=START-` (open-ended). Returns `null` for malformed or suffix-byte (`bytes=-N`) forms, which clients shouldn't be sending against incomplete media. */
 function parseRangeHeader(
   header: string | undefined,
@@ -87,18 +94,22 @@ async function serveRange(
     size = await waitForBinSize(entry, minNeeded);
   } catch (err) {
     reply.code(500);
+    reply.header('Cache-Control', CACHE_WHILE_ENCODING);
     return reply.send({ error: err instanceof Error ? err.message : 'encoder error' });
   }
   if (range.start >= size) {
     reply.code(416);
+    reply.header('Cache-Control', CACHE_WHILE_ENCODING);
     if (entry.isDone()) reply.header('Content-Range', `bytes */${size}`);
     return reply.send({ error: 'range not satisfiable' });
   }
+  const done = entry.isDone();
   const end = Math.min(range.end ?? size - 1, size - 1);
   reply.code(206);
   reply.header('Content-Type', contentType);
-  reply.header('Content-Range', `bytes ${range.start}-${end}/${entry.isDone() ? size : '*'}`);
+  reply.header('Content-Range', `bytes ${range.start}-${end}/${done ? size : '*'}`);
   reply.header('Content-Length', String(end - range.start + 1));
+  reply.header('Cache-Control', done ? CACHE_WHEN_DONE : CACHE_WHILE_ENCODING);
   return reply.send(createReadStream(entry.binPath, { start: range.start, end }));
 }
 
@@ -118,6 +129,8 @@ async function serveFull(
   reply.code(200);
   reply.header('Content-Type', contentType);
   reply.header('Content-Length', String(st.size));
+  // serveFull only returns after the encode finishes, so the bytes are final and cacheable.
+  reply.header('Cache-Control', CACHE_WHEN_DONE);
   return reply.send(createReadStream(entry.binPath));
 }
 
@@ -162,6 +175,10 @@ export async function registerPlaybackRoute(app: FastifyInstance): Promise<void>
 
     const contentType = contentTypeFor(target);
     reply.header('Accept-Ranges', 'bytes');
+    // One signed URL serves different bodies per `Range` (distinct byte slices, or the full `.bin`
+    // when no Range is sent), so a cache keyed only on the URL must not reuse a stored slice for a
+    // different range. Everything else that selects the representation is in the path, not headers.
+    reply.header('Vary', 'Range');
 
     if (req.method === 'HEAD') {
       reply.code(200);
@@ -169,6 +186,9 @@ export async function registerPlaybackRoute(app: FastifyInstance): Promise<void>
       if (entry.isDone()) {
         const st = await stat(entry.binPath);
         reply.header('Content-Length', String(st.size));
+        reply.header('Cache-Control', CACHE_WHEN_DONE);
+      } else {
+        reply.header('Cache-Control', CACHE_WHILE_ENCODING);
       }
       return reply.send();
     }
