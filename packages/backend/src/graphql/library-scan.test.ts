@@ -113,7 +113,7 @@ test('Subscription.libraryScan: isCompleted is false until the final frame', asy
   expect(frames.length).toBeGreaterThan(0);
 
   for (const frame of frames.slice(0, -1)) {
-    expect(frame.isCompleted).toBe(false);
+    expect(frame!.isCompleted).toBe(false);
   }
 
   const last = frames.at(-1)!;
@@ -148,9 +148,7 @@ const LibraryScanCancelMutation = graphql(`
 test('Mutation.libraryScanCancel: the subscription emits a final null frame, Query.libraryScan returns null, and a fresh scan can be started', async () => {
   await copyFile(path.join(fixturesDir, 'sample.mp3'), path.join(env.LIBRARY_PATH, 'one.mp3'));
 
-  const { data: started } = await gqlRequest(app)
-    .mutate(LibraryScanStartMutation)
-    .expectNoErrors();
+  const { data: started } = await gqlRequest(app).mutate(LibraryScanStartMutation).expectNoErrors();
   const { id } = started.libraryScanStart;
 
   const framesPromise = (async () => {
@@ -163,10 +161,7 @@ test('Mutation.libraryScanCancel: the subscription emits a final null frame, Que
     return frames;
   })();
 
-  await gqlRequest(app)
-    .mutate(LibraryScanCancelMutation)
-    .variables({ id })
-    .expectNoErrors();
+  await gqlRequest(app).mutate(LibraryScanCancelMutation).variables({ id }).expectNoErrors();
 
   const frames = await framesPromise;
   expect(frames.at(-1)).toBeNull();
@@ -189,13 +184,9 @@ test('Query.libraryScan is null when no scan has run', async () => {
 test('Query.libraryScan exposes the in-progress scan and the completed scan within its grace period', async () => {
   await copyFile(path.join(fixturesDir, 'sample.mp3'), path.join(env.LIBRARY_PATH, 'one.mp3'));
 
-  const { data: started } = await gqlRequest(app)
-    .mutate(LibraryScanStartMutation)
-    .expectNoErrors();
+  const { data: started } = await gqlRequest(app).mutate(LibraryScanStartMutation).expectNoErrors();
 
-  const { data: inProgressData } = await gqlRequest(app)
-    .query(LibraryScanQuery)
-    .expectNoErrors();
+  const { data: inProgressData } = await gqlRequest(app).query(LibraryScanQuery).expectNoErrors();
   expect(inProgressData.libraryScan).not.toBeNull();
   expect(inProgressData.libraryScan!.id).toBe(started.libraryScanStart.id);
 

@@ -25,9 +25,11 @@ services:
       - '4318:4318'   # OTLP HTTP
 
   backend:
-    image: node:24-bookworm-slim
-    working_dir: /app
-    command: sh -c "apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates && rm -rf /var/lib/apt/lists/* && corepack enable && pnpm install && pnpm --filter ./packages/backend dev"
+    # Build from the local Dockerfile so dev and prod share the same base image, apt deps, and pinned ffmpeg 8.1.1. Source is mounted over `/app` and the command is overridden to run the tsx-watch dev server instead of the prod start command.
+    build:
+      context: .
+      target: backend
+    command: sh -c "pnpm install && pnpm --filter ./packages/backend dev"
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgres://lofify:lofify@postgres:5432/lofify}
       BACKEND_HOST: 0.0.0.0
@@ -35,11 +37,7 @@ services:
       LIBRARY_PATH: /music
       PLAYBACK_SIGNING_SECRET: ${PLAYBACK_SIGNING_SECRET:-dev-secret}
       TRANSCODE_MAX_PARALLEL: ${TRANSCODE_MAX_PARALLEL:-4}
-      TRANSCODE_CACHE_MAX_BYTES: ${TRANSCODE_CACHE_MAX_BYTES:-1073741824}
-      TRANSCODE_CACHE_TTL_SECONDS: ${TRANSCODE_CACHE_TTL_SECONDS:-3600}
-      TRANSCODE_TMPDIR: /transcode
-      TRANSCODE_BAKE_DIR: /bakes
-      TRANSCODE_BAKE_PARALLEL: ${TRANSCODE_BAKE_PARALLEL:-1}
+      PLAYBACK_CACHE_DIR: /playback-cache
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-lgtm:4318
       OTEL_SERVICE_NAME: lofify-backend
     ports:
@@ -48,8 +46,7 @@ services:
       - .:/app
       - backend-node-modules:/app/node_modules
       - ${LIBRARY_PATH:-./music}:/music:ro
-      - ./transcode-debug:/transcode
-      - bake-cache:/bakes
+      - playback-cache:/playback-cache
     depends_on:
       postgres:
         condition: service_healthy
@@ -73,4 +70,4 @@ volumes:
   postgres-data:
   backend-node-modules:
   web-node-modules:
-  bake-cache:
+  playback-cache:

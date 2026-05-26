@@ -1,4 +1,4 @@
-import { Gem, Wifi, WifiHigh, WifiLow } from 'lucide-react';
+import { Gem, Wifi, WifiHigh, WifiLow, WifiZero } from 'lucide-react';
 import type { ComponentType, SVGProps } from 'react';
 
 import { type ActualFormat, type Quality, usePlayer } from '../state/player.tsx';
@@ -13,22 +13,23 @@ type BadgeShape = {
   tooltip: string;
 };
 
-const FORMAT_LABEL: Record<NonNullable<ActualFormat>, string> = {
+const FORMAT_LABEL: Record<ActualFormat, string> = {
   flac: 'FLAC',
   opus: 'Opus',
   mp3: 'MP3',
 };
 
-// Lucide's wifi family has four levels (full → zero). With three lossy tiers we map high/medium/low onto the upper three so "low" still shows a visible arc rather than the bare dot.
-const LOSSY_TIER_ICON: Record<Exclude<Quality, 'max'>, IconComponent> = {
-  high: Wifi,
-  medium: WifiHigh,
-  low: WifiLow,
+// Lucide's wifi family has four levels (full → zero). The four lossy tiers map one-to-one onto them, descending: high → full, medium, low, min → the bare dot.
+const LOSSY_TIER_ICON: Record<Exclude<Quality, 'MAX'>, IconComponent> = {
+  HIGH: Wifi,
+  MEDIUM: WifiHigh,
+  LOW: WifiLow,
+  MIN: WifiZero,
 };
 
-function badgeFor(quality: Quality, actual: ActualFormat): BadgeShape | null {
+function badgeFor(quality: Quality, actual: ActualFormat | null): BadgeShape | null {
   if (!actual) return null;
-  if (quality === 'max') {
+  if (quality === 'MAX') {
     if (actual === 'flac') {
       return { Icon: Gem, label: 'FLAC', tone: 'accent', tooltip: 'Lossless · FLAC' };
     }
@@ -39,11 +40,12 @@ function badgeFor(quality: Quality, actual: ActualFormat): BadgeShape | null {
       tooltip: `Lossless requested, but the source is lossy — delivered as ${FORMAT_LABEL[actual]}.`,
     };
   }
+  const tierLabel = quality.charAt(0) + quality.slice(1).toLowerCase();
   return {
     Icon: LOSSY_TIER_ICON[quality],
     label: FORMAT_LABEL[actual],
     tone: 'muted',
-    tooltip: `${quality[0]?.toUpperCase()}${quality.slice(1)} · ${FORMAT_LABEL[actual]}`,
+    tooltip: `${tierLabel} · ${FORMAT_LABEL[actual]}`,
   };
 }
 

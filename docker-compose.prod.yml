@@ -24,16 +24,12 @@ services:
       BACKEND_HOST: ${BACKEND_HOST:-0.0.0.0}
       BACKEND_PORT: 4002
       LIBRARY_PATH: /music
-      TRANSCODE_TMPDIR: /transcode
-      TRANSCODE_BAKE_DIR: /bakes
-      TRANSCODE_BAKE_PARALLEL: ${TRANSCODE_BAKE_PARALLEL:-1}
+      PLAYBACK_CACHE_DIR: /playback-cache
     ports:
       - '4002:4002'
     volumes:
       - ${LIBRARY_PATH}:/music:ro
-      - ./var/bakes:/bakes
-    tmpfs:
-      - /transcode:size=${TRANSCODE_TMPFS_SIZE:-2g}
+      - ./var/cache:/playback-cache
     depends_on:
       postgres:
         condition: service_healthy

@@ -4,13 +4,29 @@
 """Restricts a numeric argument to the inclusive range [min, max]."""
 directive @constraint(min: Int!, max: Int!) on ARGUMENT_DEFINITION
 
+"""Codec the lossy delivery path uses."""
+enum FormatLossy {
+  MP3
+  OPUS
+}
+
 """
-Coarse delivery quality the client requests for an encoded stream. `MAX` is server-internal — clients ask for it implicitly by including `audio/flac` in their `Accept` header, not via this enum.
+Coarse playback quality. `MIN` / `LOW` / `MEDIUM` / `HIGH` map to lossy presets in ascending bitrate; `MAX` asks for lossless when the source is lossless and the highest lossy preset (in `formatLossy`) when it isn't.
 """
 enum Quality {
   HIGH
   LOW
+  MAX
   MEDIUM
+  MIN
+}
+
+"""
+How the client wants the track delivered. `formatLossy` is always required — even when `quality: MAX`, the server falls through to a lossy stream for non-lossless sources, so it always needs a codec to fall back to.
+"""
+input TrackFormat {
+  formatLossy: FormatLossy!
+  quality: Quality!
 }
 
 """A length of time, expressed in whole seconds."""
@@ -93,19 +109,20 @@ type Subscription {
   """
   libraryScan(id: ID!): LibraryScan
   """
-  Stream progress snapshots of the transcode that backs a given `(trackId, quality, Accept)` playback stream. Pass the same `Accept` header value the client will send to `/play/...` — the server resolves it to the same transcode job key, so the subscription observes the actual encoder the player is consuming.
+  Stream manifest snapshots for `(trackId, quality, format)`. The same `(quality, format)` values the client baked into its signed playback URL drive cache-entry selection on the server, so the manifest describes exactly the bytes the playback route will serve.
   
-  Emits at most once per second while the transcode is running, then yields a final snapshot when it finishes. Passthrough streams (`audio/flac` accepted on a flac source) yield a single `isDone: true` snapshot.
+  Emits at most once per second while the encoder runs, then a final emission when it finishes. For already-warm cache entries (or for tracks served by passthrough) the subscription emits a single `done: true` emission and completes.
+  
+  `chunks` is a per-emission delta (see `TrackManifest`). Each subscription tracks its own sent-count starting at zero, so the first emission replays every chunk finalised so far and later emissions carry only new ones — restarting (or reconnecting) the subscription always yields the full list up front, then deltas.
   """
-  transcodeProgress(
+  trackManifest(
     """
-    The exact value the client will send in the `Accept` header on `/play/...` — may be a comma-separated list. Defaults to `audio/mp4` if omitted.
+    Same `(quality, formatLossy)` the client baked into its signed playback URL.
     """
-    acceptHeaderValue: String
-    """One of `low`, `medium`, `high`."""
-    quality: String
+    format: TrackFormat!
+    """Track id."""
     trackId: ID!
-  ): TranscodeProgress!
+  ): TrackManifest!
 }
 
 """A single audio file in the library."""
@@ -128,14 +145,11 @@ type Track {
   title: String
   trackNumber: Int
   """
-  Signed URL the client should `GET` to stream this track. The container format is selected at request time via the `Accept` header; the signed URL is independent of it, so a single URL can be replayed with different `Accept` values to switch formats without re-querying GraphQL.
+  Signed URL the client should `GET` (with `Range:` headers) to stream this track. The URL bakes in `format` so a single URL is reusable for the lifetime of a playback session.
   
-  When the caller doesn't pin a `quality`, the resolver picks one based on the source: lossy or flac sources get a q-less URL (the client can still get flac passthrough by listing `audio/flac` in `Accept`); lossless non-flac sources with a warm flac cache also get a q-less URL; cold lossless non-flac sources get `q:M`, which pins playback to the lossy pipeline while a background bake warms the cache for the next play.
+  Defaults to `{ quality: MAX, formatLossy: OPUS }`.
   """
-  url(
-    """Coarse delivery quality."""
-    quality: Quality
-  ): String!
+  url(format: TrackFormat): String!
   year: String
 }
 
@@ -157,21 +171,49 @@ type TrackEdge {
 }
 
 """
-Snapshot of how far the server has progressed transcoding a track's playback stream. Drives the "still encoding" overlay in the playback bar so the client knows which seek targets are reachable.
+One emission in the live manifest stream for a `(track, quality, format)` cache entry. `chunks` is a *delta* — only the chunks finalised since the previous emission — because the encoded stream grows append-only and re-sending the whole list every tick is O(events × chunks). The client appends each delta to its running list in arrival order. The scalar fields (`durationSeconds`, `done`, `init`) carry the current absolute state on every emission, so a client that joined mid-stream is told where it stands without needing the full history.
 """
-type TranscodeProgress {
+type TrackManifest {
   """
-  Duration of a single transcode chunk, in seconds. Constant for the lifetime of the subscription.
+  Chunks finalised since the previous emission, in order. A delta, not the full list — the client appends them to its accumulated manifest.
   """
-  chunkDurationSeconds: Int!
+  chunks: [TrackManifestChunk!]!
   """
-  True once ffmpeg has finished (successfully or not). After this the snapshot is final.
+  True once the encoder has finished and the trailing chunk has been emitted. After this, no more emissions will arrive.
   """
-  isDone: Boolean!
+  done: Boolean!
   """
-  Number of equal-duration chunks that have been written to the transcode cache so far. Multiply by `chunkDurationSeconds` to get the seconds-ready cursor.
+  Cumulative encoded duration so far, equal to the last chunk's `endSeconds` or `0` when no chunks have landed yet.
   """
-  readyChunks: Int!
+  durationSeconds: Float!
+  """
+  Init-segment byte range. `null` for mp3, and `null` for fmp4 until the first fragment boundary has been observed. Repeated on every emission until non-null, so it's never missed.
+  """
+  init: TrackManifestInit
+}
+
+"""
+One finalised chunk of the encoded stream. Clients pick the chunk whose byte range covers a target seek time by binary-searching `endSeconds`, then issue a `Range: bytes=byteStart-byteEnd-1` request against the playback URL.
+"""
+type TrackManifestChunk {
+  """Exclusive end byte offset."""
+  byteEnd: Float!
+  """Inclusive start byte offset."""
+  byteStart: Float!
+  """
+  Cumulative encoded end time of this chunk, in seconds. Strictly increasing across the `chunks` array.
+  """
+  endSeconds: Float!
+}
+
+"""
+Byte range of the init segment in the encoded `.bin`. Clients fetch this range first and prepend it to the SourceBuffer before appending any chunk. Null on containers that have no init segment (mp3).
+"""
+type TrackManifestInit {
+  """Exclusive end byte offset."""
+  byteEnd: Float!
+  """Inclusive start byte offset."""
+  byteStart: Float!
 }
 
 """

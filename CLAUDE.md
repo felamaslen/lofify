@@ -37,6 +37,13 @@ without being reminded.
 - Use `fastify.inject` to drive GraphQL operations end-to-end.
 - Do not import implementation modules from tests. Assert only on
   observable HTTP/GraphQL responses. Tests are behavioural.
+- **Never mock our own modules.** Don't `vi.mock('./foo.js')` on any
+  in-repo module — that couples the test to the module's public API
+  rather than its behaviour. If a test needs to observe a side effect
+  (e.g. "ffmpeg was spawned exactly once"), mock at the syscall/Node
+  boundary instead (`vi.mock('node:child_process', ...)` with
+  passthrough, then assert on call counts). The rule of thumb: mocks
+  belong at the edge of the system, never inside it.
 
 ## Frontend
 
