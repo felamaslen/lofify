@@ -132,3 +132,5 @@ the resolver runs.
 | `TRANSCODE_CACHE_MAX_BYTES`    | `1073741824` (1 GiB)  | Soft cap on bytes held in the in-memory transcode cache. |
 | `TRANSCODE_CACHE_TTL_SECONDS`  | `3600`                | TTL after last access for cached transcodes. |
 | `TRANSCODE_TMPDIR`             | `${os.tmpdir()}/lofify-transcode` | Scratch directory for ffmpeg DASH output. Mount as tmpfs in containers (see `docker-compose.yml`). |
+| `TRANSCODE_BAKE_DIR`           | `${os.tmpdir()}/lofify-bakes`     | Persistent directory for pre-baked flac re-encodes of lossless non-flac sources. Survives restarts; point at durable storage in production. |
+| `TRANSCODE_BAKE_PARALLEL`      | `1`                   | Concurrent flac-bake ffmpeg processes. Separate from `TRANSCODE_MAX_PARALLEL` so bakes can't starve live playback. |
