@@ -1,12 +1,19 @@
 import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { readFragment } from 'gql.tada';
-import { useEffect, useMemo, useRef } from 'react';
+import { type MouseEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 import { graphql } from '../lib/gql.ts';
 import { gqlRequest } from '../lib/gql-request.ts';
 import { cn } from '../lib/utils.ts';
 import { TrackByIdDocument, usePlayer } from '../state/player.tsx';
+import { type EditableTrack, TagEditDialog } from './tag-edit-dialog.tsx';
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from './ui/context-menu.tsx';
 
 const TrackListRowDocument = graphql(`
   fragment TrackListRow on Track {
@@ -81,6 +88,50 @@ export function TrackList() {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
+  const anchorRef = useRef<number | null>(null);
+  const [editing, setEditing] = useState(false);
+
+  const selectRow = (e: MouseEvent, index: number, id: string): void => {
+    if (e.shiftKey && anchorRef.current !== null) {
+      const from = Math.min(anchorRef.current, index);
+      const to = Math.max(anchorRef.current, index);
+      setSelected(new Set(edges.slice(from, to + 1).map((edge) => edge.node.id)));
+      return;
+    }
+    if (e.metaKey || e.ctrlKey) {
+      setSelected((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      });
+      anchorRef.current = index;
+      return;
+    }
+    setSelected(new Set([id]));
+    anchorRef.current = index;
+  };
+
+  const selectedTracks = useMemo<EditableTrack[]>(
+    () =>
+      edges
+        .filter((edge) => selected.has(edge.node.id))
+        .map((edge) => {
+          const t = readFragment(TrackListRowDocument, edge.node);
+          return {
+            id: edge.node.id,
+            title: t.title,
+            artist: t.artist,
+            album: t.album,
+            trackNumber: t.trackNumber,
+            discNumber: t.discNumber,
+            year: t.year,
+          };
+        }),
+    [edges, selected],
+  );
+
   const onRowEnter = (id: string): void => {
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
     hoverTimerRef.current = setTimeout(() => {
@@ -149,70 +200,96 @@ export function TrackList() {
         <span>Year</span>
         <span className="text-right">Source</span>
       </div>
-      <div ref={scrollRef} className="relative overflow-y-auto">
-        <div
-          style={{
-            height: virtualizer.getTotalSize(),
-            position: 'relative',
-            width: '100%',
-          }}
-        >
-          {items.map((virtualRow) => {
-            const edge = edges[virtualRow.index];
-            if (!edge) return null;
-            const t = readFragment(TrackListRowDocument, edge.node);
-            const active = current?.id === edge.node.id;
-            return (
-              <div
-                key={edge.cursor}
-                role="row"
-                onMouseDown={(e) => {
-                  if (e.detail >= 2) e.preventDefault();
-                }}
-                onMouseEnter={() => onRowEnter(edge.node.id)}
-                onMouseLeave={onRowLeave}
-                onDoubleClick={() => play(edge.node.id)}
-                className={cn(
-                  COLS,
-                  'cursor-pointer text-sm hover:bg-accent/40',
-                  t.isLossless && 'shadow-[inset_3px_0_0_0] shadow-amber-400',
-                  active && 'bg-primary/15 text-primary-foreground',
-                )}
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  width: '100%',
-                  height: virtualRow.size,
-                  transform: `translateY(${virtualRow.start}px)`,
-                }}
-              >
-                <span className="text-muted-foreground tabular-nums">{t.discNumber ?? ''}</span>
-                <span className="text-muted-foreground tabular-nums">{t.trackNumber ?? ''}</span>
-                <span className={cn('truncate', t.isLossless && 'font-medium')}>
-                  {t.title ?? '(untitled)'}
-                </span>
-                <span className="tabular-nums text-muted-foreground">{t.duration.formatted}</span>
-                <span className="truncate text-muted-foreground">{t.artist ?? ''}</span>
-                <span className="truncate text-muted-foreground">{t.album ?? ''}</span>
-                <span className="text-muted-foreground tabular-nums">{t.year ?? ''}</span>
-                <span className="flex justify-end">
-                  <span
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <div ref={scrollRef} className="relative overflow-y-auto">
+            <div
+              style={{
+                height: virtualizer.getTotalSize(),
+                position: 'relative',
+                width: '100%',
+              }}
+            >
+              {items.map((virtualRow) => {
+                const edge = edges[virtualRow.index];
+                if (!edge) return null;
+                const t = readFragment(TrackListRowDocument, edge.node);
+                const active = current?.id === edge.node.id;
+                const isSelected = selected.has(edge.node.id);
+                return (
+                  <div
+                    key={edge.cursor}
+                    role="row"
+                    aria-selected={isSelected}
+                    onMouseDown={(e) => {
+                      if (e.detail >= 2) e.preventDefault();
+                    }}
+                    onClick={(e) => selectRow(e, virtualRow.index, edge.node.id)}
+                    onContextMenu={() => {
+                      if (!selected.has(edge.node.id)) {
+                        setSelected(new Set([edge.node.id]));
+                        anchorRef.current = virtualRow.index;
+                      }
+                    }}
+                    onMouseEnter={() => onRowEnter(edge.node.id)}
+                    onMouseLeave={onRowLeave}
+                    onDoubleClick={() => play(edge.node.id)}
                     className={cn(
-                      'rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide',
-                      t.isLossless
-                        ? 'border-primary/30 bg-primary/10 text-primary'
-                        : 'border-border bg-muted/40 text-muted-foreground',
+                      COLS,
+                      'cursor-pointer text-sm hover:bg-accent/40',
+                      t.isLossless && 'shadow-[inset_3px_0_0_0] shadow-amber-400',
+                      isSelected && 'bg-accent/60',
+                      active && 'bg-primary/15 text-primary-foreground',
                     )}
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      width: '100%',
+                      height: virtualRow.size,
+                      transform: `translateY(${virtualRow.start}px)`,
+                    }}
                   >
-                    {t.sourceFormat}
-                  </span>
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      </div>
+                    <span className="text-muted-foreground tabular-nums">{t.discNumber ?? ''}</span>
+                    <span className="text-muted-foreground tabular-nums">
+                      {t.trackNumber ?? ''}
+                    </span>
+                    <span className={cn('truncate', t.isLossless && 'font-medium')}>
+                      {t.title ?? '(untitled)'}
+                    </span>
+                    <span className="tabular-nums text-muted-foreground">
+                      {t.duration.formatted}
+                    </span>
+                    <span className="truncate text-muted-foreground">{t.artist ?? ''}</span>
+                    <span className="truncate text-muted-foreground">{t.album ?? ''}</span>
+                    <span className="text-muted-foreground tabular-nums">{t.year ?? ''}</span>
+                    <span className="flex justify-end">
+                      <span
+                        className={cn(
+                          'rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide',
+                          t.isLossless
+                            ? 'border-primary/30 bg-primary/10 text-primary'
+                            : 'border-border bg-muted/40 text-muted-foreground',
+                        )}
+                      >
+                        {t.sourceFormat}
+                      </span>
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuItem disabled={selected.size === 0} onSelect={() => setEditing(true)}>
+            Edit tags{selected.size > 1 ? ` (${selected.size})` : ''}
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+      {selectedTracks.length > 0 && (
+        <TagEditDialog tracks={selectedTracks} open={editing} onOpenChange={setEditing} />
+      )}
     </div>
   );
 }
