@@ -67,13 +67,7 @@ export function PlaybackBar() {
         >
           {isPlaying ? <Pause /> : <Play />}
         </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={next}
-          disabled={!current}
-          aria-label="Next"
-        >
+        <Button variant="ghost" size="icon" onClick={next} disabled={!current} aria-label="Next">
           <SkipForward />
         </Button>
       </div>

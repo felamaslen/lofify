@@ -12,7 +12,4 @@ export const AUDIO_EXTENSIONS = [
   'ape',
 ] as const;
 
-export const AUDIO_EXTENSION_RE = new RegExp(
-  `\\.(?:${AUDIO_EXTENSIONS.join('|')})$`,
-  'i',
-);
+export const AUDIO_EXTENSION_RE = new RegExp(`\\.(?:${AUDIO_EXTENSIONS.join('|')})$`, 'i');

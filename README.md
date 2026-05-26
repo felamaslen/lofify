@@ -52,18 +52,18 @@ persists at `{directory}/var/db`. `.env.production` is git-ignored.
 
 ## Root scripts
 
-| Script           | What it does                                       |
-| ---------------- | -------------------------------------------------- |
-| `lint`           | ESLint across every package                        |
-| `typecheck`      | `tsc --noEmit` across every package                |
-| `test`           | Per-package test runner                            |
-| `dev`            | Watch-mode dev across every package                |
-| `build`          | Production build                                   |
-| `codegen`        | Run all code generators across every package       |
-| `db:generate`    | Drizzle schema → `schema.sql`                      |
-| `db:migrate`     | Apply pending Postgres migrations                  |
+| Script              | What it does                                    |
+| ------------------- | ----------------------------------------------- |
+| `lint`              | ESLint across every package                     |
+| `typecheck`         | `tsc --noEmit` across every package             |
+| `test`              | Per-package test runner                         |
+| `dev`               | Watch-mode dev across every package             |
+| `build`             | Production build                                |
+| `codegen`           | Run all code generators across every package    |
+| `db:generate`       | Drizzle schema → `schema.sql`                   |
+| `db:migrate`        | Apply pending Postgres migrations               |
 | `db:migrate:create` | Regenerate `schema.sql` + write a new migration |
-| `format`         | Prettier write                                     |
+| `format`            | Prettier write                                  |
 
 ## Config
 

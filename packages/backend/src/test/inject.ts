@@ -11,9 +11,7 @@ type ResultWithErrors<TResult> = { data?: TResult; errors: GqlError[] };
 type AnyDocument<TResult, TVars> = TypedDocumentNode<TResult, TVars> | DocumentNode | string;
 type Expect = 'any' | 'no-errors' | 'errors';
 
-class GqlBuilder<TResult, TVars, TOut = Result<TResult>>
-  implements PromiseLike<TOut>
-{
+class GqlBuilder<TResult, TVars, TOut = Result<TResult>> implements PromiseLike<TOut> {
   private vars?: TVars;
   private headers: Record<string, string> = {
     'content-type': 'application/json',
@@ -46,8 +44,7 @@ class GqlBuilder<TResult, TVars, TOut = Result<TResult>>
   }
 
   private async send(): Promise<TOut> {
-    const query =
-      typeof this.document === 'string' ? this.document : print(this.document);
+    const query = typeof this.document === 'string' ? this.document : print(this.document);
     const res = await this.app.inject({
       method: 'POST',
       url: '/graphql',
@@ -67,20 +64,14 @@ class GqlBuilder<TResult, TVars, TOut = Result<TResult>>
   }
 
   then<TFulfilled = TOut, TRejected = never>(
-    onFulfilled?:
-      | ((value: TOut) => TFulfilled | PromiseLike<TFulfilled>)
-      | null,
-    onRejected?:
-      | ((reason: unknown) => TRejected | PromiseLike<TRejected>)
-      | null,
+    onFulfilled?: ((value: TOut) => TFulfilled | PromiseLike<TFulfilled>) | null,
+    onRejected?: ((reason: unknown) => TRejected | PromiseLike<TRejected>) | null,
   ): PromiseLike<TFulfilled | TRejected> {
     return this.send().then(onFulfilled, onRejected);
   }
 }
 
-class GqlSubscriptionBuilder<TResult, TVars>
-  implements AsyncIterable<Result<TResult>>
-{
+class GqlSubscriptionBuilder<TResult, TVars> implements AsyncIterable<Result<TResult>> {
   private vars?: TVars;
   private headers: Record<string, string> = {};
 
@@ -111,8 +102,7 @@ class GqlSubscriptionBuilder<TResult, TVars>
     const url = `http://127.0.0.1:${addr.port}/graphql/stream`;
     const headers = { ...this.headers };
     const client = createClient({ url, headers });
-    const query =
-      typeof this.document === 'string' ? this.document : print(this.document);
+    const query = typeof this.document === 'string' ? this.document : print(this.document);
 
     const queue: Result<TResult>[] = [];
     let streamError: unknown = null;
@@ -128,24 +118,21 @@ class GqlSubscriptionBuilder<TResult, TVars>
     if (this.vars !== undefined) {
       subscribePayload.variables = this.vars as Record<string, unknown>;
     }
-    const unsubscribe = client.subscribe<TResult>(
-      subscribePayload,
-      {
-        next: (msg) => {
-          queue.push(msg as unknown as Result<TResult>);
-          tick();
-        },
-        error: (err) => {
-          streamError = err;
-          streamDone = true;
-          tick();
-        },
-        complete: () => {
-          streamDone = true;
-          tick();
-        },
+    const unsubscribe = client.subscribe<TResult>(subscribePayload, {
+      next: (msg) => {
+        queue.push(msg as unknown as Result<TResult>);
+        tick();
       },
-    );
+      error: (err) => {
+        streamError = err;
+        streamDone = true;
+        tick();
+      },
+      complete: () => {
+        streamDone = true;
+        tick();
+      },
+    });
 
     try {
       for (;;) {
@@ -170,28 +157,16 @@ class GqlEntry {
   constructor(private app: FastifyInstance) {}
 
   /** Build a `POST /graphql` request that runs the given query document. Pass a `TypedDocumentNode` (typically produced by `gql.tada`) for full result/variable typing, or a raw string/`DocumentNode` to opt out and get an `unknown` payload. */
-  query<TResult, TVars>(
-    document: TypedDocumentNode<TResult, TVars>,
-  ): GqlBuilder<TResult, TVars>;
-  query(
-    document: string | DocumentNode,
-  ): GqlBuilder<unknown, Record<string, unknown>>;
-  query<TResult, TVars>(
-    document: AnyDocument<TResult, TVars>,
-  ): GqlBuilder<TResult, TVars> {
+  query<TResult, TVars>(document: TypedDocumentNode<TResult, TVars>): GqlBuilder<TResult, TVars>;
+  query(document: string | DocumentNode): GqlBuilder<unknown, Record<string, unknown>>;
+  query<TResult, TVars>(document: AnyDocument<TResult, TVars>): GqlBuilder<TResult, TVars> {
     return new GqlBuilder<TResult, TVars>(this.app, document);
   }
 
   /** Build a `POST /graphql` request that runs the given mutation document. Behaves identically to `query` — the split exists to make the test's intent obvious. */
-  mutate<TResult, TVars>(
-    document: TypedDocumentNode<TResult, TVars>,
-  ): GqlBuilder<TResult, TVars>;
-  mutate(
-    document: string | DocumentNode,
-  ): GqlBuilder<unknown, Record<string, unknown>>;
-  mutate<TResult, TVars>(
-    document: AnyDocument<TResult, TVars>,
-  ): GqlBuilder<TResult, TVars> {
+  mutate<TResult, TVars>(document: TypedDocumentNode<TResult, TVars>): GqlBuilder<TResult, TVars>;
+  mutate(document: string | DocumentNode): GqlBuilder<unknown, Record<string, unknown>>;
+  mutate<TResult, TVars>(document: AnyDocument<TResult, TVars>): GqlBuilder<TResult, TVars> {
     return new GqlBuilder<TResult, TVars>(this.app, document);
   }
 

@@ -21,19 +21,19 @@ src/
 
 ## Scripts
 
-| Script               | What it does                                          |
-| -------------------- | ----------------------------------------------------- |
-| `dev`                | `tsx watch src/index.ts` — boots the server           |
-| `start`              | Production-style boot (no watch)                      |
-| `test`               | `vitest run` (behavioural tests via fastify.inject)   |
-| `typecheck`          | `tsc --noEmit`                                        |
-| `codegen`            | All code generators (`db:generate`, `gql:generate`)   |
-| `db:generate`        | Drizzle schema → `src/db/__generated__/schema.sql`    |
+| Script               | What it does                                            |
+| -------------------- | ------------------------------------------------------- |
+| `dev`                | `tsx watch src/index.ts` — boots the server             |
+| `start`              | Production-style boot (no watch)                        |
+| `test`               | `vitest run` (behavioural tests via fastify.inject)     |
+| `typecheck`          | `tsc --noEmit`                                          |
+| `codegen`            | All code generators (`db:generate`, `gql:generate`)     |
+| `db:generate`        | Drizzle schema → `src/db/__generated__/schema.sql`      |
 | `gql:generate`       | grats → `src/graphql/__generated__/schema.{ts,graphql}` |
-| `db:migrate`         | Apply pending migrations                              |
-| `db:migrate:create`  | Diff schema vs. applied migrations, write new SQL     |
-| `db:migrate:list`    | Show migration history                                |
-| `db:migrate:pending` | Show pending migrations                               |
+| `db:migrate`         | Apply pending migrations                                |
+| `db:migrate:create`  | Diff schema vs. applied migrations, write new SQL       |
+| `db:migrate:list`    | Show migration history                                  |
+| `db:migrate:pending` | Show pending migrations                                 |
 
 ## Adding a migration
 
@@ -104,11 +104,11 @@ is complete.
 
 Target resolution:
 
-| `quality` | source         | served as                              |
-| --------- | -------------- | -------------------------------------- |
-| `MAX`     | lossless       | `audio/mp4; codecs="flac"` (passthrough for flac sources, re-encode for ape/alac/wv/etc.) |
-| `MAX`     | lossy          | highest lossy preset in `formatLossy`  |
-| `MIN`/`LOW`/`MEDIUM`/`HIGH` | any | lossy preset in `formatLossy`    |
+| `quality`                   | source   | served as                                                                                 |
+| --------------------------- | -------- | ----------------------------------------------------------------------------------------- |
+| `MAX`                       | lossless | `audio/mp4; codecs="flac"` (passthrough for flac sources, re-encode for ape/alac/wv/etc.) |
+| `MAX`                       | lossy    | highest lossy preset in `formatLossy`                                                     |
+| `MIN`/`LOW`/`MEDIUM`/`HIGH` | any      | lossy preset in `formatLossy`                                                             |
 
 Each `(track, format, quality)` maps to one cache entry under
 `PLAYBACK_CACHE_DIR/<trackId>-<sourceMtimeMs>/<targetKey>.{bin,idx}`.
@@ -133,18 +133,18 @@ true` snapshot and complete.
 
 ## Env
 
-| Variable                       | Default               | Notes                |
-| ------------------------------ | --------------------- | -------------------- |
-| `BACKEND_HOST`                 | `0.0.0.0`             |                      |
-| `BACKEND_PORT`                 | `4000`                |                      |
-| `OTEL_EXPORTER_OTLP_ENDPOINT`  | `http://otel-lgtm:4318` | OTLP/HTTP base URL |
-| `OTEL_SERVICE_NAME`            | `lofify-backend`      |                      |
-| `DATABASE_URL`                 | _(unset)_             | Postgres connection string for the Drizzle pool. |
-| `LIBRARY_PATH`                 | _required_            | Absolute path to the music library. The chokidar watcher follows it at boot. |
-| `SCAN_CONCURRENCY`             | `4`                   | Max files parsed and upserted in parallel by the scanner. |
-| `SCAN_CRON`                    | `0 2 * * *`           | Cron expression for the recurring full library scan. Empty disables. |
-| `CORS_ALLOW_ORIGINS`           | `http://localhost:5173,http://127.0.0.1:5173` | Comma-separated allowlist of browser origins. `*` allows any. |
-| `PLAYBACK_SIGNING_SECRET`      | `dev-secret`          | HMAC key used to sign and verify `/play` URLs. |
-| `TRANSCODE_MAX_PARALLEL`       | `12`                  | Maximum concurrent ffmpeg encode processes. |
-| `PLAYBACK_CACHE_DIR`           | `${os.tmpdir()}/lofify-cache` | Persistent root for cache entries (`<trackId>-<mtimeMs>/<targetKey>.{bin,idx}`). Survives restarts; point at durable storage in production. |
-| `WEB_DIST_PATH`                | `packages/web/dist`   | Built web client served as an SPA catch-all when present. |
+| Variable                      | Default                                       | Notes                                                                                                                                       |
+| ----------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BACKEND_HOST`                | `0.0.0.0`                                     |                                                                                                                                             |
+| `BACKEND_PORT`                | `4000`                                        |                                                                                                                                             |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://otel-lgtm:4318`                       | OTLP/HTTP base URL                                                                                                                          |
+| `OTEL_SERVICE_NAME`           | `lofify-backend`                              |                                                                                                                                             |
+| `DATABASE_URL`                | _(unset)_                                     | Postgres connection string for the Drizzle pool.                                                                                            |
+| `LIBRARY_PATH`                | _required_                                    | Absolute path to the music library. The chokidar watcher follows it at boot.                                                                |
+| `SCAN_CONCURRENCY`            | `4`                                           | Max files parsed and upserted in parallel by the scanner.                                                                                   |
+| `SCAN_CRON`                   | `0 2 * * *`                                   | Cron expression for the recurring full library scan. Empty disables.                                                                        |
+| `CORS_ALLOW_ORIGINS`          | `http://localhost:5173,http://127.0.0.1:5173` | Comma-separated allowlist of browser origins. `*` allows any.                                                                               |
+| `PLAYBACK_SIGNING_SECRET`     | `dev-secret`                                  | HMAC key used to sign and verify `/play` URLs.                                                                                              |
+| `TRANSCODE_MAX_PARALLEL`      | `12`                                          | Maximum concurrent ffmpeg encode processes.                                                                                                 |
+| `PLAYBACK_CACHE_DIR`          | `${os.tmpdir()}/lofify-cache`                 | Persistent root for cache entries (`<trackId>-<mtimeMs>/<targetKey>.{bin,idx}`). Survives restarts; point at durable storage in production. |
+| `WEB_DIST_PATH`               | `packages/web/dist`                           | Built web client served as an SPA catch-all when present.                                                                                   |

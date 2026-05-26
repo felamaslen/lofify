@@ -17,16 +17,10 @@ export const tracks = pgTable(
     id: uuid('id')
       .primaryKey()
       .default(sql`uuidv7()`),
-    createdAt: timestamp('createdAt', { withTimezone: true, mode: 'date' })
-      .notNull()
-      .defaultNow(),
-    updatedAt: timestamp('updatedAt', { withTimezone: true, mode: 'date' })
-      .notNull()
-      .defaultNow(),
+    createdAt: timestamp('createdAt', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+    updatedAt: timestamp('updatedAt', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
     /** Updated whenever the scanner re-reads this file. */
-    scannedAt: timestamp('scannedAt', { withTimezone: true, mode: 'date' })
-      .notNull()
-      .defaultNow(),
+    scannedAt: timestamp('scannedAt', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
     title: text('title'),
     trackNumber: integer('trackNumber'),
     discNumber: integer('discNumber'),

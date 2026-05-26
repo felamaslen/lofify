@@ -1,11 +1,5 @@
 import { type FormatLossy, usePlayer } from '../state/player.tsx';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from './ui/select.tsx';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select.tsx';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip.tsx';
 
 const CHOICES: { value: FormatLossy; label: string; unsupportedReason: string }[] = [

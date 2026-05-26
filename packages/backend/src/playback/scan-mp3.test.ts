@@ -131,7 +131,10 @@ describe('real mp3 fixture', () => {
   beforeAll(async () => {
     workDir = await mkdtemp(path.join(tmpdir(), 'scan-mp3-fixture-'));
     const out = path.join(workDir, 'mp3.bin');
-    const target: EncodeTarget = { format: { container: 'mp3', codec: 'mp3' }, quality: Quality.MEDIUM };
+    const target: EncodeTarget = {
+      format: { container: 'mp3', codec: 'mp3' },
+      quality: Quality.MEDIUM,
+    };
     await spawnEncoder({
       source: SAMPLE_FLAC,
       target,

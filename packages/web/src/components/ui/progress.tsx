@@ -11,10 +11,7 @@ export const Progress = React.forwardRef<
 >(({ className, value, indeterminate, ...props }, ref) => (
   <ProgressPrimitive.Root
     ref={ref}
-    className={cn(
-      'relative h-2 w-full overflow-hidden rounded-full bg-secondary',
-      className,
-    )}
+    className={cn('relative h-2 w-full overflow-hidden rounded-full bg-secondary', className)}
     {...props}
   >
     <ProgressPrimitive.Indicator
@@ -23,9 +20,7 @@ export const Progress = React.forwardRef<
         indeterminate && 'animate-pulse',
       )}
       style={{
-        transform: indeterminate
-          ? 'translateX(-60%)'
-          : `translateX(-${100 - (value ?? 0)}%)`,
+        transform: indeterminate ? 'translateX(-60%)' : `translateX(-${100 - (value ?? 0)}%)`,
       }}
     />
   </ProgressPrimitive.Root>

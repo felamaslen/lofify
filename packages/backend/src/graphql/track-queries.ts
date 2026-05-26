@@ -86,8 +86,7 @@ export async function tracks(
     throw new Error('Pass either `first` or `last`, not both.');
   }
   const isBackward = last != null;
-  const limit =
-    clampLimit(isBackward ? last : first) ?? DEFAULT_PAGE_SIZE;
+  const limit = clampLimit(isBackward ? last : first) ?? DEFAULT_PAGE_SIZE;
 
   const cursorId = isBackward ? before : after;
   if (cursorId) {
@@ -129,9 +128,7 @@ export async function tracks(
     cursor: row.id,
   }));
 
-  const totalRow = await db
-    .select({ count: sql<number>`count(*)::int` })
-    .from(tracksTable);
+  const totalRow = await db.select({ count: sql<number>`count(*)::int` }).from(tracksTable);
   const totalCount = totalRow[0]?.count ?? 0;
 
   return {

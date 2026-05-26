@@ -93,7 +93,7 @@ describe('watchLibrary', () => {
     expect(row.durationSeconds).toBeGreaterThan(0);
   });
 
-  it('writes a monkey\'s audio row as lossless', async () => {
+  it("writes a monkey's audio row as lossless", async () => {
     const file = path.join(root, 'tune.ape');
     await copyFile(path.join(fixturesDir, 'sample.ape'), file);
 

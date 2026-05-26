@@ -105,7 +105,7 @@ so `Subscription.libraryScan` reads live in-memory progress directly — no
 control-plane RPC.
 
 - [x] `scanner/runner.ts` — orchestrator. Holds a map of `scanId →
-      ScanState { filesTotal, scannedTotal, errorsTotal, errors[] }`.
+  ScanState { filesTotal, scannedTotal, errorsTotal, errors[] }`.
       State lives in memory only; entries are wiped some grace period
       after completion.
 - [x] `scanner/parse.ts` — audio metadata parsing via
@@ -118,8 +118,7 @@ control-plane RPC.
       synchronously; work runs in the background and updates the
       in-memory `ScanState`.
 - [x] `scanner/watch.ts` — long-running watcher via
-      [`chokidar`](https://github.com/paulmillr/chokidar). On add: parse
-      + upsert. On unlink: delete by `file`. On change: re-parse +
+      [`chokidar`](https://github.com/paulmillr/chokidar). On add: parse + upsert. On unlink: delete by `file`. On change: re-parse +
       upsert. Started during backend boot. `LIBRARY_PATH` is required.
 - [x] DB writes use the backend's existing Drizzle connection — no
       separate pool.
@@ -138,10 +137,10 @@ Goal: backend can trigger and observe scans.
       `LibraryScan` synchronously with `filesTotal: null` (clients show
       indeterminate progress until the walk finishes).
 - [x] `type LibraryScan { id: ID!, scannedTotal: Int!, errorsTotal: Int!,
-      filesTotal: Int }` (`filesTotal` nullable; null while discovery is
+  filesTotal: Int }` (`filesTotal` nullable; null while discovery is
       in flight).
 - [x] `Subscription.libraryScan(id: ID!): LibraryScan` over SSE on `POST
-      /graphql/stream` (graphql-sse, distinct-connections mode). Wakes
+  /graphql/stream` (graphql-sse, distinct-connections mode). Wakes
       on each scanner update event (with a 1s heartbeat fallback);
       completes when the scan finishes.
 - [x] Behavioural tests:
@@ -184,7 +183,7 @@ Goal: `GET /play/{signature}/{options}/{id}` streams audio.
   - [x] No `Range` → stream whole file.
   - [x] With `Range` → 206 partial content from disk.
   - [x] `Content-Type` set with mime + codec (e.g. `audio/ogg;
-        codecs=vorbis`).
+codecs=vorbis`).
 - [x] **Transcode path** (quality set or format differs from source):
   - [x] Spawn ffmpeg, stream stdout to client.
   - [x] LRU cache of recent transcoded streams; TTL + max size from env.
