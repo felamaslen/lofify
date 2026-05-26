@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { Quality } from '../graphql/track.js';
 import { type EncodeTarget,spawnEncoder, targetKey } from './encoder.js';
 import { makeMp3Scanner } from './scan-mp3.js';
-import { makeMp4Scanner } from './scan-mp4.js';
+import { mp4Scanner } from './scan-mp4.js';
 
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'scanner', '__fixtures__');
 const SAMPLE_FLAC = path.join(FIXTURES, 'sample.flac');
@@ -34,7 +34,7 @@ test('opus-in-mp4 from flac source: writes a single fragmented mp4 the mp4 scann
   await handle.done;
   const bytes = await readFile(out);
   expect(bytes.length).toBeGreaterThan(0);
-  const r = makeMp4Scanner(0.2).scan(bytes, 0, true);
+  const r = mp4Scanner.scan(bytes, 0, true);
   expect(r.init).not.toBeNull();
   expect(r.init![0]).toBe(0);
   expect(r.init![1]).toBeGreaterThan(0);
@@ -54,7 +54,7 @@ test('flac-in-mp4 passthrough from flac source: yields a copy-muxed fmp4', async
   await handle.done;
   const bytes = await readFile(out);
   expect(bytes.length).toBeGreaterThan(0);
-  const r = makeMp4Scanner(0.2).scan(bytes, 0, true);
+  const r = mp4Scanner.scan(bytes, 0, true);
   expect(r.init).not.toBeNull();
   // Flac source ≈ 1 s; at 0.2 s/frag we should get several fragments.
   expect(r.chunks.length).toBeGreaterThanOrEqual(2);
@@ -76,7 +76,8 @@ test('mp3 from flac source: writes a frame stream the mp3 scanner can walk', asy
   expect(r.init).toBeNull();
   expect(r.chunks.length).toBeGreaterThanOrEqual(2);
   // Cumulative duration should match the source (roughly — last frame may overshoot).
-  const total = r.chunks.reduce((acc, c) => acc + c.durationSeconds, 0);
+  const totalSamples = r.chunks.reduce((acc, c) => acc + (c.rawDuration ?? 0), 0);
+  const total = totalSamples / r.timescale!;
   expect(total).toBeGreaterThanOrEqual(0.9);
   expect(total).toBeLessThanOrEqual(1.2);
 }, 30_000);

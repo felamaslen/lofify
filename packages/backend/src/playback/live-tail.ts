@@ -70,6 +70,8 @@ export function startLiveTail(opts: LiveTailOptions): LiveTailHandle {
   const emitter = new EventEmitter();
   emitter.setMaxListeners(0);
   let resumeOffset = 0;
+  // Latched from the first scan result that reports it (mdhd timescale for fmp4, sample rate for mp3). Constant for the stream's lifetime.
+  let timescale = 0;
   let stopped = false;
 
   async function readTail(): Promise<{ buf: Buffer; size: number } | null> {
@@ -119,12 +121,18 @@ export function startLiveTail(opts: LiveTailOptions): LiveTailHandle {
         try {
           const result = scanner.scan(buf, resumeOffset, isFinal);
           let changed = false;
+          if (result.timescale && !timescale) timescale = result.timescale;
           if (result.init && !index.init) {
             index.init = result.init;
             changed = true;
           }
           for (const c of result.chunks) {
-            const endSeconds = index.durationSeconds + c.durationSeconds;
+            // `rawDuration` is in timescale units; `null` (trailing fmp4 fragment) falls back to the nominal chunk duration. Either way, a missing/zero timescale also degrades to nominal.
+            const durationSeconds =
+              c.rawDuration !== null && timescale > 0
+                ? c.rawDuration / timescale
+                : chunkDurationSeconds;
+            const endSeconds = index.durationSeconds + durationSeconds;
             index.chunks.push({ byte: c.byte, endSeconds });
             index.durationSeconds = endSeconds;
             changed = true;

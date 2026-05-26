@@ -79,7 +79,7 @@ function skipId3v2(buf: Buffer, baseOffset: number): number {
   return 10 + size;
 }
 
-/** Build a scanner that emits chunks when the per-window sample accumulator crosses `targetWindowSeconds * sampleRate`. */
+/** Build a scanner that emits chunks when the per-window sample accumulator crosses `targetWindowSeconds * sampleRate`. Durations are reported as raw sample counts against the sample-rate timescale; the driver divides to get seconds. */
 export function makeMp3Scanner(targetWindowSeconds = DEFAULT_CHUNK_DURATION_SECONDS): Scanner {
   return {
     scan(buf: Buffer, baseOffset: number, isFinal: boolean): ScanResult {
@@ -87,7 +87,7 @@ export function makeMp3Scanner(targetWindowSeconds = DEFAULT_CHUNK_DURATION_SECO
       let pos = skipId3v2(buf, baseOffset);
       let windowStart = baseOffset + pos;
       let accumulatedSamples = 0;
-      let lastSampleRate = 0;
+      let sampleRate: number | null = null;
       while (pos + 4 <= buf.length) {
         const decoded = decodeHeader(buf, pos);
         if (!decoded) {
@@ -95,14 +95,11 @@ export function makeMp3Scanner(targetWindowSeconds = DEFAULT_CHUNK_DURATION_SECO
         }
         if (pos + decoded.frameLength > buf.length) break;
         accumulatedSamples += decoded.samples;
-        lastSampleRate = decoded.sampleRateHz;
+        sampleRate = decoded.sampleRateHz;
         pos += decoded.frameLength;
-        if (accumulatedSamples >= targetWindowSeconds * lastSampleRate) {
+        if (accumulatedSamples >= targetWindowSeconds * decoded.sampleRateHz) {
           const frameEnd = baseOffset + pos;
-          chunks.push({
-            byte: [windowStart, frameEnd],
-            durationSeconds: accumulatedSamples / lastSampleRate,
-          });
+          chunks.push({ byte: [windowStart, frameEnd], rawDuration: accumulatedSamples });
           windowStart = frameEnd;
           accumulatedSamples = 0;
         }
@@ -110,13 +107,10 @@ export function makeMp3Scanner(targetWindowSeconds = DEFAULT_CHUNK_DURATION_SECO
       let resumeOffset = windowStart;
       if (isFinal && accumulatedSamples > 0) {
         const fileEnd = baseOffset + pos;
-        chunks.push({
-          byte: [windowStart, fileEnd],
-          durationSeconds: lastSampleRate > 0 ? accumulatedSamples / lastSampleRate : 0,
-        });
+        chunks.push({ byte: [windowStart, fileEnd], rawDuration: accumulatedSamples });
         resumeOffset = fileEnd;
       }
-      return { init: null, chunks, resumeOffset };
+      return { init: null, timescale: sampleRate, chunks, resumeOffset };
     },
   };
 }

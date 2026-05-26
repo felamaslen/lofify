@@ -26,7 +26,7 @@ import { type IndexFile, type LiveTailHandle, startLiveTail } from './live-tail.
 
 const tracer = trace.getTracer('lofify.playback.cache');
 import { makeMp3Scanner } from './scan-mp3.js';
-import { makeMp4Scanner } from './scan-mp4.js';
+import { mp4Scanner } from './scan-mp4.js';
 import type { Scanner } from './scan-types.js';
 
 export type CacheRequest = {
@@ -82,7 +82,8 @@ type InternalEntry = {
 function scannerFor(target: EncodeTarget, chunkDurationSeconds: number): Scanner {
   switch (target.format.container) {
     case 'mp4':
-      return makeMp4Scanner(chunkDurationSeconds);
+      // fmp4 reads its own per-fragment timing from tfdt, so it needs no nominal hint.
+      return mp4Scanner;
     case 'mp3':
       return makeMp3Scanner(chunkDurationSeconds);
   }

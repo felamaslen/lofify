@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { type IndexFile, startLiveTail } from './live-tail.js';
 import { makeMp3Scanner } from './scan-mp3.js';
-import { makeMp4Scanner } from './scan-mp4.js';
+import { mp4Scanner } from './scan-mp4.js';
 
 let workDir: string;
 
@@ -73,7 +73,7 @@ test('mp4: picks up init range and growing chunks; finalise flushes trailing fra
   await writeFile(binPath, Buffer.alloc(0));
 
   const handle = startLiveTail({
-    scanner: makeMp4Scanner(6),
+    scanner: mp4Scanner,
     binPath,
     idxPath,
     chunkDurationSeconds: 6,
@@ -171,7 +171,7 @@ test('stop() halts the loop without finalising', async () => {
   await writeFile(binPath, Buffer.concat([moof, mdat]));
 
   const handle = startLiveTail({
-    scanner: makeMp4Scanner(6),
+    scanner: mp4Scanner,
     binPath,
     idxPath,
     chunkDurationSeconds: 6,
@@ -191,7 +191,7 @@ test('persists .idx after every meaningful update (so a crash mid-encode leaves 
   await writeFile(binPath, Buffer.alloc(0));
 
   const handle = startLiveTail({
-    scanner: makeMp4Scanner(6),
+    scanner: mp4Scanner,
     binPath,
     idxPath,
     chunkDurationSeconds: 6,
