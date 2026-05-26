@@ -1,3 +1,4 @@
+import { stat } from 'node:fs/promises';
 import type { Readable } from 'node:stream';
 
 import { SpanStatusCode, trace } from '@opentelemetry/api';
@@ -19,8 +20,12 @@ import {
   type ScanState,
 } from './runner.js';
 
-/** Parse `file` and write the result to `Tracks`, replacing the existing row keyed by absolute path. */
+/** Parse `file` and write the result to `Tracks`, replacing the existing row keyed by absolute path. Zero-byte files (placeholders, interrupted copies) are skipped silently rather than treated as parse failures. */
 export async function upsertTrack(file: string): Promise<void> {
+  if ((await stat(file)).size === 0) {
+    logger.warn(`scanner: skipping empty file ${file}`);
+    return;
+  }
   const parsed = await parseTrack(file);
   const now = new Date();
   await db
