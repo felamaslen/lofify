@@ -13,6 +13,7 @@ import {
 
 import { PlaybackBarDocument } from '../components/playback-bar.tsx';
 import { TracksDocument } from '../components/track-list.tsx';
+import { getAudioElement } from '../lib/audio-element.ts';
 import { type Capabilities, capabilities } from '../lib/capabilities.ts';
 import { graphql, type ResultOf, type VariablesOf } from '../lib/gql.ts';
 import { gqlRequest } from '../lib/gql-request.ts';
@@ -159,13 +160,6 @@ type PlayerCtx = {
 
 const Ctx = createContext<PlayerCtx | null>(null);
 
-function singletonAudio(): HTMLAudioElement | null {
-  if (typeof window === 'undefined') return null;
-  const el = new Audio();
-  el.preload = 'metadata';
-  return el;
-}
-
 function errorMessageFor(err: CreatePlayerError): string {
   switch (err.kind) {
     case 'mse-unsupported':
@@ -178,7 +172,7 @@ function errorMessageFor(err: CreatePlayerError): string {
 export function PlayerProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  if (audioRef.current === null) audioRef.current = singletonAudio();
+  if (audioRef.current === null) audioRef.current = getAudioElement();
   const [current, setCurrent] = useState<TrackNode | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [positionSeconds, setPositionSeconds] = useState(0);
