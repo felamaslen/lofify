@@ -25,10 +25,13 @@ services:
       BACKEND_PORT: 4002
       LIBRARY_PATH: /music
       TRANSCODE_TMPDIR: /transcode
+      TRANSCODE_BAKE_DIR: /bakes
+      TRANSCODE_BAKE_PARALLEL: ${TRANSCODE_BAKE_PARALLEL:-1}
     ports:
       - '4002:4002'
     volumes:
       - ${LIBRARY_PATH}:/music:ro
+      - ./var/bakes:/bakes
     tmpfs:
       - /transcode:size=${TRANSCODE_TMPFS_SIZE:-2g}
     depends_on:
