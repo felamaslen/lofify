@@ -84,18 +84,26 @@ export type ResolvedTarget =
 /**
  * Pick a delivery target given the source track, signed options, and the client's accepted formats.
  *
- * Rules:
- * - If `flac` is in the accept list and the source is flac → passthrough.
- * - If `flac` is in the accept list and the source is lossy → encode at max quality to the first non-flac accept entry.
- * - If `flac` is not in the accept list → encode at the requested quality (default `1`) to the first accept entry.
+ * Setting any `q:*` on the URL is the client's signal that it wants a lossy encode at exactly that quality — `audio/flac` in `Accept` is ignored on that path (the first non-flac accept entry is used as the container instead). A q-less URL is the only way to get flac: flac passthrough when the source is flac, and otherwise the lossy fallback at `max` quality.
  */
 export function resolveTarget(track: DbTrack, opts: ParsedOptions, accepts: DeliveryFormat[]): ResolvedTarget {
+  if (opts.quality != null) {
+    // q-present URL: lock to lossy regardless of what `Accept` says. flac in
+    // `Accept` is ignored — the caller has validated that at least one
+    // non-flac entry exists, so `nonFlac` is always defined.
+    const nonFlac = accepts.find((a) => a !== 'flac');
+    if (!nonFlac) throw new Error('unreachable: flac-only Accept on q-present URL');
+    return {
+      kind: 'transcode',
+      target: encodeTarget(nonFlac, opts.quality),
+      contentType: contentTypeFor(nonFlac),
+    };
+  }
   const sourceIsFlac = track.format.toLowerCase() === 'flac';
   if (accepts.includes('flac')) {
     if (sourceIsFlac) return { kind: 'passthrough', contentType: contentTypeFor('flac') };
     const fallback = accepts.find((a) => a !== 'flac');
-    // Caller validates `accepts` (flac alone is rejected upstream) so a fallback always exists here.
-    if (!fallback) throw new Error('unreachable: flac without fallback');
+    if (!fallback) throw new Error('unreachable: flac-only Accept');
     return {
       kind: 'transcode',
       target: encodeTarget(fallback, 'max'),
@@ -103,8 +111,7 @@ export function resolveTarget(track: DbTrack, opts: ParsedOptions, accepts: Deli
     };
   }
   const fmt = accepts[0]!;
-  const q = opts.quality ?? 'medium';
-  return { kind: 'transcode', target: encodeTarget(fmt, q), contentType: contentTypeFor(fmt) };
+  return { kind: 'transcode', target: encodeTarget(fmt, 'medium'), contentType: contentTypeFor(fmt) };
 }
 
 function encodeTarget(fmt: DeliveryFormat, quality: 'low' | 'medium' | 'high' | 'max'): TranscodeTarget {
