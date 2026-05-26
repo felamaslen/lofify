@@ -6,9 +6,19 @@ import { fileURLToPath } from 'node:url';
 import { app } from '../app.js';
 import { db } from '../db/client.js';
 import { tracks } from '../db/schema/index.js';
-import { FormatLossy, Quality } from '../graphql/track.js';
+import { Quality } from '../graphql/track.js';
 import { defaultCache } from './cache.js';
+import type { EncodeFormat, EncodeTarget } from './encoder.js';
 import { signPlaybackUrl } from './sign.js';
+
+/** Build a resolved `EncodeTarget` to bake into a signed URL. The route decodes this verbatim — format resolution itself is covered by `resolve.test.ts`. */
+function target(
+  container: EncodeFormat['container'],
+  codec: EncodeFormat['codec'],
+  quality: Quality,
+): EncodeTarget {
+  return { format: { container, codec } as EncodeFormat, quality };
+}
 
 const spawnSpy = vi.hoisted(() => vi.fn());
 vi.mock('node:child_process', async (importOriginal) => {
@@ -85,7 +95,7 @@ test('GET without Range serves the full encoded bin with 200 + Content-Length', 
     codec: 'flac',
     isLossless: true,
   });
-  const url = signPlaybackUrl(id, { quality: Quality.MEDIUM, formatLossy: FormatLossy.OPUS });
+  const url = signPlaybackUrl(id, target('mp4', 'opus', Quality.MEDIUM));
   const res = await app.inject({ method: 'GET', url });
   expect(res.statusCode).toBe(200);
   expect(res.headers['content-type']).toBe('audio/mp4; codecs="opus"');
@@ -102,7 +112,7 @@ test('GET with Range serves a 206 byte slice with Content-Range', async () => {
     codec: 'flac',
     isLossless: true,
   });
-  const url = signPlaybackUrl(id, { quality: Quality.MEDIUM, formatLossy: FormatLossy.OPUS });
+  const url = signPlaybackUrl(id, target('mp4', 'opus', Quality.MEDIUM));
   // Warm the cache so we know the total size.
   await app.inject({ method: 'GET', url });
   const headRes = await app.inject({ method: 'HEAD', url });
@@ -123,7 +133,7 @@ test('open-ended Range (bytes=N-) serves from N to current EOF', async () => {
     codec: 'flac',
     isLossless: true,
   });
-  const url = signPlaybackUrl(id, { quality: Quality.MEDIUM, formatLossy: FormatLossy.OPUS });
+  const url = signPlaybackUrl(id, target('mp4', 'opus', Quality.MEDIUM));
   await app.inject({ method: 'GET', url }); // warm
   const headRes = await app.inject({ method: 'HEAD', url });
   const total = Number(headRes.headers['content-length']);
@@ -141,7 +151,7 @@ test('Range past EOF after the encode completes returns 416', async () => {
     codec: 'flac',
     isLossless: true,
   });
-  const url = signPlaybackUrl(id, { quality: Quality.MEDIUM, formatLossy: FormatLossy.OPUS });
+  const url = signPlaybackUrl(id, target('mp4', 'opus', Quality.MEDIUM));
   await app.inject({ method: 'GET', url }); // warm and finish
   const headRes = await app.inject({ method: 'HEAD', url });
   const total = Number(headRes.headers['content-length']);
@@ -162,7 +172,7 @@ test('HEAD returns Content-Type + Accept-Ranges (no Content-Length until done)',
     codec: 'flac',
     isLossless: true,
   });
-  const url = signPlaybackUrl(id, { quality: Quality.MEDIUM, formatLossy: FormatLossy.OPUS });
+  const url = signPlaybackUrl(id, target('mp4', 'opus', Quality.MEDIUM));
 
   // Wait for the encode to finish first to make the assertion deterministic.
   await app.inject({ method: 'GET', url });
@@ -180,7 +190,7 @@ test('every response varies on Range so caches do not cross-serve byte slices', 
     codec: 'flac',
     isLossless: true,
   });
-  const url = signPlaybackUrl(id, { quality: Quality.MEDIUM, formatLossy: FormatLossy.OPUS });
+  const url = signPlaybackUrl(id, target('mp4', 'opus', Quality.MEDIUM));
   const full = await app.inject({ method: 'GET', url });
   expect(full.statusCode).toBe(200);
   expect(full.headers['vary']).toBe('Range');
@@ -200,7 +210,7 @@ test('fully-transcoded responses are cacheable, in-progress ones are not', async
     codec: 'flac',
     isLossless: true,
   });
-  const url = signPlaybackUrl(id, { quality: Quality.MEDIUM, formatLossy: FormatLossy.OPUS });
+  const url = signPlaybackUrl(id, target('mp4', 'opus', Quality.MEDIUM));
 
   // Hold the encoder open: ffmpeg writes the real .bin and exits, but we withhold its `close` event
   // from the encoder so the cache entry never reports `done`. That pins the entry in its
@@ -252,20 +262,20 @@ test('fully-transcoded responses are cacheable, in-progress ones are not', async
   expect(doneHead.headers['cache-control']).toBe('public, max-age=31536000, immutable');
 }, 30_000);
 
-test('q:max on a flac source delivers flac-in-mp4 (passthrough)', async () => {
+test('flac target on a flac source delivers flac-in-mp4 (passthrough)', async () => {
   const id = await seedTrack({
     file: SAMPLE_FLAC,
     format: 'flac',
     codec: 'flac',
     isLossless: true,
   });
-  const url = signPlaybackUrl(id, { quality: Quality.MAX, formatLossy: FormatLossy.OPUS });
+  const url = signPlaybackUrl(id, target('mp4', 'flac', Quality.MAX));
   const res = await app.inject({ method: 'GET', url });
   expect(res.statusCode).toBe(200);
   expect(res.headers['content-type']).toBe('audio/mp4; codecs="flac"');
 }, 30_000);
 
-test('q:max on a lossless-non-flac source re-encodes to flac-in-mp4', async () => {
+test('flac target on a lossless-non-flac source re-encodes to flac-in-mp4', async () => {
   const id = await seedTrack({
     // TODO: fix the ape fixture to actually have audio in it
     file: SAMPLE_FLAC,
@@ -273,20 +283,20 @@ test('q:max on a lossless-non-flac source re-encodes to flac-in-mp4', async () =
     codec: 'ape',
     isLossless: true,
   });
-  const url = signPlaybackUrl(id, { quality: Quality.MAX, formatLossy: FormatLossy.OPUS });
+  const url = signPlaybackUrl(id, target('mp4', 'flac', Quality.MAX));
   const res = await app.inject({ method: 'GET', url });
   expect(res.statusCode).toBe(200);
   expect(res.headers['content-type']).toBe('audio/mp4; codecs="flac"');
 }, 30_000);
 
-test('q:max + f:mp3 from a lossy (non-mp3) source re-encodes at libmp3lame 320k', async () => {
+test('mp3 target at max from a lossy (non-mp3) source re-encodes at libmp3lame 320k', async () => {
   const id = await seedTrack({
     file: SAMPLE_OGG,
     format: 'ogg',
     codec: 'vorbis',
     isLossless: false,
   });
-  const url = signPlaybackUrl(id, { quality: Quality.MAX, formatLossy: FormatLossy.MP3 });
+  const url = signPlaybackUrl(id, target('mp3', 'mp3', Quality.MAX));
   const res = await app.inject({ method: 'GET', url });
   expect(res.statusCode).toBe(200);
   expect(res.headers['content-type']).toBe('audio/mpeg');
@@ -310,9 +320,9 @@ test('q:max + f:mp3 from a lossy (non-mp3) source re-encodes at libmp3lame 320k'
   `);
 }, 30_000);
 
-test('q:max + f:mp3 from an mp3 source passthrough-copies (no re-encode)', async () => {
+test('mp3 target from an mp3 source passthrough-copies (no re-encode)', async () => {
   const id = await seedTrack({ file: SAMPLE_MP3, format: 'mp3', codec: 'mp3', isLossless: false });
-  const url = signPlaybackUrl(id, { quality: Quality.MAX, formatLossy: FormatLossy.MP3 });
+  const url = signPlaybackUrl(id, target('mp3', 'mp3', Quality.MAX));
   const res = await app.inject({ method: 'GET', url });
   expect(res.statusCode).toBe(200);
   expect(res.headers['content-type']).toBe('audio/mpeg');
@@ -334,14 +344,86 @@ test('q:max + f:mp3 from an mp3 source passthrough-copies (no re-encode)', async
   `);
 }, 30_000);
 
-test('q:l with f:mp3 delivers low-quality mp3 regardless of source codec', async () => {
+test('webm/vorbis target on a vorbis source passthrough-copies (no re-encode)', async () => {
+  const id = await seedTrack({
+    file: SAMPLE_OGG,
+    format: 'ogg',
+    codec: 'vorbis',
+    isLossless: false,
+  });
+  const url = signPlaybackUrl(id, target('webm', 'vorbis', Quality.MAX));
+  const res = await app.inject({ method: 'GET', url });
+  expect(res.statusCode).toBe(200);
+  expect(res.headers['content-type']).toBe('audio/webm; codecs="vorbis"');
+  expect(lastEncoderArgs()).toMatchInlineSnapshot(`
+    [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-vn",
+      "-c:a",
+      "copy",
+      "-f",
+      "webm",
+      "-dash",
+      "1",
+      "-dash_track_number",
+      "1",
+      "-cluster_time_limit",
+      "6000",
+    ]
+  `);
+}, 30_000);
+
+test('webm/opus target on a vorbis source transcodes with libopus', async () => {
+  const id = await seedTrack({
+    file: SAMPLE_OGG,
+    format: 'ogg',
+    codec: 'vorbis',
+    isLossless: false,
+  });
+  const url = signPlaybackUrl(id, target('webm', 'opus', Quality.MAX));
+  const res = await app.inject({ method: 'GET', url });
+  expect(res.statusCode).toBe(200);
+  expect(res.headers['content-type']).toBe('audio/webm; codecs="opus"');
+  expect(lastEncoderArgs()).toMatchInlineSnapshot(`
+    [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-vn",
+      "-c:a",
+      "libopus",
+      "-b:a",
+      "256k",
+      "-vbr",
+      "on",
+      "-application",
+      "audio",
+      "-af",
+      "aresample=resampler=soxr:precision=28:dither_method=triangular_hp",
+      "-ar",
+      "48000",
+      "-f",
+      "webm",
+      "-dash",
+      "1",
+      "-dash_track_number",
+      "1",
+      "-cluster_time_limit",
+      "6000",
+    ]
+  `);
+}, 30_000);
+
+test('low-quality mp3 target delivers libmp3lame 128k regardless of source codec', async () => {
   const id = await seedTrack({
     file: SAMPLE_FLAC,
     format: 'flac',
     codec: 'flac',
     isLossless: true,
   });
-  const url = signPlaybackUrl(id, { quality: Quality.LOW, formatLossy: FormatLossy.MP3 });
+  const url = signPlaybackUrl(id, target('mp3', 'mp3', Quality.LOW));
   const res = await app.inject({ method: 'GET', url });
   expect(res.statusCode).toBe(200);
   expect(res.headers['content-type']).toBe('audio/mpeg');
@@ -377,7 +459,7 @@ test('rejects requests with an invalid signature', async () => {
 test('rejects requests with missing options', async () => {
   const id = await seedTrack({ file: SAMPLE_MP3, format: 'mp3', codec: 'mp3', isLossless: false });
   const { signPayload } = await import('./sign.js');
-  const payload = id; // no q:, no f:
+  const payload = id; // no option segments
   const sig = signPayload(payload);
   const res = await app.inject({ method: 'GET', url: `/play/${sig}/${payload}` });
   expect(res.statusCode).toBe(400);
@@ -393,10 +475,10 @@ test('rejects requests with malformed option segments', async () => {
 });
 
 test('rejects unknown track id with 404', async () => {
-  const url = signPlaybackUrl('00000000-0000-0000-0000-000000000000', {
-    quality: Quality.MEDIUM,
-    formatLossy: FormatLossy.OPUS,
-  });
+  const url = signPlaybackUrl(
+    '00000000-0000-0000-0000-000000000000',
+    target('mp4', 'opus', Quality.MEDIUM),
+  );
   const res = await app.inject({ method: 'GET', url });
   expect(res.statusCode).toBe(404);
 });

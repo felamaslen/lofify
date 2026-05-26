@@ -3,10 +3,10 @@
  * Do not manually edit. Regenerate by running `npx grats`.
  */
 
-import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, GraphQLInt, specifiedDirectives, GraphQLObjectType, GraphQLString, GraphQLID, GraphQLBoolean, GraphQLInputObjectType, GraphQLEnumType, GraphQLList, GraphQLFloat } from "graphql";
+import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, GraphQLInt, specifiedDirectives, GraphQLObjectType, GraphQLString, GraphQLID, GraphQLBoolean, GraphQLInputObjectType, GraphQLList, GraphQLEnumType, GraphQLFloat } from "graphql";
 import { libraryScan as queryLibraryScanResolver, libraryScanCancel as mutationLibraryScanCancelResolver, libraryScanStart as mutationLibraryScanStartResolver, libraryScanSubscription as subscriptionLibraryScanResolver } from "./../library-scan.js";
 import { ping as queryPingResolver, noop as mutationNoopResolver } from "./../root.js";
-import { path as trackPathResolver, url as trackUrlResolver } from "./../track.js";
+import { delivery as trackDeliveryResolver, path as trackPathResolver, url as trackUrlResolver } from "./../track.js";
 import { track as queryTrackResolver, tracks as queryTracksResolver } from "./../track-queries.js";
 import { trackUpdate as mutationTrackUpdateResolver } from "./../track-mutations.js";
 import { trackManifestSubscription as subscriptionTrackManifestResolver } from "./../track-manifest.js";
@@ -48,37 +48,36 @@ export function getSchema(): GraphQLSchema {
             };
         }
     });
-    const DurationType: GraphQLObjectType = new GraphQLObjectType({
-        name: "Duration",
-        description: "A length of time, expressed in whole seconds.",
+    const TrackDeliveryType: GraphQLObjectType = new GraphQLObjectType({
+        name: "TrackDelivery",
+        description: "How a track will be delivered for a requested `format`: the URL to fetch, the MIME type the bytes carry, whether it's a copy or a transcode, and a short description for the format tooltip. Resolves the same way `url` does, so a client can read everything it needs from one field.",
         fields() {
             return {
-                formatted: {
-                    description: "Human-readable form, e.g. `\"05:32\"` or `\"1:02:14\"` for spans at least an hour long.",
-                    name: "formatted",
+                description: {
+                    description: "Short human-readable summary of the delivery, e.g. \"Original Vorbis, copied without re-encoding\" or \"Transcoded to Opus at 256 kbps\".",
+                    name: "description",
                     type: new GraphQLNonNull(GraphQLString)
                 },
-                seconds: {
-                    name: "seconds",
-                    type: new GraphQLNonNull(GraphQLInt)
+                isPassthrough: {
+                    description: "Whether the source is delivered without re-encoding (a container-only copy).",
+                    name: "isPassthrough",
+                    type: new GraphQLNonNull(GraphQLBoolean)
+                },
+                mimeType: {
+                    description: "MIME type the bytes are served as \u2014 the value to pass to `MediaSource.addSourceBuffer`.",
+                    name: "mimeType",
+                    type: new GraphQLNonNull(GraphQLString)
+                },
+                url: {
+                    description: "Signed URL the client should `GET` (with `Range:` headers) to stream this track.",
+                    name: "url",
+                    type: new GraphQLNonNull(GraphQLString)
                 }
             };
         }
     });
-    const FormatLossyType: GraphQLEnumType = new GraphQLEnumType({
-        description: "Codec the lossy delivery path uses.",
-        name: "FormatLossy",
-        values: {
-            MP3: {
-                value: "MP3"
-            },
-            OPUS: {
-                value: "OPUS"
-            }
-        }
-    });
     const QualityType: GraphQLEnumType = new GraphQLEnumType({
-        description: "Coarse playback quality. `MIN` / `LOW` / `MEDIUM` / `HIGH` map to lossy presets in ascending bitrate; `MAX` asks for lossless when the source is lossless and the highest lossy preset (in `formatLossy`) when it isn't.",
+        description: "Coarse playback quality. `MIN` / `LOW` / `MEDIUM` / `HIGH` ask for a transcode at an ascending bitrate; `MAX` delivers the best representation of the source the client can play, copying without re-encoding whenever possible.",
         name: "Quality",
         values: {
             HIGH: {
@@ -99,17 +98,40 @@ export function getSchema(): GraphQLSchema {
         }
     });
     const TrackFormatType: GraphQLInputObjectType = new GraphQLInputObjectType({
-        description: "How the client wants the track delivered. `formatLossy` is always required \u2014 even when `quality: MAX`, the server falls through to a lossy stream for non-lossless sources, so it always needs a codec to fall back to.",
+        description: "How the client wants the track delivered. The client advertises what it can decode as two preference-ordered MIME lists: `losslessFormats` (e.g. `audio/mp4; codecs=\"flac\"`) and `lossyFormats` (e.g. `audio/webm; codecs=\"opus\"`). `lossyFormats` must be non-empty.\n\nBelow `MAX` the server transcodes into the first `lossyFormats` entry it can encode to (opus or mp3) at the requested bitrate. At `MAX` it picks the best representation of the source the client can play, copying without re-encoding whenever possible.",
         name: "TrackFormat",
         fields() {
             return {
-                formatLossy: {
-                    name: "formatLossy",
-                    type: new GraphQLNonNull(FormatLossyType)
+                losslessFormats: {
+                    description: "Preference-ordered MIME types the client can play that carry lossless audio. Consulted at `MAX` for lossless sources.",
+                    name: "losslessFormats",
+                    type: new GraphQLList(new GraphQLNonNull(GraphQLString))
+                },
+                lossyFormats: {
+                    description: "Preference-ordered MIME types the client can play that carry lossy audio. At `MAX` the server copies the source into the first one whose codec matches the source, otherwise transcodes into the first it can produce; below `MAX` it transcodes into the first it can produce. Must be non-empty.",
+                    name: "lossyFormats",
+                    type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(GraphQLString)))
                 },
                 quality: {
                     name: "quality",
                     type: new GraphQLNonNull(QualityType)
+                }
+            };
+        }
+    });
+    const DurationType: GraphQLObjectType = new GraphQLObjectType({
+        name: "Duration",
+        description: "A length of time, expressed in whole seconds.",
+        fields() {
+            return {
+                formatted: {
+                    description: "Human-readable form, e.g. `\"05:32\"` or `\"1:02:14\"` for spans at least an hour long.",
+                    name: "formatted",
+                    type: new GraphQLNonNull(GraphQLString)
+                },
+                seconds: {
+                    name: "seconds",
+                    type: new GraphQLNonNull(GraphQLInt)
                 }
             };
         }
@@ -126,6 +148,19 @@ export function getSchema(): GraphQLSchema {
                 artist: {
                     name: "artist",
                     type: GraphQLString
+                },
+                delivery: {
+                    description: "Delivery plan for this track at the given `format`. See `TrackDelivery`. Defaults to the same baseline as `url`.",
+                    name: "delivery",
+                    type: new GraphQLNonNull(TrackDeliveryType),
+                    args: {
+                        format: {
+                            type: TrackFormatType
+                        }
+                    },
+                    resolve(source, args) {
+                        return trackDeliveryResolver(source, args.format);
+                    }
                 },
                 discNumber: {
                     name: "discNumber",
@@ -171,7 +206,7 @@ export function getSchema(): GraphQLSchema {
                     type: GraphQLInt
                 },
                 url: {
-                    description: "Signed URL the client should `GET` (with `Range:` headers) to stream this track. The URL bakes in `format` so a single URL is reusable for the lifetime of a playback session.\n\nDefaults to `{ quality: MAX, formatLossy: OPUS }`.",
+                    description: "Signed URL the client should `GET` (with `Range:` headers) to stream this track. The resolver picks the concrete container + codec from `format` (see `TrackFormat`) and bakes it into the URL, so a single URL is reusable for the lifetime of a playback session and the stateless `/play` route needs no capability data.\n\nDefaults to a MAX request supporting only flac-in-mp4 and opus-in-mp4 \u2014 the universally safe baseline.",
                     name: "url",
                     type: new GraphQLNonNull(GraphQLString),
                     args: {
@@ -488,7 +523,7 @@ export function getSchema(): GraphQLSchema {
                     type: new GraphQLNonNull(TrackManifestType),
                     args: {
                         format: {
-                            description: "Same `(quality, formatLossy)` the client baked into its signed playback URL.",
+                            description: "The same `TrackFormat` passed to `Track.url`; resolved identically so the manifest describes exactly the bytes the playback route will serve.",
                             type: new GraphQLNonNull(TrackFormatType)
                         },
                         trackId: {
@@ -523,6 +558,6 @@ export function getSchema(): GraphQLSchema {
         query: QueryType,
         mutation: MutationType,
         subscription: SubscriptionType,
-        types: [FormatLossyType, QualityType, TrackFormatType, DurationType, LibraryScanType, MutationType, PageInfoType, QueryType, SubscriptionType, TrackType, TrackConnectionType, TrackEdgeType, TrackManifestType, TrackManifestChunkType, TrackManifestInitType, VoidType]
+        types: [QualityType, TrackFormatType, DurationType, LibraryScanType, MutationType, PageInfoType, QueryType, SubscriptionType, TrackType, TrackConnectionType, TrackDeliveryType, TrackEdgeType, TrackManifestType, TrackManifestChunkType, TrackManifestInitType, VoidType]
     });
 }

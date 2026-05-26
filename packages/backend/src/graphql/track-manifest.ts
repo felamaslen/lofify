@@ -6,6 +6,7 @@ import { tracks as tracksTable } from '../db/schema/index.js';
 import { defaultCache } from '../playback/cache.js';
 import type { IndexChunk } from '../playback/live-tail.js';
 import { resolveTarget } from '../playback/resolve.js';
+import { abbreviateCodec } from './codec.js';
 import type { TrackFormat } from './track.js';
 
 /**
@@ -93,22 +94,20 @@ const THROTTLE_MS = 1000;
 export async function* trackManifestSubscription(args: {
   /** Track id. */
   trackId: ID;
-  /** Same `(quality, formatLossy)` the client baked into its signed playback URL. */
+  /** The same `TrackFormat` passed to `Track.url`; resolved identically so the manifest describes exactly the bytes the playback route will serve. */
   format: TrackFormat;
 }): AsyncIterable<TrackManifest> {
   const rows = await db.select().from(tracksTable).where(eq(tracksTable.id, args.trackId)).limit(1);
   const track = rows[0];
   if (!track) return;
 
-  const target = resolveTarget(track, {
-    quality: args.format.quality,
-    formatLossy: args.format.formatLossy,
-  });
+  const sourceCodec = abbreviateCodec(track.codec);
+  const target = resolveTarget({ isLossless: track.isLossless, sourceCodec }, args.format);
   const entry = await defaultCache.getOrStart({
     trackId: track.id,
     sourceMtime: track.sourceMtime,
     sourcePath: track.file,
-    sourceCodec: track.codec.toLowerCase(),
+    sourceCodec,
     target,
   });
 

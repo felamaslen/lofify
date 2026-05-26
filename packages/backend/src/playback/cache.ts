@@ -28,12 +28,13 @@ const tracer = trace.getTracer('lofify.playback.cache');
 import { makeMp3Scanner } from './scan-mp3.js';
 import { mp4Scanner } from './scan-mp4.js';
 import type { Scanner } from './scan-types.js';
+import { webmScanner } from './scan-webm.js';
 
 export type CacheRequest = {
   trackId: string;
   sourceMtime: Date;
   sourcePath: string;
-  /** Lower-cased on-disk codec of the source file, e.g. `'flac'`, `'mp3'`. Used to decide whether `-c:a copy` is safe (source codec == target codec). */
+  /** Abbreviated on-disk codec of the source file, e.g. `'flac'`, `'mp3'`, `'vorbis'`, `'opus'` (i.e. `Track.sourceFormat`). Used to decide whether `-c:a copy` is safe (source codec == target codec). */
   sourceCodec: string;
   target: EncodeTarget;
 };
@@ -84,6 +85,9 @@ function scannerFor(target: EncodeTarget, chunkDurationSeconds: number): Scanner
     case 'mp4':
       // fmp4 reads its own per-fragment timing from tfdt, so it needs no nominal hint.
       return mp4Scanner;
+    case 'webm':
+      // WebM clusters carry their own absolute Timecode, like fmp4 fragments.
+      return webmScanner;
     case 'mp3':
       return makeMp3Scanner(chunkDurationSeconds);
   }

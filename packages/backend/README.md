@@ -96,34 +96,51 @@ value, `coalesce(override, scanned)`.
 
 ### Playback
 
-`GET /play/:signature/q:<min|l|m|h|max>/f:<opus|mp3>/:id`
+`GET /play/:signature/c:<container>/a:<codec>/q:<min|l|m|h|max>/:id`
 
-Range-based playback over a single encoded `.bin` per `(track, format,
-quality)`. The URL is produced by `Track.url(format: TrackFormat)` and
-HMAC-signed with `PLAYBACK_SIGNING_SECRET`. The signature covers
-`q:.../f:.../id`; clients send `Range: bytes=START-END` (or
-`bytes=START-`) and the server slices the `.bin`. `HEAD` returns
-`Content-Type` + `Accept-Ranges`, plus `Content-Length` once the encode
-is complete.
+Range-based playback over a single encoded `.bin` per `(track,
+container, codec, quality)`. The URL bakes a **fully-resolved** target
+(container + codec + quality) rather than the client's request — format
+resolution depends on client capabilities the stateless route never
+sees, so it runs once in `Track.url`/`Track.delivery` and the route just
+decodes the result. The URL is HMAC-signed with
+`PLAYBACK_SIGNING_SECRET` (signature covers `c:.../a:.../q:.../id`);
+clients send `Range: bytes=START-END` (or `bytes=START-`) and the server
+slices the `.bin`. `HEAD` returns `Content-Type` + `Accept-Ranges`, plus
+`Content-Length` once the encode is complete.
 
-Target resolution:
+**Format resolution** (`resolve.ts`) maps a client `TrackFormat` —
+preference-ordered `losslessFormats` / `lossyFormats` MIME lists plus a
+`quality` — to that concrete target, copying without re-encoding
+whenever possible:
 
-| `quality`                   | source   | served as                                                                                 |
-| --------------------------- | -------- | ----------------------------------------------------------------------------------------- |
-| `MAX`                       | lossless | `audio/mp4; codecs="flac"` (passthrough for flac sources, re-encode for ape/alac/wv/etc.) |
-| `MAX`                       | lossy    | highest lossy preset in `formatLossy`                                                     |
-| `MIN`/`LOW`/`MEDIUM`/`HIGH` | any      | lossy preset in `formatLossy`                                                             |
+| `quality`                   | source   | served as                                                                                                                                                |
+| --------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MAX`                       | lossless | first supported `losslessFormats` entry — `audio/mp4; codecs="flac"` (copy for flac, re-encode otherwise)                                                |
+| `MAX`                       | lossy    | first `lossyFormats` entry whose codec matches the source (a **copy**: vorbis→webm, opus→mp4/webm, mp3→mp3); else transcode to the first encodable entry |
+| `MIN`/`LOW`/`MEDIUM`/`HIGH` | any      | transcode to the first `lossyFormats` entry the server can encode (opus or mp3) at the preset bitrate                                                    |
 
-Each `(track, format, quality)` maps to one cache entry under
-`PLAYBACK_CACHE_DIR/<trackId>-<sourceMtimeMs>/<targetKey>.{bin,idx}`.
-The `.bin` is what the route streams from; the `.idx` is a
+Each target maps to one cache entry under
+`PLAYBACK_CACHE_DIR/<trackId>-<sourceMtimeMs>/<targetKey>.{bin,idx}`
+(`targetKey` includes the container, so `mp4/opus` and `webm/opus` don't
+collide). The `.bin` is what the route streams from; the `.idx` is a
 live-updating JSON manifest (chunk byte ranges + cumulative
 `endSeconds`) maintained by `live-tail.ts` as ffmpeg writes.
 
 The chunk layout depends on the container — fragmented mp4 (`moof` +
-`mdat` fragments) for opus and flac, raw mp3 frame stream for mp3 — but
-the route doesn't care; it slices bytes. Up to `TRANSCODE_MAX_PARALLEL`
-ffmpeg encodes run concurrently.
+`mdat` fragments) for opus/flac, WebM (`Cluster` elements) for
+opus/vorbis, raw mp3 frame stream for mp3 — each with its own
+`Scanner` (`scan-mp4`/`scan-webm`/`scan-mp3`), but the route doesn't
+care; it slices bytes. A "copy" is always a container remux (e.g.
+Vorbis-in-Ogg → Vorbis-in-WebM): the codec packets are untouched but the
+output bytes differ from the source, so the remuxed `.bin` is still
+generated and cached. Up to `TRANSCODE_MAX_PARALLEL` ffmpeg encodes run
+concurrently.
+
+`Track.delivery(format)` returns the resolved `{ url, mimeType,
+isPassthrough, description }` in one field, so a client gets the
+SourceBuffer MIME type and a tooltip-ready description without a probe
+request.
 
 ### Manifest subscription
 
