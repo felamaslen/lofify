@@ -1,10 +1,16 @@
 /**
- * Segmented MSE playback pipeline.
+ * Manifest-driven MSE playback. The player owns a growing manifest snapshot (init byte range + per-chunk `{ byteStart, byteEnd, endSeconds }`) fed from the `trackManifest` GraphQL subscription. It maps `currentTime` to a chunk via binary search on `endSeconds`, fetches that chunk's byte range from the playback URL, and appends it to a single `SourceBuffer`.
  *
- * For non-flac streams the server delivers the track as a sequence of equal-duration DASH chunks (fMP4 for opus, raw mp3 frames otherwise); the player fetches the chunk containing `currentTime` plus one chunk of look-ahead and appends each to a single `SourceBuffer`. The chunks come from one ffmpeg pass on the server so they're gap-less by construction — no `timestampOffset` arithmetic is needed.
+ * Two container-conditional behaviours:
+ *   - **Init segment.** fmp4 (opus/flac) ships an init range that must be prepended before any chunk; mp3 has no init, so `manifest.init` is `null`. The player keys "have we appended init?" off that nullability.
+ *   - **`timestampOffset`.** fmp4 fragments carry `tfdt` (absolute decode time), so MSE places them at the right absolute time automatically. mp3 frames have no timestamps — each chunk's frames start at PTS 0 — so the player sets `sourceBuffer.timestampOffset = chunk.startSeconds` before each append. Whether per-chunk offsets are needed is determined at construction from the source-buffer content type.
  *
- * For flac (passthrough) the player skips MSE entirely and uses bare `<audio src=blob>` playback — the spec requires lossless to stay un-touched. We fetch the file as a blob so we can inject the `Accept` header (a bare `audio.src = url` would send the browser default, which the server rejects).
+ * Lossless↔lossy switching mid-track is not supported here: the SourceBuffer's codec parameters are locked at `addSourceBuffer(contentType)`. Switching requires tearing the player down and starting again — `player.tsx` does this on quality/format changes.
+ *
+ * Both `ManifestSnapshot` and `ManifestChunk` are derived from the `TrackManifest` subscription document in `state/player.tsx`, so the player consumes the exact GraphQL response shape without any in-between conversion.
  */
+
+import type { ManifestChunk, ManifestSnapshot } from '../state/player.tsx';
 
 /** Drop chunks whose end is more than this many seconds behind `currentTime`. Bounds SourceBuffer memory. */
 const BEHIND_WINDOW = 30;
@@ -12,113 +18,109 @@ const BEHIND_WINDOW = 30;
 const PREFETCH_AHEAD = 1;
 
 export interface Player {
+  /** Update the player's view of the manifest. New chunks become eligible for prefetch. */
+  setManifest(m: ManifestSnapshot): void;
+  /** Seek to `time` and start playback there. Resolves once the chunk containing `time` is appended. */
   seekTo(time: number): Promise<void>;
-  setReadyChunks(n: number): void;
   dispose(): void;
 }
 
-class DirectPlayer implements Player {
-  constructor(
-    private audio: HTMLAudioElement,
-    private blobUrl: string | null,
-  ) {}
-  async seekTo(time: number): Promise<void> {
-    this.audio.currentTime = time;
+export type CreatePlayerError =
+  | { kind: 'mse-unsupported' }
+  | { kind: 'codec-unsupported'; contentType: string };
+
+export type CreatePlayerOptions = {
+  /** Called when the player can't satisfy the request. Caller surfaces this to the user. */
+  onError?: (err: CreatePlayerError) => void;
+};
+
+/** Find the chunk index whose range covers `currentTime`. Returns -1 if `time` is past the last chunk's `endSeconds`. */
+function findChunkAtTime(chunks: readonly ManifestChunk[], time: number): number {
+  if (chunks.length === 0 || time >= chunks[chunks.length - 1]!.endSeconds) return -1;
+  let lo = 0;
+  let hi = chunks.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (chunks[mid]!.endSeconds <= time) lo = mid + 1;
+    else hi = mid;
   }
-  setReadyChunks(): void {
-    // Passthrough — the file is always available, nothing to track.
-  }
-  dispose(): void {
-    if (this.blobUrl) URL.revokeObjectURL(this.blobUrl);
-  }
+  return lo;
 }
+
+function chunkStartSeconds(chunks: readonly ManifestChunk[], i: number): number {
+  return i === 0 ? 0 : chunks[i - 1]!.endSeconds;
+}
+
+const EMPTY_MANIFEST: ManifestSnapshot = {
+  chunkDurationSeconds: 0,
+  durationSeconds: 0,
+  done: false,
+  init: null,
+  chunks: [],
+};
 
 class MsePlayer implements Player {
   private disposed = false;
+  private manifest: ManifestSnapshot = EMPTY_MANIFEST;
+  private appendedInit = false;
+  /** Chunk indices that have been appended to the SourceBuffer. */
   private loaded = new Set<number>();
   private pending = new Map<number, AbortController>();
-  private appendQueue: Array<{ segIndex: number; data: Uint8Array }> = [];
-  private appendingSegIndex: number | null = null;
+  private appendQueue: Array<{ chunkIndex: number; data: Uint8Array; startSeconds: number }> = [];
+  private appendingChunkIndex: number | null = null;
   private endedSignalled = false;
-  private initAppended = false;
-  private pendingSeekSegIndex: number | null = null;
+  private pendingSeekChunkIndex: number | null = null;
   private events = new EventTarget();
-  private readyChunks: number;
 
   constructor(
     private audio: HTMLAudioElement,
     private url: string,
-    private accept: string,
     private mediaSource: MediaSource,
     private sourceBuffer: SourceBuffer,
     private blobUrl: string,
-    private segmentCount: number,
-    private segmentDuration: number,
-    initialReadyChunks: number,
-    /** When true, set `timestampOffset = segIndex * segmentDuration` before each append. Required for raw mp3 chunks (each one starts at PTS 0 thanks to `-reset_timestamps 1` on the muxer); without it, out-of-order appends — i.e. any seek to an unbuffered region — land at the wrong absolute time and seeking silently fails. fMP4/opus DASH segments carry correct absolute PTS, so they stay at offset 0. */
-    private appendAtSegmentOffset: boolean,
+    /** True for mp3: each chunk's frames start at PTS 0, so `timestampOffset` must be set before append. Opus/flac in fmp4 carry tfdt so this stays false. */
+    private setTimestampOffsetPerChunk: boolean,
   ) {
-    this.readyChunks = initialReadyChunks;
     sourceBuffer.addEventListener('updateend', this.onUpdateEnd);
     audio.addEventListener('timeupdate', this.onTimeUpdate);
     audio.addEventListener('seeking', this.onTimeUpdate);
-    void this.ensureWindow();
   }
 
-  private onUpdateEnd = (): void => {
-    if (this.disposed) return;
-    const justAppended = this.appendingSegIndex;
-    this.appendingSegIndex = null;
-    if (justAppended != null) {
-      this.events.dispatchEvent(new CustomEvent('loaded', { detail: justAppended }));
-    }
-    this.evictBehindWindow();
-    this.drainAppendQueue();
-    this.tryEndOfStream();
-  };
-
-  setReadyChunks(n: number): void {
-    if (n <= this.readyChunks) return;
-    this.readyChunks = n;
+  setManifest(m: ManifestSnapshot): void {
+    this.manifest = m;
     void this.ensureWindow();
   }
 
   async seekTo(time: number): Promise<void> {
     if (this.disposed) return;
-    const targetSeg = Math.max(0, Math.floor(time / this.segmentDuration));
-    if (this.loaded.has(targetSeg)) {
+    const target = findChunkAtTime(this.manifest.chunks, time);
+    if (target < 0) {
+      // Past the end of what's encoded; clamp to the last known chunk if there is one.
+      if (this.manifest.chunks.length === 0) return;
+      this.audio.currentTime = Math.min(time, this.manifest.durationSeconds);
+      return;
+    }
+    if (this.loaded.has(target)) {
       this.audio.currentTime = time;
       return;
     }
-    for (const [seg, ctrl] of this.pending) {
-      if (seg !== targetSeg) {
+    for (const [chunkIndex, ctrl] of this.pending) {
+      if (chunkIndex !== target) {
         ctrl.abort();
-        this.pending.delete(seg);
+        this.pending.delete(chunkIndex);
       }
     }
-    if (!this.pending.has(targetSeg)) {
-      void this.fetchSegment(targetSeg);
+    if (!this.pending.has(target)) {
+      void this.fetchChunk(target);
     }
-    this.pendingSeekSegIndex = targetSeg;
+    this.pendingSeekChunkIndex = target;
     try {
-      await this.waitForLoaded(targetSeg);
+      await this.waitForLoaded(target);
       if (this.disposed) return;
       this.audio.currentTime = time;
     } finally {
-      this.pendingSeekSegIndex = null;
+      this.pendingSeekChunkIndex = null;
     }
-  }
-
-  private waitForLoaded(segIndex: number): Promise<void> {
-    if (this.loaded.has(segIndex)) return Promise.resolve();
-    return new Promise<void>((resolve) => {
-      const onLoaded = (e: Event): void => {
-        if (!(e instanceof CustomEvent) || e.detail !== segIndex) return;
-        this.events.removeEventListener('loaded', onLoaded);
-        resolve();
-      };
-      this.events.addEventListener('loaded', onLoaded);
-    });
   }
 
   dispose(): void {
@@ -130,68 +132,109 @@ class MsePlayer implements Player {
     try {
       this.sourceBuffer.removeEventListener('updateend', this.onUpdateEnd);
     } catch {
-      // SourceBuffer may already be detached from the MediaSource
+      // SourceBuffer may already be detached from the MediaSource.
     }
     if (this.mediaSource.readyState === 'open') {
       try {
         this.mediaSource.endOfStream();
       } catch {
-        // already ended
+        // Already ended.
       }
     }
     URL.revokeObjectURL(this.blobUrl);
   }
 
+  private onUpdateEnd = (): void => {
+    if (this.disposed) return;
+    const justAppended = this.appendingChunkIndex;
+    this.appendingChunkIndex = null;
+    if (justAppended != null) {
+      this.events.dispatchEvent(new CustomEvent('loaded', { detail: justAppended }));
+    }
+    this.evictBehindWindow();
+    this.drainAppendQueue();
+    this.tryEndOfStream();
+  };
+
   private onTimeUpdate = (): void => {
     void this.ensureWindow();
   };
 
-  private currentSeg(): number {
-    return Math.max(0, Math.floor(this.audio.currentTime / this.segmentDuration));
+  private currentChunk(): number {
+    const i = findChunkAtTime(this.manifest.chunks, this.audio.currentTime);
+    return i < 0 ? Math.max(0, this.manifest.chunks.length - 1) : i;
   }
 
   private async ensureWindow(): Promise<void> {
     if (this.disposed) return;
-    const start = this.currentSeg();
-    const end = Math.min(this.segmentCount - 1, this.readyChunks - 1, start + PREFETCH_AHEAD);
-    for (const [seg, ctrl] of this.pending) {
-      if (seg < start || seg > end) {
+    if (this.manifest.chunks.length === 0) return;
+    if (this.manifest.init && !this.appendedInit && !this.pending.has(-1)) {
+      void this.fetchInit();
+    }
+    const start = this.currentChunk();
+    const end = Math.min(this.manifest.chunks.length - 1, start + PREFETCH_AHEAD);
+    for (const [chunkIndex, ctrl] of this.pending) {
+      if (chunkIndex >= 0 && (chunkIndex < start || chunkIndex > end)) {
         ctrl.abort();
-        this.pending.delete(seg);
+        this.pending.delete(chunkIndex);
       }
     }
-    for (let seg = start; seg <= end; seg++) {
-      if (this.loaded.has(seg)) continue;
-      if (this.pending.has(seg)) continue;
-      void this.fetchSegment(seg);
+    for (let i = start; i <= end; i++) {
+      if (this.loaded.has(i)) continue;
+      if (this.pending.has(i)) continue;
+      void this.fetchChunk(i);
     }
   }
 
-  private async fetchSegment(segIndex: number): Promise<void> {
+  private async fetchInit(): Promise<void> {
+    const init = this.manifest.init;
+    if (!init) return;
     const ctrl = new AbortController();
-    this.pending.set(segIndex, ctrl);
+    this.pending.set(-1, ctrl);
     try {
-      const res = await fetch(`${this.url}/${segIndex}`, {
-        signal: ctrl.signal,
-        headers: { Accept: this.accept },
-      });
-      if (!res.ok) return;
-      const buf = new Uint8Array(await res.arrayBuffer());
-      if (this.disposed || ctrl.signal.aborted) {
-        return;
-      }
-      this.enqueueSegment(segIndex, buf);
-    } catch {
-      // network error or aborted — driver loop will retry on next tick
+      const buf = await this.fetchRange(init.byteStart, init.byteEnd, ctrl.signal);
+      if (!buf || this.disposed || ctrl.signal.aborted) return;
+      this.appendQueue.unshift({ chunkIndex: -1, data: buf, startSeconds: 0 });
+      this.drainAppendQueue();
     } finally {
-      this.pending.delete(segIndex);
+      this.pending.delete(-1);
     }
   }
 
-  private enqueueSegment(segIndex: number, data: Uint8Array): void {
-    if (this.loaded.has(segIndex)) return;
-    this.appendQueue.push({ segIndex, data });
-    this.drainAppendQueue();
+  private async fetchChunk(chunkIndex: number): Promise<void> {
+    const chunk = this.manifest.chunks[chunkIndex];
+    if (!chunk) return;
+    const ctrl = new AbortController();
+    this.pending.set(chunkIndex, ctrl);
+    try {
+      const buf = await this.fetchRange(chunk.byteStart, chunk.byteEnd, ctrl.signal);
+      if (!buf || this.disposed || ctrl.signal.aborted) return;
+      this.appendQueue.push({
+        chunkIndex,
+        data: buf,
+        startSeconds: chunkStartSeconds(this.manifest.chunks, chunkIndex),
+      });
+      this.drainAppendQueue();
+    } finally {
+      this.pending.delete(chunkIndex);
+    }
+  }
+
+  private async fetchRange(
+    byteStart: number,
+    byteEnd: number,
+    signal: AbortSignal,
+  ): Promise<Uint8Array | null> {
+    try {
+      const res = await fetch(this.url, {
+        signal,
+        headers: { Range: `bytes=${byteStart}-${byteEnd - 1}` },
+      });
+      if (!res.ok) return null;
+      return new Uint8Array(await res.arrayBuffer());
+    } catch {
+      return null;
+    }
   }
 
   private isSourceBufferLive(): boolean {
@@ -199,29 +242,32 @@ class MsePlayer implements Player {
   }
 
   private drainAppendQueue(): void {
-    if (!this.isSourceBufferLive() || this.appendingSegIndex != null) return;
+    if (!this.isSourceBufferLive() || this.appendingChunkIndex != null) return;
     if (this.sourceBuffer.updating) return;
     if (this.appendQueue.length === 0) return;
 
-    // Chunk 0 carries the init segment (server-spliced for fMP4; mp3 needs none); higher-indexed chunks have to wait until the init has landed for fMP4. Once `initAppended` is true the remaining chunks can append in any order.
+    // Init must land before any chunk; once `appendedInit` is true the rest can append in any order.
     let pickIdx = 0;
-    if (!this.initAppended) {
-      const zero = this.appendQueue.findIndex((item) => item.segIndex === 0);
-      if (zero === -1) return;
-      pickIdx = zero;
+    if (!this.appendedInit && this.manifest.init) {
+      const initPos = this.appendQueue.findIndex((item) => item.chunkIndex === -1);
+      if (initPos === -1) return;
+      pickIdx = initPos;
     }
     const [next] = this.appendQueue.splice(pickIdx, 1);
     if (!next) return;
-    this.appendingSegIndex = next.segIndex;
+    this.appendingChunkIndex = next.chunkIndex;
     try {
-      if (this.appendAtSegmentOffset) {
-        this.sourceBuffer.timestampOffset = next.segIndex * this.segmentDuration;
+      if (next.chunkIndex >= 0 && this.setTimestampOffsetPerChunk) {
+        this.sourceBuffer.timestampOffset = next.startSeconds;
       }
       this.sourceBuffer.appendBuffer(next.data.buffer as ArrayBuffer);
-      this.loaded.add(next.segIndex);
-      if (next.segIndex === 0) this.initAppended = true;
+      if (next.chunkIndex === -1) {
+        this.appendedInit = true;
+      } else {
+        this.loaded.add(next.chunkIndex);
+      }
     } catch (err) {
-      this.appendingSegIndex = null;
+      this.appendingChunkIndex = null;
       if ((err as DOMException).name === 'QuotaExceededError' && this.isSourceBufferLive()) {
         this.appendQueue.unshift(next);
         const cutoff = Math.max(0, this.audio.currentTime - 5);
@@ -229,10 +275,10 @@ class MsePlayer implements Player {
           const b = this.sourceBuffer.buffered;
           if (b.length > 0 && b.start(0) < cutoff) {
             this.sourceBuffer.remove(b.start(0), cutoff);
-            this.appendingSegIndex = next.segIndex;
+            this.appendingChunkIndex = next.chunkIndex;
           }
         } catch {
-          // invalid state — let the next updateend retry naturally
+          // Invalid state — let the next updateend retry naturally.
         }
       }
     }
@@ -248,24 +294,25 @@ class MsePlayer implements Player {
     }
     if (b.length === 0) return;
     let cutoff = this.audio.currentTime - BEHIND_WINDOW;
-    if (this.pendingSeekSegIndex != null) {
-      cutoff = Math.min(cutoff, this.pendingSeekSegIndex * this.segmentDuration - BEHIND_WINDOW);
+    if (this.pendingSeekChunkIndex != null) {
+      const seekStart = chunkStartSeconds(this.manifest.chunks, this.pendingSeekChunkIndex);
+      cutoff = Math.min(cutoff, seekStart - BEHIND_WINDOW);
     }
     if (b.start(0) >= cutoff) return;
     try {
       this.sourceBuffer.remove(b.start(0), cutoff);
-      const firstKept = Math.floor(cutoff / this.segmentDuration);
-      for (const seg of [...this.loaded]) {
-        if (seg < firstKept) this.loaded.delete(seg);
+      for (const i of [...this.loaded]) {
+        if (this.manifest.chunks[i]!.endSeconds < cutoff) this.loaded.delete(i);
       }
     } catch {
-      // invalid state — skip; next updateend will retry
+      // Invalid state — skip; next updateend will retry.
     }
   }
 
   private tryEndOfStream(): void {
     if (this.endedSignalled) return;
-    if (this.loaded.size < this.segmentCount) return;
+    if (!this.manifest.done) return;
+    if (this.loaded.size < this.manifest.chunks.length) return;
     if (this.appendQueue.length > 0) return;
     if (!this.isSourceBufferLive()) return;
     try {
@@ -277,101 +324,36 @@ class MsePlayer implements Player {
     try {
       this.mediaSource.endOfStream();
     } catch {
-      // already ended or closing
+      // Already ended or closing.
     }
   }
-}
 
-type ProbeChunked = {
-  mode: 'chunked';
-  contentType: string;
-  segmentCount: number;
-  segmentDuration: number;
-  durationSeconds: number;
-  readyChunks: number;
-};
-type ProbeDirect = { mode: 'direct'; contentType: string };
-
-async function probe(url: string, accept: string): Promise<ProbeChunked | ProbeDirect | null> {
-  let res: Response;
-  try {
-    res = await fetch(url, { method: 'HEAD', headers: { Accept: accept } });
-  } catch {
-    return null;
+  private waitForLoaded(chunkIndex: number): Promise<void> {
+    if (this.loaded.has(chunkIndex)) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      const onLoaded = (e: Event): void => {
+        if (!(e instanceof CustomEvent) || e.detail !== chunkIndex) return;
+        this.events.removeEventListener('loaded', onLoaded);
+        resolve();
+      };
+      this.events.addEventListener('loaded', onLoaded);
+    });
   }
-  if (!res.ok) return null;
-  const contentType = res.headers.get('content-type') ?? '';
-  const segs = Number(res.headers.get('x-lofify-segments') ?? 0);
-  if (segs > 0) {
-    return {
-      mode: 'chunked',
-      contentType,
-      segmentCount: segs,
-      segmentDuration: Number(res.headers.get('x-lofify-segment-duration') ?? 6),
-      durationSeconds: Number(res.headers.get('x-lofify-duration') ?? 0),
-      readyChunks: Number(res.headers.get('x-lofify-ready-chunks') ?? 0),
-    };
-  }
-  return { mode: 'direct', contentType };
 }
 
-export type CreatePlayerError =
-  | { kind: 'mse-unsupported'; contentType: string }
-  | { kind: 'probe-failed' }
-  | { kind: 'direct-fetch-failed' };
-
-/** Resolved delivery format, as inferred from the probe's `Content-Type`. Anything we don't recognise falls back to `null` so the UI just hides the badge. */
-export type ActualFormat = 'flac' | 'opus' | 'mp3' | null;
-
-function actualFormatFromContentType(contentType: string): ActualFormat {
-  const ct = contentType.toLowerCase();
-  if (ct.startsWith('audio/flac') || ct.startsWith('audio/x-flac')) return 'flac';
-  if (ct.startsWith('audio/mp4')) return 'opus';
-  if (ct.startsWith('audio/mpeg')) return 'mp3';
-  return null;
-}
-
-export type CreatePlayerOptions = {
-  /** Called when the player can't satisfy the request. The caller is expected to surface this to the user (e.g. a toast). */
-  onError?: (err: CreatePlayerError) => void;
-};
-
-export type CreatePlayerResult = { player: Player; actualFormat: ActualFormat };
-
+/** Build a SourceBuffer-backed Player for `(url, contentType)`. The caller drives chunks in via `setManifest`. */
 export async function createPlayer(
   audio: HTMLAudioElement,
   url: string,
-  accept: string,
+  contentType: string,
   options: CreatePlayerOptions = {},
-): Promise<CreatePlayerResult | null> {
-  const meta = await probe(url, accept);
-  if (!meta) {
-    options.onError?.({ kind: 'probe-failed' });
+): Promise<Player | null> {
+  if (typeof MediaSource === 'undefined') {
+    options.onError?.({ kind: 'mse-unsupported' });
     return null;
   }
-
-  if (meta.mode === 'direct') {
-    // Direct mode = flac passthrough. Fetch as a blob so we can inject the Accept header (a plain `audio.src = url` would send the browser default, which the server rejects).
-    let blobUrl: string | null = null;
-    try {
-      const res = await fetch(url, { headers: { Accept: accept } });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const blob = await res.blob();
-      blobUrl = URL.createObjectURL(blob);
-      audio.src = blobUrl;
-    } catch {
-      options.onError?.({ kind: 'direct-fetch-failed' });
-      return null;
-    }
-    return {
-      player: new DirectPlayer(audio, blobUrl),
-      actualFormat: actualFormatFromContentType(meta.contentType),
-    };
-  }
-
-  // Chunked mode — required to use MSE.
-  if (typeof MediaSource === 'undefined' || !MediaSource.isTypeSupported(meta.contentType)) {
-    options.onError?.({ kind: 'mse-unsupported', contentType: meta.contentType });
+  if (!MediaSource.isTypeSupported(contentType)) {
+    options.onError?.({ kind: 'codec-unsupported', contentType });
     return null;
   }
 
@@ -381,28 +363,8 @@ export async function createPlayer(
   await new Promise<void>((resolve) => {
     mediaSource.addEventListener('sourceopen', () => resolve(), { once: true });
   });
-  if (meta.durationSeconds > 0) {
-    try {
-      mediaSource.duration = meta.durationSeconds;
-    } catch {
-      // browser refused — fine, tryEndOfStream() will fire endOfStream() when all chunks are loaded.
-    }
-  }
-  const sourceBuffer = mediaSource.addSourceBuffer(meta.contentType);
-
-  return {
-    player: new MsePlayer(
-      audio,
-      url,
-      accept,
-      mediaSource,
-      sourceBuffer,
-      blobUrl,
-      meta.segmentCount,
-      meta.segmentDuration,
-      meta.readyChunks,
-      meta.contentType.startsWith('audio/mpeg'),
-    ),
-    actualFormat: actualFormatFromContentType(meta.contentType),
-  };
+  const sourceBuffer = mediaSource.addSourceBuffer(contentType);
+  // mp3 chunks carry no PTS, so we must offset per chunk; fmp4 (opus/flac) carries tfdt so MSE places fragments automatically.
+  const setOffsetPerChunk = contentType.startsWith('audio/mpeg');
+  return new MsePlayer(audio, url, mediaSource, sourceBuffer, blobUrl, setOffsetPerChunk);
 }

@@ -13,19 +13,10 @@ import {
 
 import { PlaybackBarDocument } from '../components/playback-bar.tsx';
 import { TracksDocument } from '../components/track-list.tsx';
-import {
-  acceptHeaderFor,
-  capabilities,
-  defaultFormat,
-  type Format,
-  isFormatAvailable,
-  isMaxQualityAvailable,
-  type Quality,
-} from '../lib/capabilities.ts';
-import { graphql, type ResultOf } from '../lib/gql.ts';
+import { type Capabilities,capabilities } from '../lib/capabilities.ts';
+import { graphql, type ResultOf, type VariablesOf } from '../lib/gql.ts';
 import { gqlRequest } from '../lib/gql-request.ts';
 import {
-  type ActualFormat,
   createPlayer,
   type CreatePlayerError,
   type Player as MsePlayer,
@@ -34,10 +25,11 @@ import { subscribe } from '../lib/sse-client.ts';
 
 export const TrackByIdDocument = graphql(
   `
-    query TrackById($id: ID!, $quality: Quality) {
+    query TrackById($id: ID!, $format: TrackFormat) {
       track(id: $id) {
         id
-        url(quality: $quality)
+        isLossless
+        url(format: $format)
         ...PlaybackBar
       }
     }
@@ -45,24 +37,76 @@ export const TrackByIdDocument = graphql(
   [PlaybackBarDocument],
 );
 
-const TranscodeProgressDocument = graphql(`
-  subscription TranscodeProgress($trackId: ID!, $acceptHeaderValue: String, $quality: String) {
-    transcodeProgress(trackId: $trackId, acceptHeaderValue: $acceptHeaderValue, quality: $quality) {
-      readyChunks
+export const TrackManifestDocument = graphql(`
+  subscription TrackManifest($trackId: ID!, $format: TrackFormat!) {
+    trackManifest(trackId: $trackId, format: $format) {
       chunkDurationSeconds
-      isDone
+      durationSeconds
+      done
+      init {
+        byteStart
+        byteEnd
+      }
+      chunks {
+        byteStart
+        byteEnd
+        endSeconds
+      }
     }
   }
 `);
 
+/** Derived from the `TrackById` variables so the frontend's enum strings can't drift from the GraphQL schema. */
+export type TrackFormat = NonNullable<VariablesOf<typeof TrackByIdDocument>['format']>;
+export type Quality = TrackFormat['quality'];
+export type FormatLossy = TrackFormat['formatLossy'];
+
+/** Server-emitted manifest snapshot. The player consumes this shape directly. */
+export type ManifestSnapshot = NonNullable<
+  ResultOf<typeof TrackManifestDocument>['trackManifest']
+>;
+export type ManifestChunk = ManifestSnapshot['chunks'][number];
+
 type TrackNode = NonNullable<ResultOf<typeof TrackByIdDocument>['track']>;
 
-export type { ActualFormat, Format, Quality };
+/** Resolved delivery codec inferred from `(quality, formatLossy, isLossless)` — the same rule the server uses in `resolve.ts`. */
+export type ActualFormat = 'flac' | 'opus' | 'mp3';
+
+function resolveActualFormat(
+  quality: Quality,
+  formatLossy: FormatLossy,
+  isLossless: boolean,
+): ActualFormat {
+  if (isLossless && quality === 'MAX') return 'flac';
+  return formatLossy === 'OPUS' ? 'opus' : 'mp3';
+}
+
+function contentTypeFor(actual: ActualFormat): string {
+  switch (actual) {
+    case 'flac':
+      return 'audio/mp4; codecs="flac"';
+    case 'opus':
+      return 'audio/mp4; codecs="opus"';
+    case 'mp3':
+      return 'audio/mpeg';
+  }
+}
+
+export function isFormatLossyAvailable(
+  f: FormatLossy,
+  caps: Capabilities = capabilities,
+): boolean {
+  return f === 'OPUS' ? caps.opusInMp4 : caps.mp3;
+}
+
+export function defaultFormatLossy(caps: Capabilities = capabilities): FormatLossy {
+  return caps.opusInMp4 ? 'OPUS' : 'MP3';
+}
 
 const QUALITY_STORAGE_KEY = 'lofify.player.quality';
-const QUALITY_VALUES: readonly Quality[] = ['max', 'high', 'medium', 'low'];
-const FORMAT_STORAGE_KEY = 'lofify.player.format';
-const FORMAT_VALUES: readonly Format[] = ['mp4', 'mp3'];
+const QUALITY_VALUES: readonly Quality[] = ['MAX', 'HIGH', 'MEDIUM', 'LOW'];
+const FORMAT_STORAGE_KEY = 'lofify.player.format-lossy';
+const FORMAT_VALUES: readonly FormatLossy[] = ['OPUS', 'MP3'];
 
 const GRAPHQL_URL = import.meta.env.VITE_GRAPHQL_URL ?? '/graphql';
 
@@ -79,49 +123,25 @@ export function resolvePlaybackUrl(url: string): string {
   return `${backendOrigin()}${url}`;
 }
 
-function defaultQuality(): Quality {
-  return isMaxQualityAvailable() ? 'max' : 'high';
-}
-
 function loadStoredQuality(): Quality {
-  if (typeof window === 'undefined') return defaultQuality();
+  if (typeof window === 'undefined') return 'MAX';
   const stored = window.localStorage.getItem(QUALITY_STORAGE_KEY);
-  if (stored && (QUALITY_VALUES as readonly string[]).includes(stored)) {
-    const q = stored as Quality;
-    // A persisted `max` from a previous session is no longer valid if the browser lost flac support — fall back.
-    if (q === 'max' && !isMaxQualityAvailable()) return defaultQuality();
-    return q;
-  }
-  return defaultQuality();
+  if (stored && (QUALITY_VALUES as readonly string[]).includes(stored)) return stored as Quality;
+  return 'MAX';
 }
 
-function loadStoredFormat(): Format {
-  if (typeof window === 'undefined') return defaultFormat();
+function loadStoredFormatLossy(): FormatLossy {
+  if (typeof window === 'undefined') return defaultFormatLossy();
   const stored = window.localStorage.getItem(FORMAT_STORAGE_KEY);
   if (stored && (FORMAT_VALUES as readonly string[]).includes(stored)) {
-    const f = stored as Format;
-    if (!isFormatAvailable(f)) return defaultFormat();
+    const f = stored as FormatLossy;
+    if (!isFormatLossyAvailable(f)) return defaultFormatLossy();
     return f;
   }
-  return defaultFormat();
-}
-
-/** Map the player's coarse quality knob to a GraphQL `Quality` enum value (or `null` for `max`, which the server infers from the `Accept` header instead). */
-function qualityForGql(quality: Quality): 'LOW' | 'MEDIUM' | 'HIGH' | null {
-  switch (quality) {
-    case 'max':
-      return null;
-    case 'high':
-      return 'HIGH';
-    case 'medium':
-      return 'MEDIUM';
-    case 'low':
-      return 'LOW';
-  }
+  return defaultFormatLossy();
 }
 
 export type BufferedRange = { start: number; end: number };
-
 export type PlayerError = { message: string };
 
 type PlayerCtx = {
@@ -132,13 +152,12 @@ type PlayerCtx = {
   /** Seconds of the current track the server has finished encoding. */
   readySeconds: number;
   quality: Quality;
-  maxQualityAvailable: boolean;
   setQuality: (q: Quality) => void;
-  format: Format;
-  formatAvailability: Record<Format, boolean>;
-  setFormat: (f: Format) => void;
-  /** Format actually being delivered by the server for the current track, as resolved from the probe response. `null` between track changes or when no track is loaded. */
-  actualFormat: ActualFormat;
+  formatLossy: FormatLossy;
+  formatLossyAvailability: Record<FormatLossy, boolean>;
+  setFormatLossy: (f: FormatLossy) => void;
+  /** Codec actually being delivered for the current track, derived from `(quality, formatLossy, track.isLossless)`. `null` between track changes or when no track is loaded. */
+  actualFormat: ActualFormat | null;
   error: PlayerError | null;
   dismissError: () => void;
   play: (id: string) => void;
@@ -160,11 +179,9 @@ function singletonAudio(): HTMLAudioElement | null {
 function errorMessageFor(err: CreatePlayerError): string {
   switch (err.kind) {
     case 'mse-unsupported':
-      return `This browser cannot play ${err.contentType} via MSE. Pick a different quality.`;
-    case 'probe-failed':
-      return 'Could not reach the playback endpoint.';
-    case 'direct-fetch-failed':
-      return 'Failed to download the audio file.';
+      return 'This browser does not support Media Source Extensions; playback is unavailable.';
+    case 'codec-unsupported':
+      return `This browser cannot decode ${err.contentType}. Pick a different format.`;
   }
 }
 
@@ -177,28 +194,22 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const [positionSeconds, setPositionSeconds] = useState(0);
   const [bufferedRanges, setBufferedRanges] = useState<BufferedRange[]>([]);
   const [readySeconds, setReadySeconds] = useState(0);
-  const readySecondsRef = useRef(0);
-  readySecondsRef.current = readySeconds;
   const [quality, setQualityState] = useState<Quality>(loadStoredQuality);
-  const [format, setFormatState] = useState<Format>(loadStoredFormat);
+  const [formatLossy, setFormatLossyState] = useState<FormatLossy>(loadStoredFormatLossy);
   const [error, setError] = useState<PlayerError | null>(null);
-  const [actualFormat, setActualFormat] = useState<ActualFormat>(null);
+  const [actualFormat, setActualFormat] = useState<ActualFormat | null>(null);
   const setQuality = useCallback((q: Quality) => {
     setQualityState(q);
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem(QUALITY_STORAGE_KEY, q);
-    }
+    if (typeof window !== 'undefined') window.localStorage.setItem(QUALITY_STORAGE_KEY, q);
   }, []);
-  const setFormat = useCallback((f: Format) => {
-    setFormatState(f);
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem(FORMAT_STORAGE_KEY, f);
-    }
+  const setFormatLossy = useCallback((f: FormatLossy) => {
+    setFormatLossyState(f);
+    if (typeof window !== 'undefined') window.localStorage.setItem(FORMAT_STORAGE_KEY, f);
   }, []);
   const dismissError = useCallback(() => setError(null), []);
   const nextRef = useRef<() => void>(() => undefined);
   const playerRef = useRef<MsePlayer | null>(null);
-  const transcodeUnsubRef = useRef<(() => void) | null>(null);
+  const manifestUnsubRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -257,13 +268,17 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         const nextId = data.tracks?.edges[0]?.node.id;
         if (!nextId) return;
         await queryClient.prefetchQuery({
-          queryKey: ['track', nextId, quality],
+          queryKey: ['track', nextId, quality, formatLossy],
           queryFn: ({ signal }) =>
-            gqlRequest(TrackByIdDocument, { id: nextId, quality: qualityForGql(quality) }, signal),
+            gqlRequest(
+              TrackByIdDocument,
+              { id: nextId, format: { quality, formatLossy } },
+              signal,
+            ),
         });
       })();
     },
-    [queryClient, quality],
+    [queryClient, quality, formatLossy],
   );
 
   const loadTrack = useCallback(
@@ -277,58 +292,62 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       if (!audio) return;
       playerRef.current?.dispose();
       playerRef.current = null;
-      transcodeUnsubRef.current?.();
-      const meta = readFragment(PlaybackBarDocument, track);
-      const totalSeconds = meta.duration.seconds;
-      const accept = acceptHeaderFor(quality, format, capabilities);
-      transcodeUnsubRef.current = subscribe(
-        TranscodeProgressDocument,
-        {
-          trackId: track.id,
-          acceptHeaderValue: accept,
-          quality: quality === 'max' ? null : quality,
-        },
-        {
-          next: (data) => {
-            const p = data.transcodeProgress;
-            if (!p) return;
-            // Once ffmpeg signals done, the whole track is ready — `readyChunks * chunkDurationSeconds` floor-rounds below the actual duration (chunks are fixed-length, tracks aren't), and passthrough emits `isDone: true` with `readyChunks: 0`. Both cases collapse to "the seek bar should clear".
-            const ready = p.isDone ? totalSeconds : p.readyChunks * p.chunkDurationSeconds;
-            const clamped = Math.min(ready, totalSeconds);
-            setReadySeconds(clamped);
-            playerRef.current?.setReadyChunks(p.readyChunks);
-          },
-          error: () => {
-            transcodeUnsubRef.current = null;
-          },
-          complete: () => {
-            transcodeUnsubRef.current = null;
-          },
-        },
-      );
-      const created = await createPlayer(audio, resolvePlaybackUrl(track.url), accept, {
+      manifestUnsubRef.current?.();
+
+      const actual = resolveActualFormat(quality, formatLossy, track.isLossless);
+      const contentType = contentTypeFor(actual);
+      setActualFormat(actual);
+
+      const created = await createPlayer(audio, resolvePlaybackUrl(track.url), contentType, {
         onError: (err) => setError({ message: errorMessageFor(err) }),
       });
       if (!created) return;
-      playerRef.current = created.player;
-      setActualFormat(created.actualFormat);
+      playerRef.current = created;
+
+      const meta = readFragment(PlaybackBarDocument, track);
+      const totalSeconds = meta.duration.seconds;
+
+      manifestUnsubRef.current = subscribe(
+        TrackManifestDocument,
+        { trackId: track.id, format: { quality, formatLossy } },
+        {
+          next: (data) => {
+            const snap = data.trackManifest;
+            if (!snap) return;
+            playerRef.current?.setManifest(snap);
+            const ready = snap.done ? totalSeconds : snap.durationSeconds;
+            setReadySeconds(Math.min(ready, totalSeconds));
+          },
+          error: () => {
+            manifestUnsubRef.current = null;
+          },
+          complete: () => {
+            manifestUnsubRef.current = null;
+          },
+        },
+      );
+
       audio.currentTime = 0;
       await audio.play().catch(() => undefined);
       prefetchNext(track.id);
     },
-    [prefetchNext, quality, format],
+    [prefetchNext, quality, formatLossy],
   );
 
   const playTrack = useCallback(
     async (id: string) => {
       const data = await queryClient.fetchQuery({
-        queryKey: ['track', id, quality],
+        queryKey: ['track', id, quality, formatLossy],
         queryFn: ({ signal }) =>
-          gqlRequest(TrackByIdDocument, { id, quality: qualityForGql(quality) }, signal),
+          gqlRequest(
+            TrackByIdDocument,
+            { id, format: { quality, formatLossy } },
+            signal,
+          ),
       });
       if (data.track) await loadTrack(data.track);
     },
-    [queryClient, quality, loadTrack],
+    [queryClient, quality, formatLossy, loadTrack],
   );
 
   const togglePlay = useCallback(() => {
@@ -342,10 +361,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     const audio = audioRef.current;
     const player = playerRef.current;
     if (!audio || !player) return;
-    const ready = readySecondsRef.current;
-    const target = ready > 0 ? Math.min(seconds, ready) : seconds;
-    setPositionSeconds(target);
-    await player.seekTo(target);
+    setPositionSeconds(seconds);
+    await player.seekTo(seconds);
     await audio.play().catch(() => undefined);
   }, []);
 
@@ -381,14 +398,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       bufferedRanges,
       readySeconds,
       quality,
-      maxQualityAvailable: isMaxQualityAvailable(),
       setQuality,
-      format,
-      formatAvailability: {
-        mp4: isFormatAvailable('mp4'),
-        mp3: isFormatAvailable('mp3'),
+      formatLossy,
+      formatLossyAvailability: {
+        OPUS: isFormatLossyAvailable('OPUS'),
+        MP3: isFormatLossyAvailable('MP3'),
       },
-      setFormat,
+      setFormatLossy,
       actualFormat,
       error,
       dismissError,
@@ -406,8 +422,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       readySeconds,
       quality,
       setQuality,
-      format,
-      setFormat,
+      formatLossy,
+      setFormatLossy,
       actualFormat,
       error,
       dismissError,
