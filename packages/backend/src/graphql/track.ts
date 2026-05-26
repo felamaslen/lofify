@@ -1,6 +1,7 @@
 import type { ID, Int } from 'grats';
 
 import type { Track as DbTrack } from '../db/schema/index.js';
+import { bakeFileExists, enqueueBake } from '../playback/bake.js';
 import { signPlaybackUrl } from '../playback/sign.js';
 import { Duration } from './duration.js';
 
@@ -39,24 +40,37 @@ export type Track = {
   isLossless: boolean;
   /** @gqlField */
   duration: Duration;
+  /** Absolute path to the source file on disk. Internal — never exposed to clients. */
+  file: string;
+  /** mtime of the source file when last scanned. Internal — used by `url()` to derive the flac-cache filename. */
+  sourceMtime: Date;
 };
 
 /**
  * Signed URL the client should `GET` to stream this track. The container format is selected at request time via the `Accept` header; the signed URL is independent of it, so a single URL can be replayed with different `Accept` values to switch formats without re-querying GraphQL.
  *
+ * When the caller doesn't pin a `quality`, the resolver picks one based on the source: lossy or flac sources get a q-less URL (the client can still get flac passthrough by listing `audio/flac` in `Accept`); lossless non-flac sources with a warm flac cache also get a q-less URL; cold lossless non-flac sources get `q:M`, which pins playback to the lossy pipeline while a background bake warms the cache for the next play.
+ *
  * @gqlField
  */
-export function url(
+export async function url(
   track: Track,
   /** Coarse delivery quality. */
   quality?: Quality | null,
-): string {
-  return signPlaybackUrl(track.id, {
-    quality:
-      quality == null
-        ? null
-        : (quality.toLowerCase() as 'low' | 'medium' | 'high'),
-  });
+): Promise<string> {
+  if (quality != null) {
+    return signPlaybackUrl(track.id, {
+      quality: quality.toLowerCase() as 'low' | 'medium' | 'high',
+    });
+  }
+  const sourceIsFlac = track.format.toLowerCase() === 'flac';
+  if (track.isLossless && !sourceIsFlac) {
+    if (!(await bakeFileExists(track.id, track.sourceMtime))) {
+      void enqueueBake(track.id, track.file, track.sourceMtime).catch(() => undefined);
+      return signPlaybackUrl(track.id, { quality: 'max' });
+    }
+  }
+  return signPlaybackUrl(track.id, { quality: null });
 }
 
 export function deriveFormat(format: string, codec: string): string {
@@ -101,5 +115,7 @@ export function toGqlTrack(row: DbTrack): Track {
     sourceFormat: abbreviateCodec(row.codec),
     isLossless: row.isLossless,
     duration: new Duration(row.durationSeconds),
+    file: row.file,
+    sourceMtime: row.sourceMtime,
   };
 }
