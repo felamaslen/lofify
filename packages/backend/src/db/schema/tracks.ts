@@ -46,6 +46,8 @@ export const tracks = pgTable(
     durationSeconds: integer('durationSeconds').notNull(),
     /** mtime of the source file when last scanned. Used to detect out-of-band content changes and to invalidate derived state (e.g. cached transcodes). */
     sourceMtime: timestamp('sourceMtime', { withTimezone: true, mode: 'date' }).notNull(),
+    /** Absolute path to a pre-baked flac encode of this track. Populated for lossless-non-flac sources the first time they're requested with `audio/flac` in `Accept`; cleared by the scanner when the source mtime changes. */
+    flacCachePath: text('flacCachePath'),
   },
   (t) => [
     index('Tracks_artist_idx').on(t.artist),

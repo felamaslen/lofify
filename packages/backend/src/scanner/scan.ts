@@ -1,7 +1,7 @@
 import { Readable, Writable } from 'node:stream';
 
 import { SpanStatusCode, trace } from '@opentelemetry/api';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import fg from 'fast-glob';
 
 import { db } from '../db/client.js';
@@ -18,16 +18,21 @@ import {
   type ScanState,
 } from './runner.js';
 
-/** Parse `file` and write the result to `Tracks`, replacing the existing row keyed by absolute path. */
+/** Parse `file` and write the result to `Tracks`, replacing the existing row keyed by absolute path. `flacCachePath` is preserved when the source mtime matches the existing row, and cleared otherwise — that keeps the cache warm across rescans of unchanged files while invalidating it the instant the source bytes change. */
 export async function upsertTrack(file: string): Promise<void> {
   const parsed = await parseTrack(file);
   const now = new Date();
   await db
     .insert(tracks)
-    .values({ ...parsed, scannedAt: now, updatedAt: now })
+    .values({ ...parsed, flacCachePath: null, scannedAt: now, updatedAt: now })
     .onConflictDoUpdate({
       target: tracks.file,
-      set: { ...parsed, scannedAt: now, updatedAt: now },
+      set: {
+        ...parsed,
+        scannedAt: now,
+        updatedAt: now,
+        flacCachePath: sql`CASE WHEN ${tracks.sourceMtime} IS DISTINCT FROM ${parsed.sourceMtime} THEN NULL ELSE ${tracks.flacCachePath} END`,
+      },
     });
 }
 
