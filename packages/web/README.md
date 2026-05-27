@@ -105,6 +105,29 @@ an on-the-fly switch whose old-quality buffer hasn't drained yet.
 (The backend must expose `X-Quality` via CORS `exposedHeaders` for
 cross-origin reads.)
 
+## PWA & background playback
+
+The client is an installable PWA. `vite-plugin-pwa` (configured in
+`vite.config.ts`, `generateSW` mode) emits the `manifest.webmanifest`,
+icons (`public/icon-{192,512}.png`, `public/maskable-512.png`,
+`public/apple-touch-icon.png`, all rasterised from the SVG logo) and a
+Workbox service worker that precaches the **app shell only** — JS, CSS,
+HTML and icons. Audio ranges and GraphQL are deliberately excluded: they're
+large and dynamic, and the player streams them itself. The SW registers on
+load with `registerType: 'autoUpdate'`, so a new build is picked up silently
+on the next visit.
+
+Playback keeps going when the tab is backgrounded or the screen locks
+because audio runs through a single `<audio>` element (`lib/audio-element.ts`)
+fed by MSE — there's no `AudioContext`, which browsers suspend when hidden.
+The `Player` (`state/player.tsx`) wires `navigator.mediaSession` so the OS
+treats us like a media app: it publishes track metadata (title, artist,
+album, with the app icon as stand-in artwork), keeps `playbackState` and the
+lock-screen scrub position in sync, and handles the hardware/lock-screen
+`play`/`pause`/`previoustrack`/`nexttrack`/`seekto` controls. The Media
+Session handlers are what stop mobile platforms (iOS especially) from
+pausing hidden web audio.
+
 ## Tag editing
 
 Rows in the track list are selectable: click to select one, cmd/ctrl-click
