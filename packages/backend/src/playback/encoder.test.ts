@@ -40,6 +40,7 @@ test('opus-in-mp4 from flac source: writes a single fragmented mp4 the mp4 scann
     chunkDurationSeconds: 0.2,
   });
   await handle.done;
+  expect(handle.aborted).toBe(false);
   const bytes = await readFile(out);
   expect(bytes.length).toBeGreaterThan(0);
   const r = mp4Scanner.scan(bytes, 0, true);
@@ -116,7 +117,7 @@ test('mp3 passthrough from mp3 source: copy-muxes without re-encoding', async ()
   expect(r.chunks.length).toBeGreaterThanOrEqual(2);
 }, 30_000);
 
-test('kill() terminates the encoder and resolves done without throwing', async () => {
+test('kill() terminates the encoder and resolves done without throwing, marking it aborted', async () => {
   const out = path.join(workDir, 'killed.bin');
   const handle = spawnEncoder({
     source: SAMPLE_FLAC,
@@ -126,6 +127,8 @@ test('kill() terminates the encoder and resolves done without throwing', async (
   });
   handle.kill();
   await expect(handle.done).resolves.toBeUndefined();
+  // The cache relies on this to avoid finalising a truncated encode as complete.
+  expect(handle.aborted).toBe(true);
 }, 30_000);
 
 test('targetKey() produces a stable filesystem-safe key per (container, codec, quality)', () => {

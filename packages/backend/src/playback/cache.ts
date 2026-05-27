@@ -5,7 +5,7 @@
  *   1. `getOrStart(req)` looks up `<entryDir>/<targetKey>.idx`. If present and `done: true`, the entry is reloaded into memory (warm hit, no encode).
  *   2. Otherwise stale partial output is wiped and a fresh encoder + live-tail pair is started.
  *   3. Concurrent callers for the same key share a single pending start.
- *   4. The LRU drops in-memory handles but keeps the on-disk `.bin`/`.idx` so the next access can warm-load.
+ *   4. The LRU drops in-memory handles but keeps the on-disk `.bin`/`.idx` so the next access can warm-load. Dropping a handle whose encode is still running kills ffmpeg; that truncated output is reported as `aborted` and is never finalised as `done`, so the next access transparently re-encodes it.
  *
  * Because in-memory eviction leaves files behind, the on-disk footprint is bounded separately by `sweep`: when `maxBytes` is set, completed entries are deleted least-recently-accessed-first. Recency and size live in the `PlaybackCacheAccess` table — `lastAccess` is bumped (throttled) on every `getOrStart`, so a streamed track keeps itself warm, and an entry with no row yet sorts oldest. The sweep picks the oldest evictable entry one row at a time rather than loading the table; an entry is evictable only if it is neither mid-encode nor accessed within the grace window (`sweepGraceSeconds`) — recency, not in-memory LRU membership, is what protects an entry a playback session still depends on after its handle has churned out of the LRU. See `sweep.ts` for the surrounding lifecycle.
  *
@@ -358,7 +358,7 @@ export function createCache(opts: CacheOpts): Cache {
       binPath,
       idxPath,
       liveTail: synthLiveTail,
-      ffmpeg: { done: Promise.resolve(), kill: () => undefined },
+      ffmpeg: { done: Promise.resolve(), aborted: false, kill: () => undefined },
       error: null,
     };
   }
@@ -400,6 +400,18 @@ export function createCache(opts: CacheOpts): Cache {
     ffmpeg.done.then(
       () => {
         encodingKeys.delete(key);
+        if (ffmpeg.aborted) {
+          // The in-memory LRU evicted and killed this encode mid-flight (kill() resolves `done`).
+          // The output is truncated, so it must NOT be finalised as `done: true` — leaving the `.idx`
+          // un-finalised means a later request re-encodes (loadWarm rejects done:false) and the next
+          // startFresh wipes the partial. Surface an abort so any current waiter retries rather than
+          // hanging. We deliberately don't delete files or the LRU slot here: a re-encode may already
+          // have raced in on the same key, and clobbering its output/handle would be worse.
+          const abortErr = new Error('encode aborted: entry evicted from cache mid-encode');
+          internal.error = abortErr;
+          liveTail.emitter.emit('error', abortErr);
+          return;
+        }
         liveTail
           .finalise()
           .then(async () => {
