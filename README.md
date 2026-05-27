@@ -41,7 +41,7 @@ container.
 
 ```sh
 cp .env.example .env.production   # then edit secrets
-scripts/deploy.sh --host my-server # builds, pushes, ships compose + .env
+scripts/deploy.sh --host my-server --nfs-host 10.0.0.2 --nfs-path /srv/dockercache
 ```
 
 `scripts/deploy.sh` builds and pushes `felamaslen/lofify:latest`, copies
@@ -49,6 +49,16 @@ scripts/deploy.sh --host my-server # builds, pushes, ships compose + .env
 remote (default `/opt/lofify`), and copies `.env.production` to
 `{directory}/.env`. Backend listens on host port `4002`. Postgres data
 persists at `{directory}/var/db`. `.env.production` is git-ignored.
+
+The playback cache is an NFS-backed Docker volume. `--nfs-host` and
+`--nfs-path` (both required) name the NFS server and exported directory;
+the deploy splices them into the compose file before copying. Docker
+creates the volume from those options on first `up` — to repoint it at a
+different server later, remove the `playback-cache` volume on the remote
+(`docker volume rm <project>_playback-cache`) before redeploying. The
+share root is mounted at `/playback-cache`; the backend writes into the
+`lofify` subdirectory (`PLAYBACK_CACHE_DIR`), which it creates on first
+use, so the export can be shared with other consumers.
 
 ## Root scripts
 
