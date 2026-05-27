@@ -106,7 +106,11 @@ sees, so it runs once in `Track.url`/`Track.delivery` and the route just
 decodes the result. The URL is HMAC-signed with
 `PLAYBACK_SIGNING_SECRET` (signature covers `c:.../a:.../q:.../id`);
 clients send `Range: bytes=START-END` (or `bytes=START-`) and the server
-slices the `.bin`. `HEAD` returns `Content-Type` + `Accept-Ranges`, plus
+slices the `.bin`. Every response carries an `X-Quality` header naming
+the resolved tier of its bytes (exposed to browser `fetch()` via CORS
+`exposedHeaders` in `app.ts`), which the web player reads to report the
+tier actually playing during an on-the-fly bitrate switch. `HEAD`
+returns `Content-Type` + `Accept-Ranges` (and `X-Quality`), plus
 `Content-Length` once the encode is complete.
 
 **Format resolution** (`resolve.ts`) maps a client `TrackFormat` —

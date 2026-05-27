@@ -143,6 +143,8 @@ type PlayerCtx = {
   setLossyPreference: (p: LossyPreference) => void;
   /** Resolved delivery plan for the current track (codec, MIME, copy-vs-transcode, description). `null` between track changes or when no track is loaded. */
   delivery: Delivery | null;
+  /** Quality of the bytes currently under the playhead, from the playback `X-Quality` header. During an on-the-fly bitrate switch this trails `quality` until the old-quality buffer drains. `null` until the first chunk is fetched. */
+  playingQuality: Quality | null;
   error: PlayerError | null;
   dismissError: () => void;
   play: (id: string) => void;
@@ -177,6 +179,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     useState<LossyPreference>(loadStoredLossyPreference);
   const [error, setError] = useState<PlayerError | null>(null);
   const [delivery, setDelivery] = useState<Delivery | null>(null);
+  const [playingQuality, setPlayingQuality] = useState<Quality | null>(null);
   const dismissError = useCallback(() => setError(null), []);
   const nextRef = useRef<() => void>(() => undefined);
   const playerRef = useRef<MsePlayer | null>(null);
@@ -310,6 +313,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       setBufferedRanges([]);
       setReadySeconds(0);
       setDelivery(null);
+      setPlayingQuality(null);
       const audio = audioRef.current;
       if (!audio) return;
       playerRef.current?.dispose();
@@ -326,7 +330,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         resolvePlaybackUrl(track.delivery.url),
         track.delivery.mimeType,
         totalSeconds,
-        { onError: (err) => setError({ message: errorMessageFor(err) }) },
+        {
+          onError: (err) => setError({ message: errorMessageFor(err) }),
+          onQuality: (q) => setPlayingQuality(q as Quality | null),
+        },
       );
       if (!created) return;
       playerRef.current = created;
@@ -456,6 +463,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       },
       setLossyPreference,
       delivery,
+      playingQuality,
       error,
       dismissError,
       play: (id) => void playTrack(id),
@@ -475,6 +483,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       lossyPreference,
       setLossyPreference,
       delivery,
+      playingQuality,
       error,
       dismissError,
       playTrack,

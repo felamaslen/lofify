@@ -47,15 +47,19 @@ const TONE_CLASS: Record<BadgeShape['tone'], string> = {
 };
 
 export function PlaybackFormatBadge() {
-  const { current, quality, delivery } = usePlayer();
+  const { current, quality, playingQuality, delivery } = usePlayer();
   if (!current || !delivery) return null;
-  const { Icon, label, tone, tooltip } = badgeFor(quality, delivery);
+  // Show the tier actually under the playhead; fall back to the requested tier until the first chunk
+  // reports back. Fade while they disagree — i.e. an on-the-fly switch whose buffer hasn't drained.
+  const effective = playingQuality ?? quality;
+  const lagging = playingQuality !== null && playingQuality !== quality;
+  const { Icon, label, tone, tooltip } = badgeFor(effective, delivery);
   return (
     <TooltipProvider delayDuration={150}>
       <Tooltip>
         <TooltipTrigger asChild>
           <span
-            className={`inline-flex shrink-0 items-center gap-1 text-[10px] font-semibold uppercase leading-none tracking-wide ${TONE_CLASS[tone]}`}
+            className={`inline-flex shrink-0 items-center gap-1 text-[10px] font-semibold uppercase leading-none tracking-wide ${TONE_CLASS[tone]} ${lagging ? 'opacity-50' : ''}`}
             aria-label={tooltip}
           >
             <Icon className="size-3" aria-hidden />

@@ -44,6 +44,8 @@ export type CreatePlayerError =
 export type CreatePlayerOptions = {
   /** Called when the player can't satisfy the request. Caller surfaces this to the user. */
   onError?: (err: CreatePlayerError) => void;
+  /** Called with the quality (`X-Quality` header) of the bytes under the playhead whenever it changes. During an on-the-fly bitrate switch this lags the requested quality until the old-quality buffer drains. `null` before any chunk under the playhead has been fetched. */
+  onQuality?: (quality: string | null) => void;
 };
 
 /** First chunk index whose range covers `time`, or -1 if `time` is at/after the last chunk's end. */
@@ -89,6 +91,15 @@ class MsePlayer implements Player {
    * chunk lands. Reset once the playhead is covered.
    */
   private lastUncoveredFetch: number | null = null;
+  /**
+   * Quality (`X-Quality`) of fetched bytes, keyed by the rounded start-second of the chunk they
+   * cover — not by chunk index, which resets on `switchStream`. Chunk boundaries align across
+   * bitrates (same source, same nominal duration), so a region buffered at the old quality keeps its
+   * entry while newly-fetched bytes for the same time overwrite it. Read at the playhead so the
+   * reported quality reflects the buffer actually playing, which trails the requested tier mid-swap.
+   */
+  private qualityByStart = new Map<number, string>();
+  private reportedQuality: string | null = null;
 
   constructor(
     private audio: HTMLAudioElement,
@@ -98,6 +109,7 @@ class MsePlayer implements Player {
     private blobUrl: string,
     /** True for mp3: each chunk's frames start at PTS 0, so `timestampOffset` must be set before append. fmp4 (opus/flac) carries tfdt so this stays false. */
     private setTimestampOffsetPerChunk: boolean,
+    private onQuality?: (quality: string | null) => void,
   ) {
     sourceBuffer.addEventListener('updateend', this.onTick);
     audio.addEventListener('timeupdate', this.onTick);
@@ -130,6 +142,7 @@ class MsePlayer implements Player {
 
   dispose(): void {
     this.disposed = true;
+    this.qualityByStart.clear();
     for (const ctrl of this.pending.values()) ctrl.abort();
     this.pending.clear();
     this.audio.removeEventListener('timeupdate', this.onTick);
@@ -156,6 +169,19 @@ class MsePlayer implements Player {
   private tick(): void {
     this.reconcile();
     this.tryEndOfStream();
+    this.reportQuality();
+  }
+
+  /** Report the quality of the chunk under the playhead when it changes. Keeps the last known value while the playhead sits over a region not yet fetched (no entry), rather than flickering to `null`. */
+  private reportQuality(): void {
+    const chunks = this.manifest.chunks;
+    const idx = findChunkAtTime(chunks, this.audio.currentTime);
+    if (idx < 0) return;
+    const q = this.qualityByStart.get(Math.round(chunkStartSeconds(chunks, idx)));
+    if (q && q !== this.reportedQuality) {
+      this.reportedQuality = q;
+      this.onQuality?.(q);
+    }
   }
 
   private isLive(): boolean {
@@ -281,9 +307,9 @@ class MsePlayer implements Player {
     const ctrl = new AbortController();
     this.pending.set(-1, ctrl);
     try {
-      const buf = await this.fetchRange(init.byteStart, init.byteEnd, ctrl.signal);
-      if (!buf || this.disposed || ctrl.signal.aborted) return;
-      this.appendQueue.unshift({ chunkIndex: -1, data: buf, startSeconds: 0 });
+      const res = await this.fetchRange(init.byteStart, init.byteEnd, ctrl.signal);
+      if (!res || this.disposed || ctrl.signal.aborted) return;
+      this.appendQueue.unshift({ chunkIndex: -1, data: res.data, startSeconds: 0 });
       this.drainAppendQueue();
     } finally {
       this.pending.delete(-1);
@@ -295,14 +321,14 @@ class MsePlayer implements Player {
     if (!chunk) return;
     const ctrl = new AbortController();
     this.pending.set(chunkIndex, ctrl);
+    const startSeconds = chunkStartSeconds(this.manifest.chunks, chunkIndex);
     try {
-      const buf = await this.fetchRange(chunk.byteStart, chunk.byteEnd, ctrl.signal);
-      if (!buf || this.disposed || ctrl.signal.aborted) return;
-      this.appendQueue.push({
-        chunkIndex,
-        data: buf,
-        startSeconds: chunkStartSeconds(this.manifest.chunks, chunkIndex),
-      });
+      const res = await this.fetchRange(chunk.byteStart, chunk.byteEnd, ctrl.signal);
+      if (!res || this.disposed || ctrl.signal.aborted) return;
+      if (res.quality) {
+        this.qualityByStart.set(Math.round(startSeconds), res.quality);
+      }
+      this.appendQueue.push({ chunkIndex, data: res.data, startSeconds });
       this.drainAppendQueue();
     } finally {
       this.pending.delete(chunkIndex);
@@ -313,14 +339,15 @@ class MsePlayer implements Player {
     byteStart: number,
     byteEnd: number,
     signal: AbortSignal,
-  ): Promise<Uint8Array | null> {
+  ): Promise<{ data: Uint8Array; quality: string | null } | null> {
     try {
       const res = await fetch(this.url, {
         signal,
         headers: { Range: `bytes=${byteStart}-${byteEnd - 1}` },
       });
       if (!res.ok) return null;
-      return new Uint8Array(await res.arrayBuffer());
+      const data = new Uint8Array(await res.arrayBuffer());
+      return { data, quality: res.headers.get('X-Quality') };
     } catch {
       return null;
     }
@@ -422,5 +449,13 @@ export async function createPlayer(
   const sourceBuffer = mediaSource.addSourceBuffer(contentType);
   // mp3 chunks carry no PTS, so we must offset per chunk; fmp4 (opus/flac) carries tfdt so MSE places fragments automatically.
   const setOffsetPerChunk = contentType.startsWith('audio/mpeg');
-  return new MsePlayer(audio, url, mediaSource, sourceBuffer, blobUrl, setOffsetPerChunk);
+  return new MsePlayer(
+    audio,
+    url,
+    mediaSource,
+    sourceBuffer,
+    blobUrl,
+    setOffsetPerChunk,
+    options.onQuality,
+  );
 }

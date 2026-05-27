@@ -60,6 +60,15 @@ codec, distinguishing a copy (no re-encode) from a transcode, with
 `description` as its tooltip. MSE failures or unreachable endpoints raise
 a toast.
 
+Each playback range response carries an `X-Quality` header naming the
+tier its bytes were encoded at. The player records it per fetched chunk
+and exposes the value under the playhead as `playingQuality`. The format
+badge shows this effective tier (falling back to the requested `quality`
+before the first chunk reports), and fades while the two disagree — i.e.
+during an on-the-fly switch whose old-quality buffer hasn't drained yet.
+(The backend must expose `X-Quality` via CORS `exposedHeaders` for
+cross-origin reads.)
+
 ## Tag editing
 
 Rows in the track list are selectable: click to select one, cmd/ctrl-click
