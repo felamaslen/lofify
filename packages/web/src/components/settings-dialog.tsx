@@ -15,11 +15,11 @@ import {
 } from './ui/dialog.tsx';
 
 export function SettingsDialog() {
-  const { quality } = usePlayer();
+  const { qualityMode } = usePlayer();
   const formatBlurb =
-    quality === 'MAX'
+    qualityMode === 'ORIGINAL'
       ? 'Used only when a source has to be transcoded — a lossy source with no matching copy. Lossless and matching sources are copied without re-encoding.'
-      : 'Everything is transcoded to this codec at the selected quality.';
+      : 'Everything is transcoded to this codec, at a bitrate chosen automatically from your connection speed.';
   return (
     <Dialog>
       <DialogTrigger asChild>

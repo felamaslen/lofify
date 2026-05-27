@@ -46,6 +46,8 @@ export type CreatePlayerOptions = {
   onError?: (err: CreatePlayerError) => void;
   /** Called with the quality (`X-Quality` header) of the bytes under the playhead whenever it changes. During an on-the-fly bitrate switch this lags the requested quality until the old-quality buffer drains. `null` before any chunk under the playhead has been fetched. */
   onQuality?: (quality: string | null) => void;
+  /** Called once per chunk fetch with the body-transfer measurement (TTFB excluded): `bytes` received over `transferMs`, covering `contentSeconds` of audio. Drives the adaptive-bitrate estimator. */
+  onThroughput?: (bytes: number, transferMs: number, contentSeconds: number) => void;
 };
 
 /** First chunk index whose range covers `time`, or -1 if `time` is at/after the last chunk's end. */
@@ -67,6 +69,16 @@ function chunkStartSeconds(chunks: readonly ManifestChunk[], i: number): number 
 
 function coversTime(ranges: readonly Range[], t: number): boolean {
   return ranges.some((r) => r.start - PLAYHEAD_EPS <= t && t < r.end);
+}
+
+function concatChunks(parts: readonly Uint8Array[], total: number): Uint8Array {
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.byteLength;
+  }
+  return out;
 }
 
 const EMPTY_MANIFEST: ManifestSnapshot = {
@@ -92,18 +104,12 @@ class MsePlayer implements Player {
    */
   private lastUncoveredFetch: number | null = null;
   /**
-   * Quality (`X-Quality`) of fetched bytes, keyed by the rounded start-second of the chunk they
-   * cover — not by chunk index, which resets on `switchStream`. Chunk boundaries align across
-   * bitrates (same source, same nominal duration), so a region buffered at the old quality keeps its
-   * entry while newly-fetched bytes for the same time overwrite it. Read at the playhead so the
-   * reported quality reflects the buffer actually playing, which trails the requested tier mid-swap.
+   * Quality (`X-Quality`) of fetched bytes, keyed by the rounded start-second of the chunk they cover — not by chunk index, which resets on `switchStream`. Chunk boundaries align across bitrates (same source, same nominal duration), so a region buffered at the old quality keeps its entry while newly-fetched bytes for the same time overwrite it. Read at the playhead so the reported quality reflects the buffer actually playing, which trails the requested tier mid-swap.
    */
   private qualityByStart = new Map<number, string>();
   private reportedQuality: string | null = null;
   /**
-   * The tier we'd like the forward buffer to be at, set by `switchStream`; `null` before any switch
-   * (nothing is "stale"). After a switch, reconcile re-fetches buffered-ahead chunks still at the old
-   * tier to make the change take hold without waiting for the existing buffer to play out.
+   * The tier we'd like the forward buffer to be at, set by `switchStream`; `null` before any switch (nothing is "stale"). After a switch, reconcile re-fetches buffered-ahead chunks still at the old tier to make the change take hold without waiting for the existing buffer to play out.
    */
   private desiredQuality: string | null = null;
   /** Chunk starts (rounded seconds) already re-fetched for the current `desiredQuality`. Bounds each chunk to one upgrade attempt per switch, so a header that never reports `desiredQuality` can't loop. Cleared on `switchStream`. */
@@ -118,6 +124,7 @@ class MsePlayer implements Player {
     /** True for mp3: each chunk's frames start at PTS 0, so `timestampOffset` must be set before append. fmp4 (opus/flac) carries tfdt so this stays false. */
     private setTimestampOffsetPerChunk: boolean,
     private onQuality?: (quality: string | null) => void,
+    private onThroughput?: (bytes: number, transferMs: number, contentSeconds: number) => void,
   ) {
     sourceBuffer.addEventListener('updateend', this.onTick);
     audio.addEventListener('timeupdate', this.onTick);
@@ -363,6 +370,10 @@ class MsePlayer implements Player {
       if (res.quality) {
         this.qualityByStart.set(Math.round(startSeconds), res.quality);
       }
+      const contentSeconds = chunk.endSeconds - startSeconds;
+      if (res.transferMs !== null && contentSeconds > 0) {
+        this.onThroughput?.(res.data.byteLength, res.transferMs, contentSeconds);
+      }
       this.appendQueue.push({ chunkIndex, data: res.data, startSeconds });
       this.drainAppendQueue();
     } finally {
@@ -374,15 +385,33 @@ class MsePlayer implements Player {
     byteStart: number,
     byteEnd: number,
     signal: AbortSignal,
-  ): Promise<{ data: Uint8Array; quality: string | null } | null> {
+  ): Promise<{ data: Uint8Array; quality: string | null; transferMs: number | null } | null> {
     try {
       const res = await fetch(this.url, {
         signal,
         headers: { Range: `bytes=${byteStart}-${byteEnd - 1}` },
       });
       if (!res.ok) return null;
-      const data = new Uint8Array(await res.arrayBuffer());
-      return { data, quality: res.headers.get('X-Quality') };
+      const quality = res.headers.get('X-Quality');
+      // Stream the body so we can time first-byte → last-byte (line speed) rather than including the
+      // request's TTFB, which on this route is dominated by encode-wait, not the network.
+      const reader = res.body?.getReader();
+      if (!reader) {
+        return { data: new Uint8Array(await res.arrayBuffer()), quality, transferMs: null };
+      }
+      const parts: Uint8Array[] = [];
+      let total = 0;
+      let firstByteAt = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (firstByteAt === 0) firstByteAt = performance.now();
+        parts.push(value);
+        total += value.byteLength;
+      }
+      const transferMs = firstByteAt === 0 ? null : performance.now() - firstByteAt;
+      const data = parts.length === 1 ? parts[0]! : concatChunks(parts, total);
+      return { data, quality, transferMs };
     } catch {
       return null;
     }
@@ -492,5 +521,6 @@ export async function createPlayer(
     blobUrl,
     setOffsetPerChunk,
     options.onQuality,
+    options.onThroughput,
   );
 }

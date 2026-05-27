@@ -36,26 +36,40 @@ Playback is MSE-only. A gear button in the playback bar's right section
 opens a settings dialog holding the library rescan, quality and preferred
 format controls:
 
-- **Quality** — `Max` asks for the best representation of the source the
-  browser can play (lossless or a copy where possible); the lower tiers
-  (`High`/`Med`/`Low`/`Min`) force a transcode at an ascending bitrate.
-  Changing quality between sub-`Max` tiers applies **live mid-track**: the
-  codec is unchanged, so the new bitrate splices into the existing buffer
-  with no gap. Already-buffered audio ahead of the playhead is re-fetched
-  at the new tier in the background (overwriting in place, so playback
-  never stalls), rather than waiting for the old buffer to drain — so the
-  switch takes hold promptly even with a large look-ahead buffer. Changes
-  that cross a codec boundary (to/from `Max`, or switching the codec
-  preference) take effect on the next track instead.
+- **Quality** — two modes. `Adaptive` transcodes to a lossy tier whose
+  bitrate is chosen automatically from the measured connection speed,
+  switching tiers on the fly mid-track. `Original` asks for the best
+  representation of the source the browser can play (lossless or a copy
+  where possible) and assumes the connection can sustain it. The wire
+  protocol is unchanged — `Original` requests the `MAX` tier, `Adaptive`
+  requests one of `MIN`/`LOW`/`MEDIUM`/`HIGH` picked at runtime.
+
+  In `Adaptive`, a bitrate step is a same-codec change, so it applies
+  **live mid-track**: the new bitrate splices into the existing buffer
+  with no gap, and already-buffered audio ahead of the playhead is
+  re-fetched at the new tier in the background (overwriting in place, so
+  playback never stalls) rather than waiting for the old buffer to drain.
+  Toggling between `Adaptive` and `Original` crosses a codec boundary, so
+  the player reloads at the current playback position.
+
+  The adaptation is stepwise (`state/player.tsx` + `lib/bandwidth.ts`):
+  each chunk fetch feeds a dual-EWMA throughput estimate that excludes
+  TTFB (timed first-byte→last-byte, since the `/play` route blocks on
+  encode before sending); the controller compares it against the current
+  tier's measured data rate, gated on buffer health and a cooldown, and
+  climbs or drops one tier. No bitrate table is kept on the client — only
+  the last-used tier is remembered (per session), so a track cold-starts
+  where the previous left off.
+
 - **Codec** — a _preference_ used only when the server has to transcode
-  (below Max, or a lossy source at Max with no matching copy): `Prefer
-Opus` or `Prefer MP3`. At Max, sources are copied without re-encoding
-  where possible; below Max everything is transcoded to this codec.
+  (Adaptive, or a lossy source in Original with no matching copy): `Prefer
+Opus` or `Prefer MP3`. In Original, sources are copied without re-encoding
+  where possible; in Adaptive everything is transcoded to this codec.
 
 `capabilities.ts` probes `MediaSource.isTypeSupported` once per page load
 and exposes the supported formats as the preference-ordered
 `losslessFormats` / `lossyFormats` MIME lists. The player sends these
-plus `quality` as the `TrackFormat`, and reads `Track.delivery` back —
+plus the requested tier as the `TrackFormat`, and reads `Track.delivery` back —
 `{ url, mimeType, isPassthrough, description }` — so it learns the
 SourceBuffer MIME type and a tooltip-ready summary in one query, then
 streams chunk byte ranges via the `trackManifest` subscription (see the
@@ -67,9 +81,9 @@ a toast.
 Each playback range response carries an `X-Quality` header naming the
 tier its bytes were encoded at. The player records it per fetched chunk
 and exposes the value under the playhead as `playingQuality`. The format
-badge shows this effective tier (falling back to the requested `quality`
-before the first chunk reports), and fades while the two disagree — i.e.
-during an on-the-fly switch whose old-quality buffer hasn't drained yet.
+badge shows this effective tier (falling back to `requestedTier` before
+the first chunk reports), and fades while the two disagree — i.e. during
+an on-the-fly switch whose old-quality buffer hasn't drained yet.
 (The backend must expose `X-Quality` via CORS `exposedHeaders` for
 cross-origin reads.)
 
