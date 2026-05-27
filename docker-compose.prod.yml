@@ -24,12 +24,20 @@ services:
       BACKEND_HOST: ${BACKEND_HOST:-0.0.0.0}
       BACKEND_PORT: 4002
       LIBRARY_PATH: ${LIBRARY_PATH:-/music}
-      PLAYBACK_CACHE_DIR: /playback-cache
+      DISK_CACHE_DIR: /playback-cache/lofify
     ports:
       - '4002:4002'
     volumes:
       - ${LIBRARY_MOUNT}:/music:ro
-      - ./var/cache:/playback-cache
+      - playback-cache:/playback-cache
     depends_on:
       postgres:
         condition: service_healthy
+
+volumes:
+  playback-cache:
+    driver: local
+    driver_opts:
+      type: nfs
+      o: 'addr=__NFS_HOST__,rw,nfsvers=4,noatime'
+      device: ':__NFS_PATH__'

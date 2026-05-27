@@ -1,8 +1,12 @@
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { eq } from 'drizzle-orm';
+
+import { db } from '../db/client.js';
+import { playbackCacheAccess } from '../db/schema/index.js';
 import { Quality } from '../graphql/track.js';
 import { type Cache, createCache } from './cache.js';
 import { targetKey } from './encoder.js';
@@ -37,6 +41,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   cache.reset();
+  await db.delete(playbackCacheAccess);
   await rm(workDir, { recursive: true, force: true });
 });
 
@@ -138,6 +143,131 @@ test('different targets for the same track land in distinct cache entries', asyn
   await flac.waitForEncoded(Number.POSITIVE_INFINITY);
   expect(opus.isDone()).toBe(true);
   expect(flac.isDone()).toBe(true);
+}, 30_000);
+
+// Seed a synthetic on-disk entry + access row without running an encoder, so sweep ordering can be
+// asserted directly. The dir holds a single file sized to `bytes`; the row carries the recency.
+async function seedEntry(dirName: string, bytes: number, lastAccess: Date): Promise<void> {
+  const dir = path.join(workDir, dirName);
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, 'data.bin'), Buffer.alloc(bytes));
+  await db.insert(playbackCacheAccess).values({ entryDir: dirName, sizeBytes: bytes, lastAccess });
+}
+
+async function remainingDirs(): Promise<string[]> {
+  const rows = await db
+    .select({ entryDir: playbackCacheAccess.entryDir })
+    .from(playbackCacheAccess);
+  return rows.map((r) => r.entryDir).sort();
+}
+
+test('sweep is a no-op while total usage is within budget', async () => {
+  const budgeted = createCache({ cacheRoot: workDir, chunkDurationSeconds: 0.2, maxBytes: 5000 });
+  await seedEntry('a', 500, new Date(1));
+  await seedEntry('b', 500, new Date(2));
+
+  const { evicted } = await budgeted.sweep();
+
+  expect(evicted).toEqual([]);
+  expect(await remainingDirs()).toEqual(['a', 'b']);
+});
+
+test('sweep evicts least-recently-accessed entries first until under budget', async () => {
+  const budgeted = createCache({ cacheRoot: workDir, chunkDurationSeconds: 0.2, maxBytes: 1500 });
+  await seedEntry('old', 1000, new Date(1));
+  await seedEntry('mid', 1000, new Date(2));
+  await seedEntry('new', 1000, new Date(3));
+
+  // 3000 bytes over a 1500 budget: drop the two oldest, leaving `new`.
+  const { evicted } = await budgeted.sweep();
+
+  expect(evicted).toEqual(['old', 'mid']);
+  expect(await remainingDirs()).toEqual(['new']);
+  await expect(stat(path.join(workDir, 'old'))).rejects.toThrow();
+});
+
+test('sweep targetBytes evicts past the budget to leave headroom', async () => {
+  const budgeted = createCache({ cacheRoot: workDir, chunkDurationSeconds: 0.2, maxBytes: 3500 });
+  await seedEntry('a', 1000, new Date(1));
+  await seedEntry('b', 1000, new Date(2));
+  await seedEntry('c', 1000, new Date(3));
+  await seedEntry('d', 1000, new Date(4));
+
+  // Over the 3500 budget (4000 total); sweep down to a 2000 target → drop the two oldest.
+  const { evicted } = await budgeted.sweep(2000);
+
+  expect(evicted).toEqual(['a', 'b']);
+  expect(await remainingDirs()).toEqual(['c', 'd']);
+});
+
+test('sweep keeps a recently-accessed entry even when it is over budget', async () => {
+  const budgeted = createCache({ cacheRoot: workDir, chunkDurationSeconds: 0.2, maxBytes: 1000 });
+  // Far over the 1000 budget, but accessed just now: a streaming session must not be evicted from
+  // under the client, so the grace window protects it despite the overshoot.
+  await seedEntry('fresh', 5000, new Date());
+
+  const { evicted } = await budgeted.sweep();
+
+  expect(evicted).toEqual([]);
+  expect(await remainingDirs()).toEqual(['fresh']);
+});
+
+test('budget sweep evicts an unprotected entry from disk and the access table', async () => {
+  const budgeted = createCache({ cacheRoot: workDir, chunkDurationSeconds: 0.2, maxBytes: 1 });
+  const entry = await budgeted.getOrStart(flacReq());
+  await entry.waitForEncoded(Number.POSITIVE_INFINITY);
+  const dirName = path.basename(path.dirname(entry.binPath));
+
+  // Wait for the post-encode size record to land, so the sweep has a size to weigh.
+  let sizeBytes = 0;
+  for (let i = 0; i < 100 && sizeBytes === 0; i++) {
+    const rows = await db
+      .select()
+      .from(playbackCacheAccess)
+      .where(eq(playbackCacheAccess.entryDir, dirName));
+    sizeBytes = rows[0]?.sizeBytes ?? 0;
+    if (sizeBytes === 0) await new Promise((r) => setTimeout(r, 50));
+  }
+  expect(sizeBytes).toBeGreaterThan(0);
+
+  // While the in-memory handle is live the entry is protected; dropping it makes it evictable.
+  budgeted.reset();
+  // Backdate past the grace window — a just-encoded entry is otherwise too recent to evict.
+  await db
+    .update(playbackCacheAccess)
+    .set({ lastAccess: new Date(Date.now() - 10 * 60_000) })
+    .where(eq(playbackCacheAccess.entryDir, dirName));
+  const { evicted } = await budgeted.sweep();
+
+  expect(evicted).toContain(dirName);
+  await expect(stat(entry.binPath)).rejects.toThrow();
+  const after = await db
+    .select()
+    .from(playbackCacheAccess)
+    .where(eq(playbackCacheAccess.entryDir, dirName));
+  expect(after).toHaveLength(0);
+}, 30_000);
+
+test('a failed encode reclaims its partial output and access row', async () => {
+  const budgeted = createCache({ cacheRoot: workDir, chunkDurationSeconds: 0.2, maxBytes: 1000 });
+  const req = { ...flacReq(), sourcePath: path.join(workDir, 'does-not-exist.flac') };
+  const entry = await budgeted.getOrStart(req);
+  await expect(entry.waitForEncoded(Number.POSITIVE_INFINITY)).rejects.toThrow();
+
+  // Cleanup runs asynchronously after the rejection; wait for the dir and its row to disappear so
+  // the failed encode leaves no unaccounted bytes behind.
+  const dirName = path.basename(path.dirname(entry.binPath));
+  await vi.waitFor(
+    async () => {
+      const rows = await db
+        .select()
+        .from(playbackCacheAccess)
+        .where(eq(playbackCacheAccess.entryDir, dirName));
+      expect(rows).toHaveLength(0);
+      await expect(stat(path.join(workDir, dirName))).rejects.toThrow();
+    },
+    { timeout: 5000, interval: 50 },
+  );
 }, 30_000);
 
 test('waitForEncoded resolves when the cumulative endSeconds threshold is crossed', async () => {

@@ -70,6 +70,8 @@ export type EncoderOpts = {
 
 export interface FfmpegHandle {
   readonly done: Promise<void>;
+  /** True once `done` settles iff the encode was terminated by `kill()` before finishing (rather than completing or failing on its own). Its output is then truncated and must not be treated as complete. Read after `done` resolves. */
+  readonly aborted: boolean;
   kill(): void;
 }
 
@@ -181,6 +183,7 @@ function buildArgs(opts: EncoderOpts): string[] {
 
 export function spawnEncoder(opts: EncoderOpts): FfmpegHandle {
   let killed = false;
+  let aborted = false;
   let proc: ChildProcessWithoutNullStreams | null = null;
   const done = tracer.startActiveSpan(
     'playback.encode',
@@ -198,6 +201,7 @@ export function spawnEncoder(opts: EncoderOpts): FfmpegHandle {
       await acquire(encoderSem);
       span.setAttribute('playback.semaphore.waitMs', Date.now() - semStart);
       if (killed) {
+        aborted = true;
         release(encoderSem);
         span.end();
         return;
@@ -212,19 +216,26 @@ export function spawnEncoder(opts: EncoderOpts): FfmpegHandle {
           proc.stdout.on('data', () => undefined);
           proc.on('error', reject);
           proc.on('close', (code, signal) => {
-            if (killed) {
+            // Exit 0 is a clean finish even if a kill() raced in just after the process exited.
+            if (code === 0) {
               resolve();
               return;
             }
-            if (code !== 0) {
-              reject(
-                new Error(
-                  `ffmpeg exited with code ${code} signal ${signal ?? '-'}: ${stderr.trim()}`,
-                ),
-              );
+            // Non-zero because we terminated it mid-encode: aborted, not a failure. Output truncated.
+            if (killed) {
+              aborted = true;
+              resolve();
               return;
             }
-            resolve();
+            const error = new Error(
+              `ffmpeg exited with code ${code} signal ${signal ?? '-'}: ${stderr.trim()}`,
+            );
+            // ffmpeg reports a full disk on stderr rather than via an errno; tag it so the
+            // cache can recognise it as ENOSPC and trigger an emergency sweep.
+            if (/No space left on device/i.test(stderr)) {
+              (error as Error & { code?: string }).code = 'ENOSPC';
+            }
+            reject(error);
           });
         });
       } catch (err) {
@@ -240,6 +251,9 @@ export function spawnEncoder(opts: EncoderOpts): FfmpegHandle {
   );
   return {
     done,
+    get aborted(): boolean {
+      return aborted;
+    },
     kill: (): void => {
       killed = true;
       proc?.kill('SIGTERM');

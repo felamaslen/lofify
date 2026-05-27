@@ -171,6 +171,36 @@ function loadStoredLossyPreference(): LossyPreference {
   return defaultLossyPreference();
 }
 
+const URL_TRACK_PARAM = 'track';
+const URL_TIME_PARAM = 't';
+/** Throttle for writing the playhead to the URL during playback; a pause flushes immediately. */
+const URL_WRITE_THROTTLE_MS = 2000;
+
+/** Read the track id and start position the last session left in the URL, so a refresh resumes where it left off. `null` when no track is encoded. */
+function readPlaybackFromUrl(): { trackId: string; startAt: number } | null {
+  if (typeof window === 'undefined') return null;
+  const params = new URLSearchParams(window.location.search);
+  const trackId = params.get(URL_TRACK_PARAM);
+  if (!trackId) return null;
+  const t = Number(params.get(URL_TIME_PARAM));
+  const startAt = Number.isFinite(t) && t > 0 ? t : 0;
+  return { trackId, startAt };
+}
+
+/** Mirror the current track and playhead into the URL (`replaceState`, so the back button doesn't walk through every position). A null `trackId` clears both params. */
+function writePlaybackToUrl(trackId: string | null, seconds: number): void {
+  if (typeof window === 'undefined') return;
+  const url = new URL(window.location.href);
+  if (trackId) {
+    url.searchParams.set(URL_TRACK_PARAM, trackId);
+    url.searchParams.set(URL_TIME_PARAM, String(Math.round(seconds)));
+  } else {
+    url.searchParams.delete(URL_TRACK_PARAM);
+    url.searchParams.delete(URL_TIME_PARAM);
+  }
+  window.history.replaceState(window.history.state, '', url);
+}
+
 /** Seconds of contiguous buffer ahead of the playhead, or 0 if the playhead isn't inside a buffered range. */
 function bufferedAheadSeconds(audio: HTMLAudioElement): number {
   const t = audio.currentTime;
@@ -215,6 +245,8 @@ class Player {
   private lastSwitchAt = 0;
   /** Latest-wins guard for `changeFormat`'s async fetch. */
   private changeToken = 0;
+  /** Pending debounced URL playhead write; cleared/flushed on pause and teardown. */
+  private urlWriteTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly detachers: Array<() => void> = [];
 
   constructor(
@@ -258,11 +290,25 @@ class Player {
   activate(): undefined | (() => void) {
     if (this.detachers.length > 0) return;
     this.attachAudioListeners();
+    void this.restoreFromUrl();
     return () => this.dispose();
+  }
+
+  /** Re-load the track and playhead the URL carries from a previous session, paused (a fresh page load has no user gesture to satisfy autoplay). A stale/deleted id resolves to nothing and is a no-op. */
+  private async restoreFromUrl(): Promise<void> {
+    const saved = readPlaybackFromUrl();
+    if (!saved) return;
+    const track = await this.fetchTrack(
+      saved.trackId,
+      this.snapshot.requestedTier,
+      this.snapshot.lossyPreference,
+    );
+    if (track) await this.loadTrack(track, saved.startAt, false);
   }
 
   /** Detach the audio listeners, end the manifest subscription, and tear down the current `MsePlayer`. The teardown returned by `activate`. */
   private dispose(): void {
+    this.flushUrl();
     for (const detach of this.detachers) detach();
     this.detachers.length = 0;
     this.manifestUnsub?.();
@@ -279,8 +325,14 @@ class Player {
 
   private attachAudioListeners(): void {
     this.on('play', () => this.set({ isPlaying: true }));
-    this.on('pause', () => this.set({ isPlaying: false }));
-    this.on('timeupdate', () => this.set({ positionSeconds: this.audio.currentTime }));
+    this.on('pause', () => {
+      this.set({ isPlaying: false });
+      this.flushUrl();
+    });
+    this.on('timeupdate', () => {
+      this.set({ positionSeconds: this.audio.currentTime });
+      this.scheduleUrlWrite();
+    });
     const onBuffered = () => this.set({ bufferedRanges: this.readBuffered() });
     this.on('progress', onBuffered);
     this.on('seeked', onBuffered);
@@ -297,6 +349,24 @@ class Player {
     const b = this.audio.buffered;
     for (let i = 0; i < b.length; i++) out.push({ start: b.start(i), end: b.end(i) });
     return out;
+  }
+
+  /** Throttle URL playhead writes while playing: `timeupdate` fires ~4×/s, so write at most once per `URL_WRITE_THROTTLE_MS` rather than on every tick. Leaving an already-pending timer untouched (rather than resetting it) is what makes this a throttle, not a debounce — a debounce would never fire under a continuous event stream. */
+  private scheduleUrlWrite(): void {
+    if (this.urlWriteTimer !== null) return;
+    this.urlWriteTimer = setTimeout(() => {
+      this.urlWriteTimer = null;
+      writePlaybackToUrl(this.snapshot.current?.id ?? null, this.audio.currentTime);
+    }, URL_WRITE_THROTTLE_MS);
+  }
+
+  /** Cancel any pending debounced write and persist the playhead now (on pause and teardown). */
+  private flushUrl(): void {
+    if (this.urlWriteTimer !== null) {
+      clearTimeout(this.urlWriteTimer);
+      this.urlWriteTimer = null;
+    }
+    writePlaybackToUrl(this.snapshot.current?.id ?? null, this.audio.currentTime);
   }
 
   // --- Public actions ----------------------------------------------------------------------------
@@ -358,8 +428,9 @@ class Player {
 
   // --- Track lifecycle ---------------------------------------------------------------------------
 
-  /** Tear down the current `MsePlayer` and start `track` from `startAt`. Called to play a new track and, via `changeFormat`, when a format change crosses a codec boundary. */
-  async loadTrack(track: TrackNode, startAt = 0): Promise<void> {
+  /** Tear down the current `MsePlayer` and start `track` from `startAt`. Called to play a new track and, via `changeFormat`, when a format change crosses a codec boundary. Pass `autoPlay = false` to load paused (restoring from the URL on a fresh page load, where there's no gesture to satisfy autoplay). */
+  async loadTrack(track: TrackNode, startAt = 0, autoPlay = true): Promise<void> {
+    writePlaybackToUrl(track.id, startAt);
     this.set({
       current: track,
       positionSeconds: startAt,
@@ -395,7 +466,7 @@ class Player {
     );
 
     this.audio.currentTime = startAt;
-    await this.audio.play().catch(() => undefined);
+    if (autoPlay) await this.audio.play().catch(() => undefined);
     void this.prefetchNext(track.id);
   }
 

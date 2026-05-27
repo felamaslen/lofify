@@ -6,17 +6,21 @@ TAG="latest"
 PLATFORM="linux/amd64"
 HOST=""
 DIRECTORY="/opt/lofify"
+NFS_HOST=""
+NFS_PATH=""
 SKIP_BUILD=0
 
 usage() {
   cat >&2 <<EOF
-Usage: $0 --host <ssh-host> [--directory <remote-path>] [--tag <tag>] [--platform <platform>] [--skip-build]
+Usage: $0 --host <ssh-host> --nfs-host <addr> --nfs-path <path> [--directory <remote-path>] [--tag <tag>] [--platform <platform>] [--skip-build]
 
 Builds and pushes the ${IMAGE} Docker image, then deploys it to a remote
 host via docker compose.
 
 Options:
   --host <ssh-host>      SSH host to deploy to (required)
+  --nfs-host <addr>      NFS server address for the playback cache (required)
+  --nfs-path <path>      Exported directory on the NFS server (required)
   --directory <path>     Remote directory for compose file (default: ${DIRECTORY})
   --tag <tag>            Image tag (default: ${TAG})
   --platform <platform>  Build platform (default: ${PLATFORM})
@@ -36,6 +40,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --directory)
       DIRECTORY="${2:-}"
+      shift 2
+      ;;
+    --nfs-host)
+      NFS_HOST="${2:-}"
+      shift 2
+      ;;
+    --nfs-path)
+      NFS_PATH="${2:-}"
       shift 2
       ;;
     --tag)
@@ -60,7 +72,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$HOST" ]]; then
+if [[ -z "$HOST" || -z "$NFS_HOST" || -z "$NFS_PATH" ]]; then
   usage
 fi
 
@@ -87,7 +99,14 @@ fi
 
 echo "==> Copying compose file and .env to ${HOST}:${DIRECTORY}"
 ssh "$HOST" "mkdir -p '$DIRECTORY'"
-scp docker-compose.prod.yml "${HOST}:${DIRECTORY}/docker-compose.yml"
+
+COMPOSE_TMP="$(mktemp)"
+trap 'rm -f "$COMPOSE_TMP"' EXIT
+sed -e "s|__NFS_HOST__|${NFS_HOST}|g" \
+    -e "s|__NFS_PATH__|${NFS_PATH}|g" \
+    docker-compose.prod.yml >"$COMPOSE_TMP"
+
+scp "$COMPOSE_TMP" "${HOST}:${DIRECTORY}/docker-compose.yml"
 scp .env.production "${HOST}:${DIRECTORY}/.env"
 
 echo "==> Pulling images on ${HOST}"
