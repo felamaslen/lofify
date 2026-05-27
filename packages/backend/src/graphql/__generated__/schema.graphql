@@ -32,6 +32,13 @@ input TrackFormat {
   quality: Quality!
 }
 
+"""The expected bitrate of one adaptive quality tier for a track."""
+type DeliveryTier {
+  """Nominal transcode bitrate in kbps."""
+  bitrateKbps: Int!
+  quality: Quality!
+}
+
 """A length of time, expressed in whole seconds."""
 type Duration {
   """
@@ -196,6 +203,10 @@ type TrackDelivery {
   MIME type the bytes are served as — the value to pass to `MediaSource.addSourceBuffer`.
   """
   mimeType: String!
+  """
+  Expected bitrate of each adaptive quality tier (MIN–HIGH) for this track, given the lossy codec the ladder transcodes to, so the client can size each tier against measured bandwidth and jump straight to the highest it can sustain.
+  """
+  tiers: [DeliveryTier!]!
   """
   Signed URL the client should `GET` (with `Range:` headers) to stream this track.
   """
