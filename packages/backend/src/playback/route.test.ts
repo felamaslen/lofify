@@ -344,6 +344,32 @@ test('mp3 target from an mp3 source passthrough-copies (no re-encode)', async ()
   `);
 }, 30_000);
 
+test('mp3 source below MAX re-encodes to the target bitrate (no passthrough copy)', async () => {
+  const id = await seedTrack({ file: SAMPLE_MP3, format: 'mp3', codec: 'mp3', isLossless: false });
+  const url = signPlaybackUrl(id, target('mp3', 'mp3', Quality.LOW));
+  const res = await app.inject({ method: 'GET', url });
+  expect(res.statusCode).toBe(200);
+  // Codec matches the source, but below MAX we must transcode to hit the lower bitrate, not copy.
+  expect(lastEncoderArgs()).toMatchInlineSnapshot(`
+    [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-vn",
+      "-c:a",
+      "libmp3lame",
+      "-b:a",
+      "128k",
+      "-f",
+      "mp3",
+      "-write_id3v1",
+      "0",
+      "-id3v2_version",
+      "0",
+    ]
+  `);
+}, 30_000);
+
 test('webm/vorbis target on a vorbis source passthrough-copies (no re-encode)', async () => {
   const id = await seedTrack({
     file: SAMPLE_OGG,
