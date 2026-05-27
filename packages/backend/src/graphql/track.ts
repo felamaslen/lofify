@@ -6,6 +6,7 @@ import {
   deliveryDescription,
   isPassthrough,
   resolveTarget,
+  tierBitratesKbps,
 } from '../playback/resolve.js';
 import { signPlaybackUrl } from '../playback/sign.js';
 import { abbreviateCodec, deriveFormat } from './codec.js';
@@ -84,6 +85,20 @@ export type TrackDelivery = {
   isPassthrough: boolean;
   /** Short human-readable summary of the delivery, e.g. "Original Vorbis, copied without re-encoding" or "Transcoded to Opus at 256 kbps". @gqlField */
   description: string;
+  /** Expected bitrate of each adaptive quality tier (MIN–HIGH) for this track, given the lossy codec the ladder transcodes to, so the client can size each tier against measured bandwidth and jump straight to the highest it can sustain. @gqlField */
+  tiers: DeliveryTier[];
+};
+
+/**
+ * The expected bitrate of one adaptive quality tier for a track.
+ *
+ * @gqlType
+ */
+export type DeliveryTier = {
+  /** @gqlField */
+  quality: Quality;
+  /** Nominal transcode bitrate in kbps. @gqlField */
+  bitrateKbps: Int;
 };
 
 /**
@@ -101,6 +116,7 @@ export function delivery(track: Track, format?: TrackFormat | null): TrackDelive
     mimeType: contentTypeFor(target),
     isPassthrough: passthrough,
     description: deliveryDescription(target, passthrough),
+    tiers: tierBitratesKbps(format ?? DEFAULT_FORMAT),
   };
 }
 

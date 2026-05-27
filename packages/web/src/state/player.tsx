@@ -13,12 +13,6 @@ import {
 import { PlaybackBarDocument } from '../components/playback-bar.tsx';
 import { TracksDocument } from '../components/track-list.tsx';
 import { getAudioElement } from '../lib/audio-element.ts';
-import {
-  addSample as addBandwidthSample,
-  type BandwidthEstimate,
-  bytesPerSecond as bandwidthBytesPerSecond,
-  emptyBandwidthEstimate,
-} from '../lib/bandwidth.ts';
 import { type Capabilities, capabilities, type LossyPreference } from '../lib/capabilities.ts';
 import { graphql, type ResultOf, type VariablesOf } from '../lib/gql.ts';
 import { gqlRequest } from '../lib/gql-request.ts';
@@ -35,6 +29,10 @@ export const TrackByIdDocument = graphql(
           mimeType
           isPassthrough
           description
+          tiers {
+            quality
+            bitrateKbps
+          }
         }
         ...PlaybackBar
       }
@@ -107,18 +105,21 @@ const LEGACY_QUALITY_STORAGE_KEY = 'lofify.player.quality';
 const FORMAT_STORAGE_KEY = 'lofify.player.lossy-preference';
 const FORMAT_VALUES: readonly LossyPreference[] = ['OPUS', 'MP3'];
 
-// Adaptive controller tuning. The decision compares the smoothed download throughput against the
-// current tier's data rate, gated on buffer health, with a cooldown so it can't flap.
+// Adaptive controller tuning. The decision compares the most recently observed download speed
+// against each tier's advertised data rate, gated on buffer health, with a cooldown so it can't
+// flap. No smoothing: line speed is bursty (a 5G→LTE handover is a step-change a moving average
+// would lag), so we track the current observation and lean on the cooldown + hysteresis to stay
+// stable rather than averaging the responsiveness away.
 /** Step up only when the connection can pull this many times the current tier's bitrate. */
 const UP_FACTOR = 2;
 /** Step down when throughput drops below this multiple of the current tier's bitrate. */
 const DOWN_FACTOR = 1.3;
-/** Step down (regardless of throughput) when buffered-ahead falls below this — a stall is imminent. */
-const BUFFER_LOW_SECONDS = 10;
 /** Step up only when this much is buffered ahead, so a brief spike doesn't over-commit. */
 const BUFFER_HIGH_SECONDS = 20;
 /** Minimum gap between tier switches. */
 const SWITCH_COOLDOWN_MS = 5000;
+/** Ignore in-flight download progress until this much body has transferred, so TCP slow-start doesn't trigger a spurious drop. */
+const INFLIGHT_MIN_MS = 500;
 
 const GRAPHQL_URL = import.meta.env.VITE_GRAPHQL_URL ?? '/graphql';
 
@@ -201,6 +202,11 @@ function writePlaybackToUrl(trackId: string | null, seconds: number): void {
   window.history.replaceState(window.history.state, '', url);
 }
 
+/** Bytes/second as rounded kbps, for the adaptive log lines. */
+function toKbps(bytesPerSecond: number): number {
+  return Math.round((bytesPerSecond * 8) / 1000);
+}
+
 /** Seconds of contiguous buffer ahead of the playhead, or 0 if the playhead isn't inside a buffered range. */
 function bufferedAheadSeconds(audio: HTMLAudioElement): number {
   const t = audio.currentTime;
@@ -234,14 +240,13 @@ type PlayerSnapshot = {
 };
 
 /**
- * Imperative playback orchestrator, held as a single long-lived instance for the provider's lifetime (an external store React reads via `useSyncExternalStore`). It owns the singleton `<audio>` element, the bandwidth estimate, the user's settings, and the current `MsePlayer` — which is the part rebuilt per track and on any codec-crossing change (its SourceBuffer is codec-locked). Keeping the orchestration in a class lets `loadTrack`, `changeFormat`, and the adaptive controller call each other directly, without the ref/closure gymnastics the equivalent hooks would need.
+ * Imperative playback orchestrator, held as a single long-lived instance for the provider's lifetime (an external store React reads via `useSyncExternalStore`). It owns the singleton `<audio>` element, the user's settings, and the current `MsePlayer` — which is the part rebuilt per track and on any codec-crossing change (its SourceBuffer is codec-locked). Keeping the orchestration in a class lets `loadTrack`, `changeFormat`, and the adaptive controller call each other directly, without the ref/closure gymnastics the equivalent hooks would need.
  */
 class Player {
   private snapshot: PlayerSnapshot;
   private readonly listeners = new Set<() => void>();
   private mse: MsePlayer | null = null;
   private manifestUnsub: (() => void) | null = null;
-  private estimate: BandwidthEstimate = emptyBandwidthEstimate();
   private lastSwitchAt = 0;
   /** Latest-wins guard for `changeFormat`'s async fetch. */
   private changeToken = 0;
@@ -452,8 +457,8 @@ class Player {
       {
         onError: (err) => this.set({ error: { message: errorMessageFor(err) } }),
         onQuality: (q) => this.set({ playingQuality: q as Quality | null }),
-        onThroughput: (bytes, transferMs, contentSeconds) =>
-          this.onThroughput(bytes, transferMs, contentSeconds),
+        onThroughput: (bytes, transferMs) => this.onThroughput(bytes, transferMs),
+        onProgress: (bytes, elapsedMs) => this.onProgress(bytes, elapsedMs),
       },
     );
     if (!mse) return;
@@ -502,34 +507,86 @@ class Player {
   // --- Adaptive controller -----------------------------------------------------------------------
 
   /**
-   * Feed each chunk fetch into the bandwidth estimator and, in Adaptive mode, step the tier: stepwise (±1) against the current tier's measured data rate, so no static bitrate table is needed, gated by buffer health and a cooldown so it can't flap.
+   * Upscale on a just-finished chunk fetch's observed speed (`bytes / transferMs`, TTFB already excluded). Climbing is the on-completion concern: it wants a full, confident sample and buffer headroom, and can't sensibly happen mid-download (that would abort a perfectly good fetch on a partial reading). With a healthy buffer it jumps straight to the highest tier the speed covers with `UP_FACTOR` headroom. Downscaling is owned entirely by `onProgress`, which reacts during the transfer rather than after it. Gated by a cooldown so it can't flap, and logged for diagnosing churn.
    */
-  private onThroughput(bytes: number, transferMs: number, contentSeconds: number): void {
-    this.estimate = addBandwidthSample(this.estimate, bytes, transferMs);
+  private onThroughput(bytes: number, transferMs: number): void {
     if (this.snapshot.qualityMode !== 'ADAPTIVE') return;
     const now = performance.now();
     if (now - this.lastSwitchAt < SWITCH_COOLDOWN_MS) return;
     const idx = ADAPTIVE_LADDER.indexOf(this.snapshot.requestedTier);
-    if (idx < 0) return;
+    if (idx < 0 || this.tierBytesPerSecond(idx) === null) return;
     const ahead = bufferedAheadSeconds(this.audio);
-    const contentRate = bytes / contentSeconds; // bytes/s the current tier consumes
-    const estimate = bandwidthBytesPerSecond(this.estimate); // bytes/s, or null until warmed up
-    let nextIdx = idx;
-    if (
-      (ahead < BUFFER_LOW_SECONDS || (estimate !== null && estimate < contentRate * DOWN_FACTOR)) &&
-      idx > 0
-    ) {
-      nextIdx = idx - 1;
-    } else if (
-      estimate !== null &&
-      ahead > BUFFER_HIGH_SECONDS &&
-      estimate > contentRate * UP_FACTOR &&
-      idx < ADAPTIVE_LADDER.length - 1
-    ) {
-      nextIdx = idx + 1;
-    }
-    if (nextIdx === idx) return;
-    this.lastSwitchAt = now;
+    if (ahead <= BUFFER_HIGH_SECONDS) return;
+    const observed = (bytes * 1000) / Math.max(transferMs, 1); // bytes/s on the just-finished fetch
+    // Healthy buffer and spare bandwidth: climb straight to the highest tier with headroom.
+    let up = idx;
+    while (up + 1 < ADAPTIVE_LADDER.length && this.rateFits(observed, up + 1, UP_FACTOR)) up++;
+    if (up === idx) return;
+    const thresholdKbps = toKbps(this.tierBytesPerSecond(up)! * UP_FACTOR);
+    this.switchTier(
+      'upscale',
+      up,
+      idx,
+      `speed ${toKbps(observed)} kbps ≥ ${UP_FACTOR}× = ${thresholdKbps} kbps (buffer ${ahead.toFixed(1)}s)`,
+    );
+  }
+
+  /**
+   * The downscale path: react to a still-in-flight chunk download. If the speed observed on the open body already can't sustain the current tier, drop straight to the highest tier it can — and abort the doomed fetch (`changeFormat` cancels it) — rather than waiting for it to finish and the buffer to drain. A completion-only signal is too late: by then a collapsed link has already emptied the buffer, and the finished rate is just the final value of what we're sampling here anyway.
+   */
+  private onProgress(bytes: number, elapsedMs: number): void {
+    if (this.snapshot.qualityMode !== 'ADAPTIVE') return;
+    if (elapsedMs < INFLIGHT_MIN_MS) return;
+    const now = performance.now();
+    if (now - this.lastSwitchAt < SWITCH_COOLDOWN_MS) return;
+    const idx = ADAPTIVE_LADDER.indexOf(this.snapshot.requestedTier);
+    if (idx <= 0 || this.tierBytesPerSecond(idx) === null) return;
+    const rate = (bytes * 1000) / elapsedMs; // bytes/s on the open body
+    if (this.rateFits(rate, idx, DOWN_FACTOR)) return; // current tier still sustainable on the live signal
+    const nextIdx = this.sustainableFloor(rate, idx);
+    const thresholdKbps = toKbps(this.tierBytesPerSecond(idx)! * DOWN_FACTOR);
+    this.switchTier(
+      'downscale',
+      nextIdx,
+      idx,
+      `in-flight speed ${toKbps(rate)} kbps < ${DOWN_FACTOR}× = ${thresholdKbps} kbps`,
+    );
+  }
+
+  /** bytes/s the ladder tier at `i` consumes, from its advertised kbps (kbps × 1000 / 8), or `null` if the delivery didn't carry one. */
+  private tierBytesPerSecond(i: number): number | null {
+    const kbps = this.snapshot.delivery?.tiers.find(
+      (t) => t.quality === ADAPTIVE_LADDER[i],
+    )?.bitrateKbps;
+    return kbps == null ? null : (kbps * 1000) / 8;
+  }
+
+  /** Whether an observed `rate` (bytes/s) covers the ladder tier at `i` with `factor` headroom. */
+  private rateFits(rate: number, i: number, factor: number): boolean {
+    const b = this.tierBytesPerSecond(i);
+    return b !== null && rate >= b * factor;
+  }
+
+  /** Highest ladder index below `idx` whose tier the observed `rate` can sustain (down to `MIN`). */
+  private sustainableFloor(rate: number, idx: number): number {
+    let floor = idx - 1;
+    while (floor > 0 && !this.rateFits(rate, floor, DOWN_FACTOR)) floor--;
+    return floor;
+  }
+
+  /** Commit a tier change, stamping the cooldown and logging the reason so churn is diagnosable from the console. */
+  private switchTier(
+    kind: 'upscale' | 'downscale',
+    nextIdx: number,
+    fromIdx: number,
+    reason: string,
+  ): void {
+    this.lastSwitchAt = performance.now();
+    const label = (i: number): string => {
+      const b = this.tierBytesPerSecond(i);
+      return `${ADAPTIVE_LADDER[i]} [${b === null ? '?' : `${toKbps(b)} kbps`}]`;
+    };
+    console.info(`[abr] [${kind}] ${label(fromIdx)} → ${label(nextIdx)} — ${reason}`);
     void this.changeFormat(ADAPTIVE_LADDER[nextIdx]!, this.snapshot.lossyPreference);
   }
 

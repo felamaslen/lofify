@@ -164,9 +164,11 @@ mid-stream. If everything is within the grace window we stay over
 budget rather than evict something in use.
 
 `Track.delivery(format)` returns the resolved `{ url, mimeType,
-isPassthrough, description }` in one field, so a client gets the
+isPassthrough, description, tiers }` in one field, so a client gets the
 SourceBuffer MIME type and a tooltip-ready description without a probe
-request.
+request. `tiers` lists the expected bitrate of each adaptive tier (MIN–HIGH)
+for the resolved lossy codec, so the adaptive controller can size the
+connection against the ladder and jump straight to the best-fitting tier.
 
 ### Manifest subscription
 

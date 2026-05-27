@@ -3,7 +3,7 @@
  * Do not manually edit. Regenerate by running `npx grats`.
  */
 
-import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, GraphQLInt, specifiedDirectives, GraphQLObjectType, GraphQLString, GraphQLID, GraphQLBoolean, GraphQLInputObjectType, GraphQLList, GraphQLEnumType, GraphQLFloat } from "graphql";
+import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, GraphQLInt, specifiedDirectives, GraphQLObjectType, GraphQLString, GraphQLID, GraphQLBoolean, GraphQLList, GraphQLEnumType, GraphQLInputObjectType, GraphQLFloat } from "graphql";
 import { libraryScan as queryLibraryScanResolver, libraryScanCancel as mutationLibraryScanCancelResolver, libraryScanStart as mutationLibraryScanStartResolver, libraryScanSubscription as subscriptionLibraryScanResolver } from "./../library-scan.js";
 import { ping as queryPingResolver, noop as mutationNoopResolver } from "./../root.js";
 import { delivery as trackDeliveryResolver, path as trackPathResolver, url as trackUrlResolver } from "./../track.js";
@@ -48,6 +48,44 @@ export function getSchema(): GraphQLSchema {
             };
         }
     });
+    const QualityType: GraphQLEnumType = new GraphQLEnumType({
+        description: "Coarse playback quality. `MIN` / `LOW` / `MEDIUM` / `HIGH` ask for a transcode at an ascending bitrate; `MAX` delivers the best representation of the source the client can play, copying without re-encoding whenever possible.",
+        name: "Quality",
+        values: {
+            HIGH: {
+                value: "HIGH"
+            },
+            LOW: {
+                value: "LOW"
+            },
+            MAX: {
+                value: "MAX"
+            },
+            MEDIUM: {
+                value: "MEDIUM"
+            },
+            MIN: {
+                value: "MIN"
+            }
+        }
+    });
+    const DeliveryTierType: GraphQLObjectType = new GraphQLObjectType({
+        name: "DeliveryTier",
+        description: "The expected bitrate of one adaptive quality tier for a track.",
+        fields() {
+            return {
+                bitrateKbps: {
+                    description: "Nominal transcode bitrate in kbps.",
+                    name: "bitrateKbps",
+                    type: new GraphQLNonNull(GraphQLInt)
+                },
+                quality: {
+                    name: "quality",
+                    type: new GraphQLNonNull(QualityType)
+                }
+            };
+        }
+    });
     const TrackDeliveryType: GraphQLObjectType = new GraphQLObjectType({
         name: "TrackDelivery",
         description: "How a track will be delivered for a requested `format`: the URL to fetch, the MIME type the bytes carry, whether it's a copy or a transcode, and a short description for the format tooltip. Resolves the same way `url` does, so a client can read everything it needs from one field.",
@@ -68,33 +106,17 @@ export function getSchema(): GraphQLSchema {
                     name: "mimeType",
                     type: new GraphQLNonNull(GraphQLString)
                 },
+                tiers: {
+                    description: "Expected bitrate of each adaptive quality tier (MIN\u2013HIGH) for this track, given the lossy codec the ladder transcodes to, so the client can size each tier against measured bandwidth and jump straight to the highest it can sustain.",
+                    name: "tiers",
+                    type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(DeliveryTierType)))
+                },
                 url: {
                     description: "Signed URL the client should `GET` (with `Range:` headers) to stream this track.",
                     name: "url",
                     type: new GraphQLNonNull(GraphQLString)
                 }
             };
-        }
-    });
-    const QualityType: GraphQLEnumType = new GraphQLEnumType({
-        description: "Coarse playback quality. `MIN` / `LOW` / `MEDIUM` / `HIGH` ask for a transcode at an ascending bitrate; `MAX` delivers the best representation of the source the client can play, copying without re-encoding whenever possible.",
-        name: "Quality",
-        values: {
-            HIGH: {
-                value: "HIGH"
-            },
-            LOW: {
-                value: "LOW"
-            },
-            MAX: {
-                value: "MAX"
-            },
-            MEDIUM: {
-                value: "MEDIUM"
-            },
-            MIN: {
-                value: "MIN"
-            }
         }
     });
     const TrackFormatType: GraphQLInputObjectType = new GraphQLInputObjectType({
@@ -558,6 +580,6 @@ export function getSchema(): GraphQLSchema {
         query: QueryType,
         mutation: MutationType,
         subscription: SubscriptionType,
-        types: [QualityType, TrackFormatType, DurationType, LibraryScanType, MutationType, PageInfoType, QueryType, SubscriptionType, TrackType, TrackConnectionType, TrackDeliveryType, TrackEdgeType, TrackManifestType, TrackManifestChunkType, TrackManifestInitType, VoidType]
+        types: [QualityType, TrackFormatType, DeliveryTierType, DurationType, LibraryScanType, MutationType, PageInfoType, QueryType, SubscriptionType, TrackType, TrackConnectionType, TrackDeliveryType, TrackEdgeType, TrackManifestType, TrackManifestChunkType, TrackManifestInitType, VoidType]
     });
 }
