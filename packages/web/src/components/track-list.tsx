@@ -3,6 +3,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { readFragment } from 'gql.tada';
 import { type MouseEvent, useEffect, useMemo, useRef, useState } from 'react';
 
+import { useIsMobile } from '../hooks/use-is-mobile.ts';
 import { graphql } from '../lib/gql.ts';
 import { gqlRequest } from '../lib/gql-request.ts';
 import { cn } from '../lib/utils.ts';
@@ -59,14 +60,18 @@ export const TracksDocument = graphql(
 
 const PAGE_SIZE = 100;
 const ROW_HEIGHT = 36;
+// Mobile rows stack title over artist, so they need room for two lines.
+const ROW_HEIGHT_MOBILE = 52;
 const HOVER_PREFETCH_MS = 200;
 
 const COLS =
-  'grid grid-cols-[40px_60px_minmax(0,2fr)_80px_minmax(0,1.2fr)_minmax(0,1.4fr)_80px_64px] items-center gap-3 px-4';
+  'grid grid-cols-[40px_60px_minmax(0,2fr)_80px_minmax(0,1.2fr)_minmax(0,1.4fr)_80px_64px] items-center gap-3 px-4 max-sm:grid-cols-[minmax(0,1fr)_auto_auto] max-sm:content-center max-sm:gap-y-0';
 
 export function TrackList() {
   const { quality, lossyPreference, play, current } = usePlayer();
   const queryClient = useQueryClient();
+  const isMobile = useIsMobile();
+  const rowHeight = isMobile ? ROW_HEIGHT_MOBILE : ROW_HEIGHT;
 
   const query = useInfiniteQuery({
     queryKey: ['tracks'],
@@ -161,9 +166,13 @@ export function TrackList() {
   const virtualizer = useVirtualizer({
     count: edges.length,
     getScrollElement: () => scrollRef.current,
-    estimateSize: () => ROW_HEIGHT,
+    estimateSize: () => rowHeight,
     overscan: 12,
   });
+
+  useEffect(() => {
+    virtualizer.measure();
+  }, [virtualizer, rowHeight]);
 
   const items = virtualizer.getVirtualItems();
   const lastIndex = items.at(-1)?.index ?? 0;
@@ -196,7 +205,7 @@ export function TrackList() {
         role="row"
         className={cn(
           COLS,
-          'border-b border-border py-2 text-[11px] uppercase tracking-wider text-muted-foreground',
+          'border-b border-border py-2 text-[11px] uppercase tracking-wider text-muted-foreground max-sm:hidden',
         )}
       >
         <span>#</span>
@@ -235,7 +244,15 @@ export function TrackList() {
                       // click-and-drag selection is left untouched.
                       if (e.detail >= 2 || e.shiftKey) e.preventDefault();
                     }}
-                    onClick={(e) => selectRow(e, virtualRow.index, edge.node.id)}
+                    onClick={(e) => {
+                      // Touch has no hover/double-click affordance, so a plain
+                      // tap plays; long-press still opens the context menu.
+                      if (isMobile) {
+                        play(edge.node.id);
+                        return;
+                      }
+                      selectRow(e, virtualRow.index, edge.node.id);
+                    }}
                     onContextMenu={() => {
                       if (!selected.has(edge.node.id)) {
                         setSelected(new Set([edge.node.id]));
@@ -261,30 +278,41 @@ export function TrackList() {
                       transform: `translateY(${virtualRow.start}px)`,
                     }}
                   >
-                    <span className="text-muted-foreground tabular-nums">{t.discNumber ?? ''}</span>
-                    <span className="text-muted-foreground tabular-nums">
+                    <span className="text-muted-foreground tabular-nums max-sm:hidden">
+                      {t.discNumber ?? ''}
+                    </span>
+                    <span className="text-muted-foreground tabular-nums max-sm:hidden">
                       {t.trackNumber ?? ''}
                     </span>
-                    <span className={cn('truncate', t.isLossless && 'font-medium')}>
+                    <span
+                      className={cn(
+                        'truncate max-sm:col-start-1 max-sm:row-start-1 max-sm:self-baseline max-sm:font-medium max-sm:leading-tight',
+                        t.isLossless && 'font-medium',
+                      )}
+                    >
                       {t.title ?? (
                         <>
                           (untitled) <span className="text-muted-foreground/60">{t.path}</span>
                         </>
                       )}
                     </span>
-                    <span className="tabular-nums text-muted-foreground">
+                    <span className="tabular-nums text-muted-foreground max-sm:col-start-2 max-sm:row-start-1 max-sm:self-baseline max-sm:text-xs">
                       {t.duration.formatted}
                     </span>
-                    <span className="truncate text-muted-foreground">{t.artist ?? ''}</span>
-                    <span className="truncate text-muted-foreground">{t.album ?? ''}</span>
-                    <span className="text-muted-foreground tabular-nums">{t.year ?? ''}</span>
-                    <span className="flex justify-end">
+                    <span className="truncate text-muted-foreground max-sm:col-start-1 max-sm:row-start-2 max-sm:self-start max-sm:text-xs max-sm:leading-tight">
+                      {t.artist ?? ''}
+                    </span>
+                    <span className="truncate text-muted-foreground max-sm:hidden">
+                      {t.album ?? ''}
+                    </span>
+                    <span className="text-muted-foreground tabular-nums max-sm:hidden">
+                      {t.year ?? ''}
+                    </span>
+                    <span className="flex justify-end max-sm:col-start-3 max-sm:row-start-1 max-sm:self-baseline">
                       <span
                         className={cn(
-                          'rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide',
-                          t.isLossless
-                            ? 'border-primary/30 bg-primary/10 text-primary'
-                            : 'border-border bg-muted/40 text-muted-foreground',
+                          'text-[10px] uppercase tracking-wide',
+                          t.isLossless ? 'text-primary/80' : 'text-muted-foreground/70',
                         )}
                       >
                         {t.sourceFormat}
