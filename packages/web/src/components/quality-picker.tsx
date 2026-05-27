@@ -1,45 +1,41 @@
 import { capabilities } from '../lib/capabilities.ts';
-import { type Quality, usePlayer } from '../state/player.tsx';
+import { type QualityMode, usePlayer } from '../state/player.tsx';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select.tsx';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip.tsx';
 
-const CHOICES: { value: Quality; label: string }[] = [
-  { value: 'MAX', label: 'Max' },
-  { value: 'HIGH', label: 'High' },
-  { value: 'MEDIUM', label: 'Medium' },
-  { value: 'LOW', label: 'Low' },
-  { value: 'MIN', label: 'Min' },
+const CHOICES: { value: QualityMode; label: string }[] = [
+  { value: 'ADAPTIVE', label: 'Adaptive' },
+  { value: 'ORIGINAL', label: 'Original' },
 ];
 
-const MAX_TOOLTIP_FLAC_OK =
-  'Lossless when the source supports it; otherwise the highest lossy preset in the selected format.';
-const MAX_TOOLTIP_NO_FLAC =
-  'Highest lossy preset in the selected format. This browser can’t decode FLAC-in-MP4 via MSE, so lossless sources are also delivered lossy.';
+const ADAPTIVE_TOOLTIP =
+  'Automatically adjusts the bitrate to your connection speed, switching on the fly without interrupting playback.';
+const ORIGINAL_TOOLTIP_FLAC_OK =
+  'The best representation of the source — lossless when supported, otherwise a copy. Assumes a connection that can keep up.';
+const ORIGINAL_TOOLTIP_NO_FLAC =
+  'The highest lossy preset in the selected format. This browser can’t decode FLAC-in-MP4 via MSE, so lossless sources are also delivered lossy.';
 
 export function QualityPicker() {
-  const { quality, setQuality } = usePlayer();
-  const maxTooltip = capabilities.flacInMp4 ? MAX_TOOLTIP_FLAC_OK : MAX_TOOLTIP_NO_FLAC;
+  const { qualityMode, setQualityMode } = usePlayer();
+  const originalTooltip = capabilities.flacInMp4
+    ? ORIGINAL_TOOLTIP_FLAC_OK
+    : ORIGINAL_TOOLTIP_NO_FLAC;
+  const tooltipFor = (v: QualityMode) => (v === 'ADAPTIVE' ? ADAPTIVE_TOOLTIP : originalTooltip);
   return (
     <TooltipProvider delayDuration={150}>
-      <Select value={quality} onValueChange={(v) => setQuality(v as Quality)}>
+      <Select value={qualityMode} onValueChange={(v) => setQualityMode(v as QualityMode)}>
         <SelectTrigger className="w-[150px]">
           <SelectValue placeholder="Quality" />
         </SelectTrigger>
         <SelectContent>
-          {CHOICES.map((c) =>
-            c.value === 'MAX' ? (
-              <Tooltip key={c.value}>
-                <TooltipTrigger asChild>
-                  <SelectItem value={c.value}>{c.label}</SelectItem>
-                </TooltipTrigger>
-                <TooltipContent side="left">{maxTooltip}</TooltipContent>
-              </Tooltip>
-            ) : (
-              <SelectItem key={c.value} value={c.value}>
-                {c.label}
-              </SelectItem>
-            ),
-          )}
+          {CHOICES.map((c) => (
+            <Tooltip key={c.value}>
+              <TooltipTrigger asChild>
+                <SelectItem value={c.value}>{c.label}</SelectItem>
+              </TooltipTrigger>
+              <TooltipContent side="left">{tooltipFor(c.value)}</TooltipContent>
+            </Tooltip>
+          ))}
         </SelectContent>
       </Select>
     </TooltipProvider>

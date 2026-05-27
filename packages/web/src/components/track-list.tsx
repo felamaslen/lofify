@@ -68,7 +68,7 @@ const COLS =
   'grid grid-cols-[40px_60px_minmax(0,2fr)_80px_minmax(0,1.2fr)_minmax(0,1.4fr)_80px_64px] items-center gap-3 px-4 max-sm:grid-cols-[minmax(0,1fr)_auto_auto] max-sm:content-center max-sm:gap-y-0';
 
 export function TrackList() {
-  const { quality, lossyPreference, play, current } = usePlayer();
+  const { requestedTier, lossyPreference, play, current } = usePlayer();
   const queryClient = useQueryClient();
   const isMobile = useIsMobile();
   const rowHeight = isMobile ? ROW_HEIGHT_MOBILE : ROW_HEIGHT;
@@ -146,11 +146,11 @@ export function TrackList() {
     hoverTimerRef.current = setTimeout(() => {
       hoverTimerRef.current = null;
       void queryClient.prefetchQuery({
-        queryKey: ['track', id, quality, lossyPreference],
+        queryKey: ['track', id, requestedTier, lossyPreference],
         queryFn: ({ signal }) =>
           gqlRequest(
             TrackByIdDocument,
-            { id, format: trackFormatFor(quality, lossyPreference) },
+            { id, format: trackFormatFor(requestedTier, lossyPreference) },
             signal,
           ),
       });

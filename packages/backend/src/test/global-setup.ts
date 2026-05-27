@@ -1,5 +1,4 @@
-import { execSync } from 'node:child_process';
-
+import { createMigrator } from 'drizzle-pgkit-migrator';
 import pg from 'pg';
 
 /** Name suffix appended to the dev DB to produce the template DB used by the test pool. The template is migrated once per `vitest` run and is then `CREATE DATABASE ... TEMPLATE`-cloned per worker — keeping it separate from the live dev DB means the running backend container can stay connected to `lofify` while tests work against `lofify_test_template`. Kept in sync with `setup-db.ts`. */
@@ -31,8 +30,13 @@ export default async function setup(): Promise<void> {
   const templateUrl = new URL(baseUrl);
   templateUrl.pathname = `/${templateName}`;
 
-  execSync('pnpm db:migrate', {
-    stdio: 'inherit',
-    env: { ...process.env, DATABASE_URL: templateUrl.toString() },
+  const migrator = await createMigrator({
+    databaseUrl: templateUrl.toString(),
+    migrationsDir: 'src/db/migrations',
   });
+  try {
+    await migrator.up();
+  } finally {
+    await migrator.client.end();
+  }
 }

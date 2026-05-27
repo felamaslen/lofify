@@ -115,9 +115,12 @@ function webmCodecArgs(codec: 'opus' | 'vorbis', quality: Quality, passthrough: 
 }
 
 function mp3CodecArgs(quality: Quality, passthrough: boolean): string[] {
+  // `-reservoir 0` disables LAME's bit reservoir so every frame is self-contained. The player can
+  // then splice between bitrates mid-stream (adaptive switching) without the first frames of the new
+  // encode referencing reservoir bits from the old one — which otherwise decodes to an audible click.
   return passthrough
     ? ['-c:a', 'copy']
-    : ['-c:a', 'libmp3lame', '-b:a', `${mp3BitrateKbps(quality)}k`];
+    : ['-c:a', 'libmp3lame', '-b:a', `${mp3BitrateKbps(quality)}k`, '-reservoir', '0'];
 }
 
 function buildArgs(opts: EncoderOpts): string[] {

@@ -7,7 +7,9 @@
  *   - **Init segment.** fmp4 (opus/flac) ships an init range that must be appended once to configure the SourceBuffer; mp3 has no init, so `manifest.init` is `null`. (The init survives `remove()`, so it's only appended once even across evictions.)
  *   - **`timestampOffset`.** fmp4 fragments carry `tfdt` (absolute decode time), so MSE places them automatically. mp3 frames have no timestamps — each chunk starts at PTS 0 — so the player sets `sourceBuffer.timestampOffset = chunk.startSeconds` before each append. Decided at construction from the content type.
  *
- * Lossless↔lossy switching mid-track is not supported here: the SourceBuffer's codec parameters are locked at `addSourceBuffer(contentType)`. Switching requires tearing the player down and starting again — `player.tsx` does this on quality/format changes.
+ * Lossless↔lossy switching mid-track is not supported here: the SourceBuffer's codec parameters are locked at `addSourceBuffer(contentType)`. Switching codecs requires tearing the player down and starting again — `player.tsx` does this on codec-crossing changes (to/from Max, Opus↔MP3).
+ *
+ * Bitrate-only switching within the same codec (e.g. MEDIUM→HIGH opus) is supported live via `switchStream`: the codec config is unchanged (the opus init segment is bitrate-independent, mp3 has none) and fragments carry their own timestamps, so new-bitrate fragments splice into the existing buffer without a teardown. To make the switch take hold promptly rather than only as the old buffer plays out, `reconcile()` also re-fetches buffered-ahead chunks still at the old tier (lowest priority, after gaps are filled) and lets the append overwrite them — the old audio keeps playing until each replacement lands.
  *
  * `ManifestSnapshot` and `ManifestChunk` are derived from the `TrackManifest` subscription document in `state/player.tsx`, so the player consumes the exact GraphQL response shape with no in-between conversion.
  */
@@ -28,6 +30,8 @@ type Range = { start: number; end: number };
 export interface Player {
   /** Update the player's view of the manifest. Newly-available chunks become eligible for prefetch. */
   setManifest(m: ManifestSnapshot): void;
+  /** Swap to a new playback URL for the same codec (a bitrate-only change). `quality` is the tier the new URL serves (its `X-Quality`), so the player can proactively re-fetch already-buffered chunks still at the old tier. Keeps the SourceBuffer and already-buffered audio; the caller must feed the matching manifest via `setManifest`. Not for codec changes — those need a fresh player. */
+  switchStream(url: string, quality: string): void;
   /** Seek to `time`. The audio element waits for data and resumes once the chunk under `time` is fetched and appended by the reconcile loop. */
   seekTo(time: number): void;
   dispose(): void;
@@ -40,6 +44,10 @@ export type CreatePlayerError =
 export type CreatePlayerOptions = {
   /** Called when the player can't satisfy the request. Caller surfaces this to the user. */
   onError?: (err: CreatePlayerError) => void;
+  /** Called with the quality (`X-Quality` header) of the bytes under the playhead whenever it changes. During an on-the-fly bitrate switch this lags the requested quality until the old-quality buffer drains. `null` before any chunk under the playhead has been fetched. */
+  onQuality?: (quality: string | null) => void;
+  /** Called once per chunk fetch with the body-transfer measurement (TTFB excluded): `bytes` received over `transferMs`, covering `contentSeconds` of audio. Drives the adaptive-bitrate estimator. */
+  onThroughput?: (bytes: number, transferMs: number, contentSeconds: number) => void;
 };
 
 /** First chunk index whose range covers `time`, or -1 if `time` is at/after the last chunk's end. */
@@ -61,6 +69,16 @@ function chunkStartSeconds(chunks: readonly ManifestChunk[], i: number): number 
 
 function coversTime(ranges: readonly Range[], t: number): boolean {
   return ranges.some((r) => r.start - PLAYHEAD_EPS <= t && t < r.end);
+}
+
+function concatChunks(parts: readonly Uint8Array[], total: number): Uint8Array {
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.byteLength;
+  }
+  return out;
 }
 
 const EMPTY_MANIFEST: ManifestSnapshot = {
@@ -85,6 +103,17 @@ class MsePlayer implements Player {
    * chunk lands. Reset once the playhead is covered.
    */
   private lastUncoveredFetch: number | null = null;
+  /**
+   * Quality (`X-Quality`) of fetched bytes, keyed by the rounded start-second of the chunk they cover — not by chunk index, which resets on `switchStream`. Chunk boundaries align across bitrates (same source, same nominal duration), so a region buffered at the old quality keeps its entry while newly-fetched bytes for the same time overwrite it. Read at the playhead so the reported quality reflects the buffer actually playing, which trails the requested tier mid-swap.
+   */
+  private qualityByStart = new Map<number, string>();
+  private reportedQuality: string | null = null;
+  /**
+   * The tier we'd like the forward buffer to be at, set by `switchStream`; `null` before any switch (nothing is "stale"). After a switch, reconcile re-fetches buffered-ahead chunks still at the old tier to make the change take hold without waiting for the existing buffer to play out.
+   */
+  private desiredQuality: string | null = null;
+  /** Chunk starts (rounded seconds) already re-fetched for the current `desiredQuality`. Bounds each chunk to one upgrade attempt per switch, so a header that never reports `desiredQuality` can't loop. Cleared on `switchStream`. */
+  private upgradedStarts = new Set<number>();
 
   constructor(
     private audio: HTMLAudioElement,
@@ -94,6 +123,8 @@ class MsePlayer implements Player {
     private blobUrl: string,
     /** True for mp3: each chunk's frames start at PTS 0, so `timestampOffset` must be set before append. fmp4 (opus/flac) carries tfdt so this stays false. */
     private setTimestampOffsetPerChunk: boolean,
+    private onQuality?: (quality: string | null) => void,
+    private onThroughput?: (bytes: number, transferMs: number, contentSeconds: number) => void,
   ) {
     sourceBuffer.addEventListener('updateend', this.onTick);
     audio.addEventListener('timeupdate', this.onTick);
@@ -111,8 +142,25 @@ class MsePlayer implements Player {
     this.audio.currentTime = Math.min(time, this.manifest.durationSeconds || time);
   }
 
+  switchStream(url: string, quality: string): void {
+    if (this.disposed) return;
+    // Drop everything tied to the old URL: in-flight fetches and queued appends reference its byte
+    // offsets. The buffered audio and the appended init stay — the new stream is the same codec at a
+    // different bitrate, so its fragments splice onto the existing buffer and reuse the same init.
+    this.cancelAllPending();
+    this.appendQueue = [];
+    this.url = url;
+    this.manifest = EMPTY_MANIFEST;
+    this.lastUncoveredFetch = null;
+    this.desiredQuality = quality;
+    this.upgradedStarts.clear();
+    this.tick();
+  }
+
   dispose(): void {
     this.disposed = true;
+    this.qualityByStart.clear();
+    this.upgradedStarts.clear();
     for (const ctrl of this.pending.values()) ctrl.abort();
     this.pending.clear();
     this.audio.removeEventListener('timeupdate', this.onTick);
@@ -139,6 +187,19 @@ class MsePlayer implements Player {
   private tick(): void {
     this.reconcile();
     this.tryEndOfStream();
+    this.reportQuality();
+  }
+
+  /** Report the quality of the chunk under the playhead when it changes. Keeps the last known value while the playhead sits over a region not yet fetched (no entry), rather than flickering to `null`. */
+  private reportQuality(): void {
+    const chunks = this.manifest.chunks;
+    const idx = findChunkAtTime(chunks, this.audio.currentTime);
+    if (idx < 0) return;
+    const q = this.qualityByStart.get(Math.round(chunkStartSeconds(chunks, idx)));
+    if (q && q !== this.reportedQuality) {
+      this.reportedQuality = q;
+      this.onQuality?.(q);
+    }
   }
 
   private isLive(): boolean {
@@ -251,6 +312,30 @@ class MsePlayer implements Player {
         return;
       }
     }
+
+    // 5. After an on-the-fly switch, re-fetch buffered-ahead chunks still at the old tier so the new
+    // quality takes hold without waiting for the existing buffer to play out. Lowest priority: only
+    // reached once the forward window is fully buffered (step 4) and no fetch is in flight (step 3),
+    // so it never starves playback. Scoped to the same [t, FETCH_AHEAD] window step 3 keeps alive —
+    // an upgrade fetch beyond it would be aborted next tick and, marked done, never retried; chunks
+    // further out are upgraded once the playhead advances them into range. The append overwrites the
+    // chunk's range — we never remove first, so the old-quality audio keeps playing until it lands.
+    if (this.desiredQuality === null) return;
+    for (let i = startIdx; i < chunks.length; i++) {
+      const cs = chunkStartSeconds(chunks, i);
+      if (cs >= fetchEnd) break;
+      const key = Math.round(cs);
+      if (this.upgradedStarts.has(key)) continue;
+      const ce = chunks[i]!.endSeconds;
+      const mid = (Math.max(cs, t) + ce) / 2;
+      if (!coversTime(ranges, mid)) continue;
+      const q = this.qualityByStart.get(key);
+      if (q !== undefined && q !== this.desiredQuality) {
+        this.upgradedStarts.add(key);
+        void this.fetchChunk(i);
+        return;
+      }
+    }
   }
 
   private cancelAllPending(): void {
@@ -264,9 +349,9 @@ class MsePlayer implements Player {
     const ctrl = new AbortController();
     this.pending.set(-1, ctrl);
     try {
-      const buf = await this.fetchRange(init.byteStart, init.byteEnd, ctrl.signal);
-      if (!buf || this.disposed || ctrl.signal.aborted) return;
-      this.appendQueue.unshift({ chunkIndex: -1, data: buf, startSeconds: 0 });
+      const res = await this.fetchRange(init.byteStart, init.byteEnd, ctrl.signal);
+      if (!res || this.disposed || ctrl.signal.aborted) return;
+      this.appendQueue.unshift({ chunkIndex: -1, data: res.data, startSeconds: 0 });
       this.drainAppendQueue();
     } finally {
       this.pending.delete(-1);
@@ -278,14 +363,18 @@ class MsePlayer implements Player {
     if (!chunk) return;
     const ctrl = new AbortController();
     this.pending.set(chunkIndex, ctrl);
+    const startSeconds = chunkStartSeconds(this.manifest.chunks, chunkIndex);
     try {
-      const buf = await this.fetchRange(chunk.byteStart, chunk.byteEnd, ctrl.signal);
-      if (!buf || this.disposed || ctrl.signal.aborted) return;
-      this.appendQueue.push({
-        chunkIndex,
-        data: buf,
-        startSeconds: chunkStartSeconds(this.manifest.chunks, chunkIndex),
-      });
+      const res = await this.fetchRange(chunk.byteStart, chunk.byteEnd, ctrl.signal);
+      if (!res || this.disposed || ctrl.signal.aborted) return;
+      if (res.quality) {
+        this.qualityByStart.set(Math.round(startSeconds), res.quality);
+      }
+      const contentSeconds = chunk.endSeconds - startSeconds;
+      if (res.transferMs !== null && contentSeconds > 0) {
+        this.onThroughput?.(res.data.byteLength, res.transferMs, contentSeconds);
+      }
+      this.appendQueue.push({ chunkIndex, data: res.data, startSeconds });
       this.drainAppendQueue();
     } finally {
       this.pending.delete(chunkIndex);
@@ -296,14 +385,33 @@ class MsePlayer implements Player {
     byteStart: number,
     byteEnd: number,
     signal: AbortSignal,
-  ): Promise<Uint8Array | null> {
+  ): Promise<{ data: Uint8Array; quality: string | null; transferMs: number | null } | null> {
     try {
       const res = await fetch(this.url, {
         signal,
         headers: { Range: `bytes=${byteStart}-${byteEnd - 1}` },
       });
       if (!res.ok) return null;
-      return new Uint8Array(await res.arrayBuffer());
+      const quality = res.headers.get('X-Quality');
+      // Stream the body so we can time first-byte → last-byte (line speed) rather than including the
+      // request's TTFB, which on this route is dominated by encode-wait, not the network.
+      const reader = res.body?.getReader();
+      if (!reader) {
+        return { data: new Uint8Array(await res.arrayBuffer()), quality, transferMs: null };
+      }
+      const parts: Uint8Array[] = [];
+      let total = 0;
+      let firstByteAt = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (firstByteAt === 0) firstByteAt = performance.now();
+        parts.push(value);
+        total += value.byteLength;
+      }
+      const transferMs = firstByteAt === 0 ? null : performance.now() - firstByteAt;
+      const data = parts.length === 1 ? parts[0]! : concatChunks(parts, total);
+      return { data, quality, transferMs };
     } catch {
       return null;
     }
@@ -405,5 +513,14 @@ export async function createPlayer(
   const sourceBuffer = mediaSource.addSourceBuffer(contentType);
   // mp3 chunks carry no PTS, so we must offset per chunk; fmp4 (opus/flac) carries tfdt so MSE places fragments automatically.
   const setOffsetPerChunk = contentType.startsWith('audio/mpeg');
-  return new MsePlayer(audio, url, mediaSource, sourceBuffer, blobUrl, setOffsetPerChunk);
+  return new MsePlayer(
+    audio,
+    url,
+    mediaSource,
+    sourceBuffer,
+    blobUrl,
+    setOffsetPerChunk,
+    options.onQuality,
+    options.onThroughput,
+  );
 }

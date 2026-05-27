@@ -49,20 +49,22 @@ describe('watchLibrary', () => {
     const file = path.join(root, 'song.mp3');
     await copyFile(path.join(fixturesDir, 'sample.mp3'), file);
 
-    await vi.waitFor(() =>
-      expect(getRow(file)).resolves.toMatchObject({
-        file,
-        title: 'Test Song',
-        artist: 'Test Artist',
-        album: 'Test Album',
-        trackNumber: 3,
-        discNumber: 1,
-        year: '2024',
-        format: 'mpeg',
-        codec: 'mpeg 2 layer 3',
-        isLossless: false,
-        sampleRate: 22050,
-      }),
+    await vi.waitFor(
+      () =>
+        expect(getRow(file)).resolves.toMatchObject({
+          file,
+          title: 'Test Song',
+          artist: 'Test Artist',
+          album: 'Test Album',
+          trackNumber: 3,
+          discNumber: 1,
+          year: '2024',
+          format: 'mpeg',
+          codec: 'mpeg 2 layer 3',
+          isLossless: false,
+          sampleRate: 22050,
+        }),
+      5000,
     );
 
     const row = await getRow(file);

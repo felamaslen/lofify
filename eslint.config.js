@@ -2,6 +2,7 @@ import js from '@eslint/js';
 import tseslint from '@typescript-eslint/eslint-plugin';
 import tsparser from '@typescript-eslint/parser';
 import prettier from 'eslint-config-prettier';
+import reactCompiler from 'eslint-plugin-react-compiler';
 import simpleImportSort from 'eslint-plugin-simple-import-sort';
 import globals from 'globals';
 
@@ -64,6 +65,14 @@ export default [
     files: ['packages/web/**/*.{ts,tsx}'],
     languageOptions: {
       globals: { ...globals.browser },
+    },
+    plugins: {
+      'react-compiler': reactCompiler,
+    },
+    rules: {
+      // Flag patterns the React Compiler can't safely memoise (mutation during render, ref writes
+      // in render, conditional hooks, …) so the web client stays compiler-compatible.
+      'react-compiler/react-compiler': 'error',
     },
   },
   {
