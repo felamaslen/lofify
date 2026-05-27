@@ -20,10 +20,10 @@ import { LRUCache } from 'lru-cache';
 
 import { DEFAULT_CHUNK_DURATION_SECONDS } from '../config.js';
 import { env } from '../env.js';
-import { Quality } from '../graphql/playback-format.js';
 import { logger } from '../logger.js';
 import { type EncodeTarget, type FfmpegHandle, spawnEncoder, targetKey } from './encoder.js';
 import { type IndexFile, type LiveTailHandle, startLiveTail } from './live-tail.js';
+import { isPassthrough } from './resolve.js';
 
 const tracer = trace.getTracer('lofify.playback.cache');
 import { makeMp3Scanner } from './scan-mp3.js';
@@ -92,14 +92,6 @@ function scannerFor(target: EncodeTarget, chunkDurationSeconds: number): Scanner
     case 'mp3':
       return makeMp3Scanner(chunkDurationSeconds);
   }
-}
-
-function isPassthrough(req: CacheRequest): boolean {
-  // Copy only at MAX, where the intent is to deliver the source as-is. Below MAX the point is to
-  // re-encode at a lower bitrate, so a matching codec must still be transcoded, not copied.
-  return (
-    req.target.quality === Quality.MAX && req.sourceCodec.toLowerCase() === req.target.format.codec
-  );
 }
 
 function entryDir(root: string, trackId: string, sourceMtime: Date): string {
@@ -176,7 +168,7 @@ export function createCache(opts: CacheOpts): Cache {
       target: req.target,
       outPath: binPath,
       chunkDurationSeconds,
-      passthrough: isPassthrough(req),
+      passthrough: isPassthrough(req.target, req.sourceCodec),
     });
     const liveTail = startLiveTail({
       scanner: scannerFor(req.target, chunkDurationSeconds),

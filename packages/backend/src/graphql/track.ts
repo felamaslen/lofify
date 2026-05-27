@@ -1,7 +1,12 @@
 import type { ID, Int } from 'grats';
 
 import type { Track as DbTrack } from '../db/schema/index.js';
-import { contentTypeFor, deliveryDescription, resolveTarget } from '../playback/resolve.js';
+import {
+  contentTypeFor,
+  deliveryDescription,
+  isPassthrough,
+  resolveTarget,
+} from '../playback/resolve.js';
 import { signPlaybackUrl } from '../playback/sign.js';
 import { abbreviateCodec, deriveFormat } from './codec.js';
 import { Duration } from './duration.js';
@@ -90,12 +95,12 @@ export function delivery(track: Track, format?: TrackFormat | null): TrackDelive
     { isLossless: track.isLossless, sourceCodec: track.sourceFormat },
     format ?? DEFAULT_FORMAT,
   );
-  const isPassthrough = target.format.codec === track.sourceFormat;
+  const passthrough = isPassthrough(target, track.sourceFormat);
   return {
     url: signPlaybackUrl(track.id, target),
     mimeType: contentTypeFor(target),
-    isPassthrough,
-    description: deliveryDescription(target, isPassthrough),
+    isPassthrough: passthrough,
+    description: deliveryDescription(target, passthrough),
   };
 }
 

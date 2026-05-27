@@ -84,6 +84,11 @@ export function resolveTarget(source: ResolveSource, req: TrackFormat): EncodeTa
   return { format: firstTranscodable, quality: Quality.MAX };
 }
 
+/** Whether a target is delivered by copying the source as-is (no re-encode). Only at MAX, where delivering the source verbatim is the intent and the resolved codec matches the source; below MAX the point is to re-encode at a lower bitrate, even when the codec happens to match. */
+export function isPassthrough(target: EncodeTarget, sourceCodec: string): boolean {
+  return target.quality === Quality.MAX && target.format.codec === sourceCodec.toLowerCase();
+}
+
 const CODEC_LABEL: Record<EncodeFormat['codec'], string> = {
   opus: 'Opus',
   flac: 'FLAC',
