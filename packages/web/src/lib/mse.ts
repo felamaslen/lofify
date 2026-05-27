@@ -142,7 +142,8 @@ class MsePlayer implements Player {
   }
 
   private isLive(): boolean {
-    return !this.disposed && this.mediaSource.readyState === 'open';
+    // 'ended' is still operable: remove() is allowed and appendBuffer() re-opens the source. Only a detached ('closed') source is dead. Gating on 'open' alone strands a seek-back after tryEndOfStream() ends the source.
+    return !this.disposed && this.mediaSource.readyState !== 'closed';
   }
 
   private bufferedRanges(): Range[] {
@@ -160,13 +161,17 @@ class MsePlayer implements Player {
    * The single control loop. Issues at most one SourceBuffer operation (append/remove) or one fetch per call; the resulting `updateend`/completion re-invokes it until the buffer matches the desired window.
    */
   private reconcile(): void {
-    if (!this.isLive() || this.sourceBuffer.updating) return;
+    if (!this.isLive() || this.sourceBuffer.updating) {
+      return;
+    }
     if (this.appendQueue.length > 0) {
       this.drainAppendQueue();
       return;
     }
     const chunks = this.manifest.chunks;
-    if (chunks.length === 0) return;
+    if (chunks.length === 0) {
+      return;
+    }
 
     // Init segment must be appended before any media fragment.
     if (this.manifest.init && !this.appendedInit) {
@@ -183,8 +188,12 @@ class MsePlayer implements Player {
       // The chunk under the playhead is already being fetched or is queued to append. Wait for
       // it to land instead of cancelling and refetching it: cancelAllPending() would abort the
       // very fetch that resolves this, and the next tick would re-issue it — an infinite loop.
-      if (idx >= 0 && (this.pending.has(idx) || this.appendQueue.some((q) => q.chunkIndex === idx)))
+      if (
+        idx >= 0 &&
+        (this.pending.has(idx) || this.appendQueue.some((q) => q.chunkIndex === idx))
+      ) {
         return;
+      }
       // The chunk under the playhead has already been fetched and appended yet still doesn't cover
       // it — snap onto the buffered data rather than wiping and refetching the same chunk forever.
       if (idx >= 0 && idx === this.lastUncoveredFetch && ranges.length > 0) {
@@ -340,7 +349,8 @@ class MsePlayer implements Player {
   }
 
   private tryEndOfStream(): void {
-    if (!this.manifest.done || !this.isLive()) return;
+    // Gate on 'open' specifically (not isLive(), which also accepts 'ended') so we don't re-invoke endOfStream() every timeupdate once the source has already ended.
+    if (!this.manifest.done || this.disposed || this.mediaSource.readyState !== 'open') return;
     if (this.sourceBuffer.updating || this.appendQueue.length > 0) return;
     // Only end once the final chunk's audio is buffered (i.e. the playhead has reached the tail).
     // Appending after endOfStream re-opens the MediaSource, so a later seek-back still works.
