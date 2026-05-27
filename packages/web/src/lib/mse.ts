@@ -24,6 +24,8 @@ const FETCH_AHEAD = 30;
 const KEEP_AHEAD = 45;
 /** Tolerance for treating the playhead as "inside" a buffered range (covers sub-frame gaps at fragment boundaries). */
 const PLAYHEAD_EPS = 0.1;
+/** How often, at most, to report in-flight download progress during a chunk fetch. */
+const PROGRESS_INTERVAL_MS = 250;
 
 type Range = { start: number; end: number };
 
@@ -46,8 +48,10 @@ export type CreatePlayerOptions = {
   onError?: (err: CreatePlayerError) => void;
   /** Called with the quality (`X-Quality` header) of the bytes under the playhead whenever it changes. During an on-the-fly bitrate switch this lags the requested quality until the old-quality buffer drains. `null` before any chunk under the playhead has been fetched. */
   onQuality?: (quality: string | null) => void;
-  /** Called once per chunk fetch with the body-transfer measurement (TTFB excluded): `bytes` received over `transferMs`, covering `contentSeconds` of audio. Drives the adaptive-bitrate estimator. */
+  /** Called once per chunk fetch with the body-transfer measurement (TTFB excluded): `bytes` received over `transferMs`, covering `contentSeconds` of audio. Drives the adaptive-bitrate controller. */
   onThroughput?: (bytes: number, transferMs: number, contentSeconds: number) => void;
+  /** Called periodically *while* a chunk download is in flight (TTFB excluded): `bytes` received so far over `elapsedMs` of body transfer. Lets the controller spot a collapsing link and drop the tier before the in-flight fetch finishes and the buffer drains — by which point a completion-only signal is too late. */
+  onProgress?: (bytes: number, elapsedMs: number) => void;
 };
 
 /** First chunk index whose range covers `time`, or -1 if `time` is at/after the last chunk's end. */
@@ -125,6 +129,7 @@ class MsePlayer implements Player {
     private setTimestampOffsetPerChunk: boolean,
     private onQuality?: (quality: string | null) => void,
     private onThroughput?: (bytes: number, transferMs: number, contentSeconds: number) => void,
+    private onProgress?: (bytes: number, elapsedMs: number) => void,
   ) {
     sourceBuffer.addEventListener('updateend', this.onTick);
     audio.addEventListener('timeupdate', this.onTick);
@@ -365,7 +370,12 @@ class MsePlayer implements Player {
     this.pending.set(chunkIndex, ctrl);
     const startSeconds = chunkStartSeconds(this.manifest.chunks, chunkIndex);
     try {
-      const res = await this.fetchRange(chunk.byteStart, chunk.byteEnd, ctrl.signal);
+      const res = await this.fetchRange(
+        chunk.byteStart,
+        chunk.byteEnd,
+        ctrl.signal,
+        this.onProgress,
+      );
       if (!res || this.disposed || ctrl.signal.aborted) return;
       if (res.quality) {
         this.qualityByStart.set(Math.round(startSeconds), res.quality);
@@ -385,6 +395,7 @@ class MsePlayer implements Player {
     byteStart: number,
     byteEnd: number,
     signal: AbortSignal,
+    onProgress?: (bytes: number, elapsedMs: number) => void,
   ): Promise<{ data: Uint8Array; quality: string | null; transferMs: number | null } | null> {
     try {
       const res = await fetch(this.url, {
@@ -402,12 +413,20 @@ class MsePlayer implements Player {
       const parts: Uint8Array[] = [];
       let total = 0;
       let firstByteAt = 0;
+      let lastReportAt = 0;
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
         if (firstByteAt === 0) firstByteAt = performance.now();
         parts.push(value);
         total += value.byteLength;
+        if (onProgress) {
+          const elapsed = performance.now() - firstByteAt;
+          if (elapsed - lastReportAt >= PROGRESS_INTERVAL_MS) {
+            lastReportAt = elapsed;
+            onProgress(total, elapsed);
+          }
+        }
       }
       const transferMs = firstByteAt === 0 ? null : performance.now() - firstByteAt;
       const data = parts.length === 1 ? parts[0]! : concatChunks(parts, total);
@@ -522,5 +541,6 @@ export async function createPlayer(
     setOffsetPerChunk,
     options.onQuality,
     options.onThroughput,
+    options.onProgress,
   );
 }

@@ -52,14 +52,32 @@ format controls:
   Toggling between `Adaptive` and `Original` crosses a codec boundary, so
   the player reloads at the current playback position.
 
-  The adaptation is stepwise (`state/player.tsx` + `lib/bandwidth.ts`):
-  each chunk fetch feeds a dual-EWMA throughput estimate that excludes
-  TTFB (timed first-byte→last-byte, since the `/play` route blocks on
-  encode before sending); the controller compares it against the current
-  tier's measured data rate, gated on buffer health and a cooldown, and
-  climbs or drops one tier. No bitrate table is kept on the client — only
-  the last-used tier is remembered (per session), so a track cold-starts
-  where the previous left off.
+  The adaptation is best-fit (`state/player.tsx`): downloads are timed
+  body-only (first-byte→last-byte, excluding TTFB — the `/play` route blocks
+  on encode before sending, so TTFB is encode-wait not line speed), and the
+  controller sizes that **current observed speed** against each tier's
+  _advertised_ bitrate (`delivery.tiers`), jumping **straight to the best
+  fit** rather than stepping one tier at a time. There's no moving average:
+  line speed is bursty (a 5G→LTE handover is a step-change a smoothed
+  estimate would lag), so the controller reacts to the latest observation and
+  leans on hysteresis (an up/down factor) plus a cooldown to stay stable. The
+  last-used tier is remembered (per session), so a track cold-starts where
+  the previous left off.
+
+  The two directions are split by urgency, so each is checked where it can
+  act in time — every switch logged to the console as `[abr] [upscale]` /
+  `[abr] [downscale]` with its reason:
+  - **Downscaling** is time-critical (a stall looms), so it's driven by the
+    download that's **still in flight** rather than the completed fetch: the
+    reconcile loop stops fetching once the forward buffer is full, and a
+    completed-fetch sample lands too late — by then a collapsed link has
+    drained the buffer. The player samples the open response body as it
+    streams; the moment the live speed can't sustain the current tier it
+    drops straight to the highest tier that fits, aborting the doomed
+    high-bitrate fetch.
+  - **Upscaling** happens only on a completed fetch, where there's a full,
+    confident sample and the buffer headroom to justify climbing — it can't
+    sensibly abort a healthy in-flight download to go up.
 
 - **Codec** — a _preference_ used only when the server has to transcode
   (Adaptive, or a lossy source in Original with no matching copy): `Prefer
@@ -70,7 +88,7 @@ Opus` or `Prefer MP3`. In Original, sources are copied without re-encoding
 and exposes the supported formats as the preference-ordered
 `losslessFormats` / `lossyFormats` MIME lists. The player sends these
 plus the requested tier as the `TrackFormat`, and reads `Track.delivery` back —
-`{ url, mimeType, isPassthrough, description }` — so it learns the
+`{ url, mimeType, isPassthrough, description, tiers }` — so it learns the
 SourceBuffer MIME type and a tooltip-ready summary in one query, then
 streams chunk byte ranges via the `trackManifest` subscription (see the
 backend README). The format badge by the track title shows the resolved
