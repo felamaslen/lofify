@@ -32,15 +32,17 @@ Set `SCHEMA_URL` to point at a non-default backend (defaults to
 
 ## Playback
 
-Playback is MSE-only. The header has two controls:
+Playback is MSE-only. A gear button in the playback bar's right section
+opens a settings dialog holding the library rescan, quality and preferred
+format controls:
 
 - **Quality** — `Max` asks for the best representation of the source the
   browser can play (lossless or a copy where possible); the lower tiers
   (`High`/`Med`/`Low`/`Min`) force a transcode at an ascending bitrate.
 - **Codec** — a _preference_ used only when the server has to transcode
   (below Max, or a lossy source at Max with no matching copy): `Prefer
-Opus` or `Prefer MP3`. Sources are still copied without re-encoding
-  whenever possible regardless of this.
+Opus` or `Prefer MP3`. At Max, sources are copied without re-encoding
+  where possible; below Max everything is transcoded to this codec.
 
 `capabilities.ts` probes `MediaSource.isTypeSupported` once per page load
 and exposes the supported formats as the preference-ordered

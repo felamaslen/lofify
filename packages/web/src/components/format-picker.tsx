@@ -28,10 +28,6 @@ export function FormatPicker() {
           <SelectValue placeholder="Codec" />
         </SelectTrigger>
         <SelectContent>
-          <div className="px-2 py-1.5 text-xs text-muted-foreground">
-            Preferred codec when the server has to transcode (below Max, or a lossy source at Max
-            with no matching copy). Sources are copied without re-encoding when possible regardless.
-          </div>
           {CHOICES.map((c) => {
             const disabled = !lossyPreferenceAvailability[c.value];
             const item = (

@@ -5,6 +5,7 @@ import { type MouseEvent, useMemo, useRef, useState } from 'react';
 import { graphql } from '../lib/gql.ts';
 import { usePlayer } from '../state/player.tsx';
 import { PlaybackFormatBadge } from './playback-format-badge.tsx';
+import { SettingsDialog } from './settings-dialog.tsx';
 import { Button } from './ui/button.tsx';
 import { Slider } from './ui/slider.tsx';
 
@@ -135,8 +136,9 @@ export function PlaybackBar() {
         </div>
       </div>
 
-      <div className="flex justify-end">
+      <div className="flex items-center justify-end gap-2">
         <PlaybackFormatBadge />
+        <SettingsDialog />
       </div>
     </div>
   );
