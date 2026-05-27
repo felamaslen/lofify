@@ -7,7 +7,7 @@
  *   3. Concurrent callers for the same key share a single pending start.
  *   4. The LRU drops in-memory handles but keeps the on-disk `.bin`/`.idx` so the next access can warm-load.
  *
- * Because in-memory eviction leaves files behind, the on-disk footprint is bounded separately by `sweep`: when `maxBytes` is set, completed entries are deleted least-recently-accessed-first. Recency and size live in the `PlaybackCacheAccess` table — `lastAccess` is bumped (throttled) on every `getOrStart`, so a streamed track keeps itself warm, and an entry with no row yet sorts oldest. The sweep picks the oldest non-protected entry one row at a time rather than loading the table; see `sweep.ts` for the surrounding lifecycle.
+ * Because in-memory eviction leaves files behind, the on-disk footprint is bounded separately by `sweep`: when `maxBytes` is set, completed entries are deleted least-recently-accessed-first. Recency and size live in the `PlaybackCacheAccess` table — `lastAccess` is bumped (throttled) on every `getOrStart`, so a streamed track keeps itself warm, and an entry with no row yet sorts oldest. The sweep picks the oldest evictable entry one row at a time rather than loading the table; an entry is evictable only if it is neither mid-encode nor accessed within the grace window (`sweepGraceSeconds`) — recency, not in-memory LRU membership, is what protects an entry a playback session still depends on after its handle has churned out of the LRU. See `sweep.ts` for the surrounding lifecycle.
  *
  * The factory shape (`createCache`) exists so tests can run against a fresh root without trampling each other's state; the module also exports a `defaultCache` configured from `env.DISK_CACHE_DIR` for the production wiring.
  */
@@ -18,7 +18,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { SpanStatusCode, trace } from '@opentelemetry/api';
-import { asc, eq, notInArray, sum } from 'drizzle-orm';
+import { and, asc, eq, lt, notInArray, sum } from 'drizzle-orm';
 import { LRUCache } from 'lru-cache';
 
 import { DEFAULT_CHUNK_DURATION_SECONDS } from '../config.js';
@@ -72,6 +72,8 @@ export type CacheOpts = {
   lruTtlSeconds?: number;
   /** Soft byte budget for the on-disk cache. When set, `sweep` evicts completed entries least-recently-accessed-first once usage exceeds it. Unset leaves the cache unbounded (sweeping is a no-op). */
   maxBytes?: number;
+  /** Grace window (seconds) during which a recently-accessed entry is never evicted, even over budget. Defaults to 300. Must exceed the 60s access-write throttle. */
+  sweepGraceSeconds?: number;
 };
 
 export type Cache = {
@@ -131,6 +133,10 @@ export function createCache(opts: CacheOpts): Cache {
   });
 
   const inFlightStart = new Map<string, Promise<InternalEntry>>();
+  // Keys whose encoder is still running. `inFlightStart` only covers the brief start (it clears once
+  // the handle exists, long before the encode finishes) and the LRU handle can churn out mid-encode,
+  // so this is what guarantees an in-progress encode's dir is never swept.
+  const encodingKeys = new Set<string>();
 
   // Recency/size of each on-disk entry live in Postgres (`PlaybackCacheAccess`); `sweep` reads that
   // table to decide evictions. Access bumps fire on every request, so we throttle the per-entry
@@ -139,6 +145,12 @@ export function createCache(opts: CacheOpts): Cache {
   const ACCESS_WRITE_THROTTLE_MS = 60_000;
   // After an emergency sweep, leave 10% headroom so a single freed slot isn't instantly refilled.
   const EMERGENCY_TARGET_FRACTION = 0.9;
+  // Never evict an entry accessed within this window. A playback session is many independent range
+  // requests against the on-disk `.bin`, and the entry's in-memory handle (and thus `protectedDirs`
+  // protection) churns out of the small LRU long before the session ends — so recency, not LRU
+  // membership, is what keeps a still-streaming entry from being deleted out from under the client.
+  // Must exceed ACCESS_WRITE_THROTTLE_MS so a recently-served entry can't look stale.
+  const SWEEP_GRACE_MS = (opts.sweepGraceSeconds ?? 300) * 1000;
 
   function dirOf(key: string): string {
     return key.slice(0, key.lastIndexOf('/'));
@@ -195,10 +207,45 @@ export function createCache(opts: CacheOpts): Cache {
     await upsertAccess(dirName, bytes);
   }
 
+  /** Reclaim a failed encode's partial output. The chunks flushed before the failure are never servable or resumable, and would otherwise stay unaccounted (the size row never moves off its initial 0), so the byte budget couldn't see or reclaim them. Removes this target's files, leaving any sibling targets in the dir; if the dir is left empty, drops the dir and its access row, otherwise re-sums so the recorded size no longer counts the removed partial. */
+  async function cleanupFailedTarget(
+    dirName: string,
+    binPath: string,
+    idxPath: string,
+  ): Promise<void> {
+    await rm(binPath, { force: true }).catch(() => undefined);
+    await rm(idxPath, { force: true }).catch(() => undefined);
+    if (maxBytes == null) return;
+    let remaining: string[];
+    try {
+      remaining = await readdir(path.join(cacheRoot, dirName));
+    } catch {
+      remaining = [];
+    }
+    if (remaining.length > 0) {
+      await recordEntrySize(dirName);
+      return;
+    }
+    await rm(path.join(cacheRoot, dirName), { recursive: true, force: true }).catch(
+      () => undefined,
+    );
+    lastWrittenAt.delete(dirName);
+    try {
+      await db.delete(playbackCacheAccess).where(eq(playbackCacheAccess.entryDir, dirName));
+    } catch (err) {
+      logger.warn(
+        `playback cache: failed to drop access row for ${dirName}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
   function protectedDirs(): Set<string> {
     const dirs = new Set<string>();
     for (const key of lru.keys()) dirs.add(dirOf(key));
     for (const key of inFlightStart.keys()) dirs.add(dirOf(key));
+    for (const key of encodingKeys) dirs.add(dirOf(key));
     return dirs;
   }
 
@@ -209,17 +256,30 @@ export function createCache(opts: CacheOpts): Cache {
     return Number(row?.total ?? 0);
   }
 
-  async function sweep(targetBytes?: number): Promise<{ freedBytes: number; evicted: string[] }> {
+  // Post-transcode, cron, and ENOSPC can all trigger a sweep at once; serialise them so concurrent
+  // runs don't each read the total and over-evict.
+  let sweepChain: Promise<unknown> = Promise.resolve();
+  function sweep(targetBytes?: number): Promise<{ freedBytes: number; evicted: string[] }> {
+    const run = sweepChain.then(() => runSweep(targetBytes));
+    sweepChain = run.catch(() => undefined);
+    return run;
+  }
+
+  async function runSweep(
+    targetBytes?: number,
+  ): Promise<{ freedBytes: number; evicted: string[] }> {
     if (maxBytes == null) return { freedBytes: 0, evicted: [] };
     const target = targetBytes ?? maxBytes;
 
     let total = await totalCachedBytes();
     if (total <= maxBytes) return { freedBytes: 0, evicted: [] };
 
-    // Evict the oldest non-protected entry one at a time until under target. Recency and size live
-    // in Postgres, so we never load the whole table: each step is an indexed `ORDER BY lastAccess
-    // LIMIT 1` pick. Protected dirs (live in memory or mid-encode) are excluded in SQL, so an active
-    // stream is never deleted; `total` is decremented locally to avoid re-summing each iteration.
+    // Evict the oldest evictable entry one at a time until under target. Recency and size live in
+    // Postgres, so we never load the whole table: each step is an indexed `ORDER BY lastAccess
+    // LIMIT 1` pick. An entry is evictable only if it is not currently in memory/mid-encode AND has
+    // been idle past the grace window — the latter is what protects a streaming entry whose handle
+    // has churned out of the LRU. `total` is decremented locally to avoid re-summing each iteration.
+    const cutoff = new Date(Date.now() - SWEEP_GRACE_MS);
     const evicted: string[] = [];
     let freedBytes = 0;
     while (total > target) {
@@ -231,13 +291,16 @@ export function createCache(opts: CacheOpts): Cache {
         })
         .from(playbackCacheAccess)
         .where(
-          protectedArr.length > 0
-            ? notInArray(playbackCacheAccess.entryDir, protectedArr)
-            : undefined,
+          and(
+            lt(playbackCacheAccess.lastAccess, cutoff),
+            protectedArr.length > 0
+              ? notInArray(playbackCacheAccess.entryDir, protectedArr)
+              : undefined,
+          ),
         )
         .orderBy(asc(playbackCacheAccess.lastAccess))
         .limit(1);
-      if (!oldest) break; // everything left is protected
+      if (!oldest) break; // nothing evictable: all remaining are protected or within the grace window
       try {
         await rm(path.join(cacheRoot, oldest.entryDir), { recursive: true, force: true });
       } catch (err) {
@@ -324,6 +387,8 @@ export function createCache(opts: CacheOpts): Cache {
       chunkDurationSeconds,
     });
     const internal: InternalEntry = { binPath, idxPath, liveTail, ffmpeg, error: null };
+    const key = entryKey(req);
+    encodingKeys.add(key);
 
     // A full disk can surface either as an ffmpeg failure or as a live-tail index-write failure.
     // Either way, free space so the next request has room — the current request still fails. This
@@ -334,6 +399,7 @@ export function createCache(opts: CacheOpts): Cache {
 
     ffmpeg.done.then(
       () => {
+        encodingKeys.delete(key);
         liveTail
           .finalise()
           .then(async () => {
@@ -349,11 +415,21 @@ export function createCache(opts: CacheOpts): Cache {
           });
       },
       (err: Error) => {
+        encodingKeys.delete(key);
         internal.error = err;
         liveTail.emitter.emit('error', err);
-        void liveTail.stop();
-        if (isDiskFullError(err)) emergencySweep();
         logger.error('encoder failed', { key: entryKey(req), err: err.message });
+        void (async () => {
+          await liveTail.stop();
+          await cleanupFailedTarget(path.basename(dir), binPath, idxPath);
+          if (isDiskFullError(err) && maxBytes != null) {
+            // ENOSPC is transient once the sweep frees space: drop the cached failure so the next
+            // request retries a fresh encode rather than replaying this error until the LRU TTL.
+            // Other failures stay cached so a genuinely broken source isn't re-spawned per request.
+            lru.delete(entryKey(req));
+            emergencySweep();
+          }
+        })();
       },
     );
 
@@ -470,4 +546,5 @@ export function createCache(opts: CacheOpts): Cache {
 export const defaultCache: Cache = createCache({
   cacheRoot: env.DISK_CACHE_DIR ?? path.join(tmpdir(), 'lofify-cache'),
   ...(env.DISK_CACHE_MAX_BYTES !== undefined ? { maxBytes: env.DISK_CACHE_MAX_BYTES } : {}),
+  sweepGraceSeconds: env.DISK_CACHE_SWEEP_GRACE_SECONDS,
 });

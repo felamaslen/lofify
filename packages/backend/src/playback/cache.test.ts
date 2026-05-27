@@ -200,6 +200,18 @@ test('sweep targetBytes evicts past the budget to leave headroom', async () => {
   expect(await remainingDirs()).toEqual(['c', 'd']);
 });
 
+test('sweep keeps a recently-accessed entry even when it is over budget', async () => {
+  const budgeted = createCache({ cacheRoot: workDir, chunkDurationSeconds: 0.2, maxBytes: 1000 });
+  // Far over the 1000 budget, but accessed just now: a streaming session must not be evicted from
+  // under the client, so the grace window protects it despite the overshoot.
+  await seedEntry('fresh', 5000, new Date());
+
+  const { evicted } = await budgeted.sweep();
+
+  expect(evicted).toEqual([]);
+  expect(await remainingDirs()).toEqual(['fresh']);
+});
+
 test('budget sweep evicts an unprotected entry from disk and the access table', async () => {
   const budgeted = createCache({ cacheRoot: workDir, chunkDurationSeconds: 0.2, maxBytes: 1 });
   const entry = await budgeted.getOrStart(flacReq());
@@ -220,6 +232,11 @@ test('budget sweep evicts an unprotected entry from disk and the access table', 
 
   // While the in-memory handle is live the entry is protected; dropping it makes it evictable.
   budgeted.reset();
+  // Backdate past the grace window — a just-encoded entry is otherwise too recent to evict.
+  await db
+    .update(playbackCacheAccess)
+    .set({ lastAccess: new Date(Date.now() - 10 * 60_000) })
+    .where(eq(playbackCacheAccess.entryDir, dirName));
   const { evicted } = await budgeted.sweep();
 
   expect(evicted).toContain(dirName);
@@ -229,6 +246,28 @@ test('budget sweep evicts an unprotected entry from disk and the access table', 
     .from(playbackCacheAccess)
     .where(eq(playbackCacheAccess.entryDir, dirName));
   expect(after).toHaveLength(0);
+}, 30_000);
+
+test('a failed encode reclaims its partial output and access row', async () => {
+  const budgeted = createCache({ cacheRoot: workDir, chunkDurationSeconds: 0.2, maxBytes: 1000 });
+  const req = { ...flacReq(), sourcePath: path.join(workDir, 'does-not-exist.flac') };
+  const entry = await budgeted.getOrStart(req);
+  await expect(entry.waitForEncoded(Number.POSITIVE_INFINITY)).rejects.toThrow();
+
+  // Cleanup runs asynchronously after the rejection; wait for the dir and its row to disappear so
+  // the failed encode leaves no unaccounted bytes behind.
+  const dirName = path.basename(path.dirname(entry.binPath));
+  await vi.waitFor(
+    async () => {
+      const rows = await db
+        .select()
+        .from(playbackCacheAccess)
+        .where(eq(playbackCacheAccess.entryDir, dirName));
+      expect(rows).toHaveLength(0);
+      await expect(stat(path.join(workDir, dirName))).rejects.toThrow();
+    },
+    { timeout: 5000, interval: 50 },
+  );
 }, 30_000);
 
 test('waitForEncoded resolves when the cumulative endSeconds threshold is crossed', async () => {

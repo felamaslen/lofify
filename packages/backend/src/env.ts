@@ -37,6 +37,9 @@ const Schema = z.object({
   /** Cron expression for the periodic cache sweep. Empty disables the schedule (the post-transcode and ENOSPC sweeps still run). Has no effect unless `DISK_CACHE_MAX_BYTES` is set. */
   DISK_CACHE_SWEEP_CRON: z.string().default('*/15 * * * *'),
 
+  /** Grace window, in seconds, during which a recently-accessed cache entry is never evicted even when over budget. Protects entries an in-flight playback session still depends on (the on-disk files outlive the in-memory handle). Must exceed the 60s access-write throttle. */
+  DISK_CACHE_SWEEP_GRACE_SECONDS: z.coerce.number().int().positive().default(300),
+
   /** Absolute path to the built web client (`vite build` output). When unset, defaults to the workspace's `packages/web/dist`. The backend serves these as a catch-all SPA route when the directory exists. */
   WEB_DIST_PATH: z.string().optional(),
 
