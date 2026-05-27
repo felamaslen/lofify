@@ -6,7 +6,7 @@ import { type MouseEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { graphql } from '../lib/gql.ts';
 import { gqlRequest } from '../lib/gql-request.ts';
 import { cn } from '../lib/utils.ts';
-import { TrackByIdDocument, usePlayer } from '../state/player.tsx';
+import { TrackByIdDocument, trackFormatFor, usePlayer } from '../state/player.tsx';
 import { type EditableTrack, TagEditDialog } from './tag-edit-dialog.tsx';
 import {
   ContextMenu,
@@ -65,7 +65,7 @@ const COLS =
   'grid grid-cols-[40px_60px_minmax(0,2fr)_80px_minmax(0,1.2fr)_minmax(0,1.4fr)_80px_64px] items-center gap-3 px-4';
 
 export function TrackList() {
-  const { quality, formatLossy, play, current } = usePlayer();
+  const { quality, lossyPreference, play, current } = usePlayer();
   const queryClient = useQueryClient();
 
   const query = useInfiniteQuery({
@@ -141,9 +141,13 @@ export function TrackList() {
     hoverTimerRef.current = setTimeout(() => {
       hoverTimerRef.current = null;
       void queryClient.prefetchQuery({
-        queryKey: ['track', id, quality, formatLossy],
+        queryKey: ['track', id, quality, lossyPreference],
         queryFn: ({ signal }) =>
-          gqlRequest(TrackByIdDocument, { id, format: { quality, formatLossy } }, signal),
+          gqlRequest(
+            TrackByIdDocument,
+            { id, format: trackFormatFor(quality, lossyPreference) },
+            signal,
+          ),
       });
     }, HOVER_PREFETCH_MS);
   };
