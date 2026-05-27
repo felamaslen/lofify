@@ -41,8 +41,12 @@ format controls:
   (`High`/`Med`/`Low`/`Min`) force a transcode at an ascending bitrate.
   Changing quality between sub-`Max` tiers applies **live mid-track**: the
   codec is unchanged, so the new bitrate splices into the existing buffer
-  with no gap. Changes that cross a codec boundary (to/from `Max`, or
-  switching the codec preference) take effect on the next track instead.
+  with no gap. Already-buffered audio ahead of the playhead is re-fetched
+  at the new tier in the background (overwriting in place, so playback
+  never stalls), rather than waiting for the old buffer to drain — so the
+  switch takes hold promptly even with a large look-ahead buffer. Changes
+  that cross a codec boundary (to/from `Max`, or switching the codec
+  preference) take effect on the next track instead.
 - **Codec** — a _preference_ used only when the server has to transcode
   (below Max, or a lossy source at Max with no matching copy): `Prefer
 Opus` or `Prefer MP3`. At Max, sources are copied without re-encoding

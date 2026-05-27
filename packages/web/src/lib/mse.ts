@@ -9,7 +9,7 @@
  *
  * Lossless↔lossy switching mid-track is not supported here: the SourceBuffer's codec parameters are locked at `addSourceBuffer(contentType)`. Switching codecs requires tearing the player down and starting again — `player.tsx` does this on codec-crossing changes (to/from Max, Opus↔MP3).
  *
- * Bitrate-only switching within the same codec (e.g. MEDIUM→HIGH opus) is supported live via `switchStream`: the codec config is unchanged (the opus init segment is bitrate-independent, mp3 has none) and fragments carry their own timestamps, so new-bitrate fragments splice into the existing buffer without a teardown.
+ * Bitrate-only switching within the same codec (e.g. MEDIUM→HIGH opus) is supported live via `switchStream`: the codec config is unchanged (the opus init segment is bitrate-independent, mp3 has none) and fragments carry their own timestamps, so new-bitrate fragments splice into the existing buffer without a teardown. To make the switch take hold promptly rather than only as the old buffer plays out, `reconcile()` also re-fetches buffered-ahead chunks still at the old tier (lowest priority, after gaps are filled) and lets the append overwrite them — the old audio keeps playing until each replacement lands.
  *
  * `ManifestSnapshot` and `ManifestChunk` are derived from the `TrackManifest` subscription document in `state/player.tsx`, so the player consumes the exact GraphQL response shape with no in-between conversion.
  */
@@ -30,8 +30,8 @@ type Range = { start: number; end: number };
 export interface Player {
   /** Update the player's view of the manifest. Newly-available chunks become eligible for prefetch. */
   setManifest(m: ManifestSnapshot): void;
-  /** Swap to a new playback URL for the same codec (a bitrate-only change). Keeps the SourceBuffer and already-buffered audio; the caller must feed the matching manifest via `setManifest`. Not for codec changes — those need a fresh player. */
-  switchStream(url: string): void;
+  /** Swap to a new playback URL for the same codec (a bitrate-only change). `quality` is the tier the new URL serves (its `X-Quality`), so the player can proactively re-fetch already-buffered chunks still at the old tier. Keeps the SourceBuffer and already-buffered audio; the caller must feed the matching manifest via `setManifest`. Not for codec changes — those need a fresh player. */
+  switchStream(url: string, quality: string): void;
   /** Seek to `time`. The audio element waits for data and resumes once the chunk under `time` is fetched and appended by the reconcile loop. */
   seekTo(time: number): void;
   dispose(): void;
@@ -100,6 +100,14 @@ class MsePlayer implements Player {
    */
   private qualityByStart = new Map<number, string>();
   private reportedQuality: string | null = null;
+  /**
+   * The tier we'd like the forward buffer to be at, set by `switchStream`; `null` before any switch
+   * (nothing is "stale"). After a switch, reconcile re-fetches buffered-ahead chunks still at the old
+   * tier to make the change take hold without waiting for the existing buffer to play out.
+   */
+  private desiredQuality: string | null = null;
+  /** Chunk starts (rounded seconds) already re-fetched for the current `desiredQuality`. Bounds each chunk to one upgrade attempt per switch, so a header that never reports `desiredQuality` can't loop. Cleared on `switchStream`. */
+  private upgradedStarts = new Set<number>();
 
   constructor(
     private audio: HTMLAudioElement,
@@ -127,7 +135,7 @@ class MsePlayer implements Player {
     this.audio.currentTime = Math.min(time, this.manifest.durationSeconds || time);
   }
 
-  switchStream(url: string): void {
+  switchStream(url: string, quality: string): void {
     if (this.disposed) return;
     // Drop everything tied to the old URL: in-flight fetches and queued appends reference its byte
     // offsets. The buffered audio and the appended init stay — the new stream is the same codec at a
@@ -137,12 +145,15 @@ class MsePlayer implements Player {
     this.url = url;
     this.manifest = EMPTY_MANIFEST;
     this.lastUncoveredFetch = null;
+    this.desiredQuality = quality;
+    this.upgradedStarts.clear();
     this.tick();
   }
 
   dispose(): void {
     this.disposed = true;
     this.qualityByStart.clear();
+    this.upgradedStarts.clear();
     for (const ctrl of this.pending.values()) ctrl.abort();
     this.pending.clear();
     this.audio.removeEventListener('timeupdate', this.onTick);
@@ -290,6 +301,30 @@ class MsePlayer implements Player {
       const ce = chunks[i]!.endSeconds;
       const mid = (Math.max(cs, t) + ce) / 2;
       if (!coversTime(ranges, mid)) {
+        void this.fetchChunk(i);
+        return;
+      }
+    }
+
+    // 5. After an on-the-fly switch, re-fetch buffered-ahead chunks still at the old tier so the new
+    // quality takes hold without waiting for the existing buffer to play out. Lowest priority: only
+    // reached once the forward window is fully buffered (step 4) and no fetch is in flight (step 3),
+    // so it never starves playback. Scoped to the same [t, FETCH_AHEAD] window step 3 keeps alive —
+    // an upgrade fetch beyond it would be aborted next tick and, marked done, never retried; chunks
+    // further out are upgraded once the playhead advances them into range. The append overwrites the
+    // chunk's range — we never remove first, so the old-quality audio keeps playing until it lands.
+    if (this.desiredQuality === null) return;
+    for (let i = startIdx; i < chunks.length; i++) {
+      const cs = chunkStartSeconds(chunks, i);
+      if (cs >= fetchEnd) break;
+      const key = Math.round(cs);
+      if (this.upgradedStarts.has(key)) continue;
+      const ce = chunks[i]!.endSeconds;
+      const mid = (Math.max(cs, t) + ce) / 2;
+      if (!coversTime(ranges, mid)) continue;
+      const q = this.qualityByStart.get(key);
+      if (q !== undefined && q !== this.desiredQuality) {
+        this.upgradedStarts.add(key);
         void this.fetchChunk(i);
         return;
       }

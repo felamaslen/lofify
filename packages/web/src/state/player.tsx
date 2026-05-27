@@ -383,7 +383,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       if (next.delivery.mimeType !== deliveryRef.current?.mimeType) return;
       setCurrent(next);
       setDelivery(next.delivery);
-      player.switchStream(resolvePlaybackUrl(next.delivery.url));
+      player.switchStream(resolvePlaybackUrl(next.delivery.url), nextQuality);
       const totalSeconds = readFragment(PlaybackBarDocument, next).duration.seconds;
       startManifest(next.id, totalSeconds, format);
     },
