@@ -59,8 +59,8 @@ export function PlaybackBar() {
   };
 
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)_minmax(0,1fr)] items-center gap-4 border-t border-border bg-card/60 px-4 py-3 backdrop-blur">
-      <div className="flex min-w-0 flex-col">
+    <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)_minmax(0,1fr)] items-center gap-4 border-t border-border bg-card/60 px-4 py-3 backdrop-blur max-sm:grid-cols-[minmax(0,1fr)_auto] max-sm:gap-x-3 max-sm:gap-y-2 max-sm:pb-0">
+      <div className="flex min-w-0 flex-col max-sm:col-start-1 max-sm:row-start-1">
         {meta ? (
           <>
             <span className="truncate text-sm font-medium">{meta.title ?? '(untitled)'}</span>
@@ -74,8 +74,8 @@ export function PlaybackBar() {
         )}
       </div>
 
-      <div className="mx-auto flex w-full max-w-[640px] flex-col items-center gap-1.5">
-        <div className="flex items-center gap-1">
+      <div className="mx-auto flex w-full max-w-[640px] flex-col items-center gap-1.5 max-sm:contents">
+        <div className="flex items-center gap-1 max-sm:col-span-2 max-sm:row-start-2 max-sm:justify-center">
           <Button
             variant="ghost"
             size="icon"
@@ -99,11 +99,13 @@ export function PlaybackBar() {
           </Button>
         </div>
 
-        <div className="flex w-full items-center gap-2 text-[11px] tabular-nums text-muted-foreground">
-          <span className="w-10 text-right">{fmt(positionSeconds)}</span>
+        <div className="flex w-full items-center gap-2 text-[11px] tabular-nums text-muted-foreground max-sm:col-span-2 max-sm:row-start-3 max-sm:grid max-sm:grid-cols-2 max-sm:items-end max-sm:gap-x-2 max-sm:gap-y-1">
+          <span className="w-10 text-right max-sm:col-start-1 max-sm:row-start-1 max-sm:w-auto max-sm:text-left">
+            {fmt(positionSeconds)}
+          </span>
           <div
             ref={barRef}
-            className="relative flex-1"
+            className="relative flex-1 max-sm:col-span-2 max-sm:row-start-2 max-sm:-mx-4"
             onMouseMove={onBarMove}
             onMouseLeave={() => setHover(null)}
           >
@@ -132,11 +134,13 @@ export function PlaybackBar() {
               aria-label="Scrub"
             />
           </div>
-          <span className="w-10">{meta?.duration.formatted ?? '00:00'}</span>
+          <span className="w-10 max-sm:col-start-2 max-sm:row-start-1 max-sm:w-auto max-sm:text-right">
+            {meta?.duration.formatted ?? '00:00'}
+          </span>
         </div>
       </div>
 
-      <div className="flex items-center justify-end gap-2">
+      <div className="flex items-center justify-end gap-2 max-sm:col-start-2 max-sm:row-start-1">
         <PlaybackFormatBadge />
         <SettingsDialog />
       </div>

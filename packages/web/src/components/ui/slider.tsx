@@ -21,10 +21,13 @@ export const Slider = React.forwardRef<React.ElementRef<typeof SliderPrimitive.R
         ref={ref}
         min={min}
         max={max}
-        className={cn('group relative flex w-full touch-none select-none items-center', className)}
+        className={cn(
+          'group relative flex w-full touch-none select-none items-center max-sm:items-end',
+          className,
+        )}
         {...props}
       >
-        <SliderPrimitive.Track className="relative h-1.5 w-full grow overflow-hidden rounded-full bg-secondary cursor-pointer">
+        <SliderPrimitive.Track className="relative h-1.5 w-full grow overflow-hidden rounded-full bg-secondary cursor-pointer max-sm:rounded-none">
           {pendingStart != null && pendingStart < hi && (
             <div
               className="lofify-pending-stripes pointer-events-none absolute h-full cursor-not-allowed"
@@ -47,7 +50,7 @@ export const Slider = React.forwardRef<React.ElementRef<typeof SliderPrimitive.R
           ))}
           <SliderPrimitive.Range className="absolute cursor-pointer h-full bg-primary" />
         </SliderPrimitive.Track>
-        <SliderPrimitive.Thumb className="block h-3 w-3 cursor-pointer rounded-full bg-white opacity-0 shadow outline-none transition-opacity group-hover:opacity-100 focus-visible:opacity-100 disabled:pointer-events-none disabled:opacity-0" />
+        <SliderPrimitive.Thumb className="block h-3 w-3 cursor-pointer rounded-full bg-white opacity-0 shadow outline-none transition-opacity group-hover:opacity-100 focus-visible:opacity-100 disabled:pointer-events-none disabled:opacity-0 max-sm:h-2.5 max-sm:w-1.5 max-sm:rounded-none max-sm:rounded-t-sm max-sm:opacity-100" />
       </SliderPrimitive.Root>
     );
   },
