@@ -123,6 +123,16 @@ const INFLIGHT_MIN_MS = 500;
 
 const GRAPHQL_URL = import.meta.env.VITE_GRAPHQL_URL ?? '/graphql';
 
+/** Lock-screen / notification artwork for the Media Session. The app icon stands in until the schema carries per-track cover art. */
+const MEDIA_ARTWORK = [
+  { src: '/icon-192.png', sizes: '192x192', type: 'image/png' },
+  { src: '/icon-512.png', sizes: '512x512', type: 'image/png' },
+];
+
+function hasMediaSession(): boolean {
+  return typeof navigator !== 'undefined' && 'mediaSession' in navigator;
+}
+
 function backendOrigin(): string {
   try {
     return new URL(GRAPHQL_URL, window.location.origin).origin;
@@ -295,6 +305,7 @@ class Player {
   activate(): undefined | (() => void) {
     if (this.detachers.length > 0) return;
     this.attachAudioListeners();
+    this.setupMediaSession();
     void this.restoreFromUrl();
     return () => this.dispose();
   }
@@ -319,6 +330,10 @@ class Player {
     this.manifestUnsub?.();
     this.mse?.dispose();
     this.mse = null;
+    if (hasMediaSession()) {
+      navigator.mediaSession.playbackState = 'none';
+      navigator.mediaSession.metadata = null;
+    }
   }
 
   // --- Audio element wiring ----------------------------------------------------------------------
@@ -329,13 +344,18 @@ class Player {
   }
 
   private attachAudioListeners(): void {
-    this.on('play', () => this.set({ isPlaying: true }));
+    this.on('play', () => {
+      this.set({ isPlaying: true });
+      this.setMediaPlaybackState('playing');
+    });
     this.on('pause', () => {
       this.set({ isPlaying: false });
+      this.setMediaPlaybackState('paused');
       this.flushUrl();
     });
     this.on('timeupdate', () => {
       this.set({ positionSeconds: this.audio.currentTime });
+      this.updateMediaPosition();
       this.scheduleUrlWrite();
     });
     const onBuffered = () => this.set({ bufferedRanges: this.readBuffered() });
@@ -354,6 +374,56 @@ class Player {
     const b = this.audio.buffered;
     for (let i = 0; i < b.length; i++) out.push({ start: b.start(i), end: b.end(i) });
     return out;
+  }
+
+  // --- Media Session ------------------------------------------------------------------------------
+
+  /** Register the OS media-control handlers once. These are what make a backgrounded PWA keep playing and surface lock-screen / notification controls — without them mobile platforms (iOS especially) pause hidden web audio. Idempotent: the handlers close over `this`, so re-registering is harmless. */
+  private setupMediaSession(): void {
+    if (!hasMediaSession()) return;
+    const ms = navigator.mediaSession;
+    ms.setActionHandler('play', () => this.togglePlay());
+    ms.setActionHandler('pause', () => this.togglePlay());
+    ms.setActionHandler('previoustrack', () => this.previous());
+    ms.setActionHandler('nexttrack', () => this.next());
+    ms.setActionHandler('seekto', (details) => {
+      if (typeof details.seekTime === 'number') this.seek(details.seekTime);
+    });
+  }
+
+  private setMediaPlaybackState(state: 'none' | 'paused' | 'playing'): void {
+    if (hasMediaSession()) navigator.mediaSession.playbackState = state;
+  }
+
+  /** Publish the current track's title/artist/album (and stand-in artwork) to the OS. */
+  private updateMediaMetadata(track: TrackNode): void {
+    if (!hasMediaSession()) return;
+    const meta = readFragment(PlaybackBarDocument, track);
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: meta.title ?? 'Untitled',
+      artist: meta.artist ?? 'Unknown artist',
+      album: meta.album ?? '',
+      artwork: MEDIA_ARTWORK,
+    });
+  }
+
+  /** Feed the scrub position to the OS so the lock-screen progress bar tracks playback. `setPositionState` throws on inconsistent values (position past duration, non-finite), so guard and swallow. */
+  private updateMediaPosition(): void {
+    if (!hasMediaSession() || typeof navigator.mediaSession.setPositionState !== 'function') return;
+    const track = this.snapshot.current;
+    if (!track) return;
+    const duration = readFragment(PlaybackBarDocument, track).duration.seconds;
+    if (!Number.isFinite(duration) || duration <= 0) return;
+    const position = Math.min(Math.max(this.audio.currentTime, 0), duration);
+    try {
+      navigator.mediaSession.setPositionState({
+        duration,
+        position,
+        playbackRate: this.audio.playbackRate || 1,
+      });
+    } catch {
+      // Inconsistent values mid-seek; the next timeupdate corrects it.
+    }
   }
 
   /** Throttle URL playhead writes while playing: `timeupdate` fires ~4×/s, so write at most once per `URL_WRITE_THROTTLE_MS` rather than on every tick. Leaving an already-pending timer untouched (rather than resetting it) is what makes this a throttle, not a debounce — a debounce would never fire under a continuous event stream. */
@@ -444,6 +514,7 @@ class Player {
       delivery: track.delivery,
       playingQuality: null,
     });
+    this.updateMediaMetadata(track);
     this.mse?.dispose();
     this.mse = null;
     this.manifestUnsub?.();
@@ -471,6 +542,7 @@ class Player {
     );
 
     this.audio.currentTime = startAt;
+    this.updateMediaPosition();
     if (autoPlay) await this.audio.play().catch(() => undefined);
     void this.prefetchNext(track.id);
   }

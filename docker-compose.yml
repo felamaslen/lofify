@@ -34,6 +34,7 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgres://lofify:lofify@postgres:5432/lofify}
       BACKEND_HOST: 0.0.0.0
       BACKEND_PORT: 4000
+      CORS_ALLOW_ORIGINS: '*'
       LIBRARY_PATH: /music
       PLAYBACK_SIGNING_SECRET: ${PLAYBACK_SIGNING_SECRET:-dev-secret}
       TRANSCODE_MAX_PARALLEL: ${TRANSCODE_MAX_PARALLEL:-4}
@@ -59,8 +60,8 @@ services:
     working_dir: /app
     command: sh -c "corepack enable && pnpm install && pnpm --filter ./packages/web dev --host 0.0.0.0"
     environment:
-      VITE_GRAPHQL_URL: http://localhost:4000/graphql
-      VITE_GRAPHQL_STREAM_URL: http://localhost:4000/graphql/stream
+      VITE_GRAPHQL_URL: ${GRAPHQL_URL:-http://localhost:4000/graphql}
+      VITE_GRAPHQL_STREAM_URL: ${GRAPHQL_STREAM_URL:-http://localhost:4000/graphql/stream}
     ports:
       - '5173:5173'
     volumes:

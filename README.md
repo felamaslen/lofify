@@ -11,7 +11,7 @@ change.
 ```
 packages/
   backend/   TypeScript monolith: GraphQL API, playback, scanner, db schema
-  web/       Vite + React + TanStack Router web client
+  web/       Vite + React + TanStack Router web client (installable PWA)
 ```
 
 The scanner lives inside `packages/backend` — it is not a separate
