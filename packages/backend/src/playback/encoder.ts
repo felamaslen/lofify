@@ -1,5 +1,5 @@
 /**
- * Spawn ffmpeg to produce a single-file encoded `.bin` for one cache entry. Output containers: fragmented mp4 (opus or flac) or raw mp3. The live-tail driver in `live-tail.ts` walks the growing file and emits a `.idx`; this module just shells out and reports completion.
+ * Spawn ffmpeg to produce a single-file encoded `.bin` for one cache entry. Output containers: fragmented mp4 (opus or flac), WebM (opus or Vorbis), or raw mp3. The live-tail driver in `live-tail.ts` walks the growing file and emits a `.idx`; this module just shells out and reports completion.
  *
  * Concurrency is bounded by `env.TRANSCODE_MAX_PARALLEL` via a shared semaphore. A `kill()` on the returned handle sends `SIGTERM` to the ffmpeg child and resolves the `done` promise without further waiting (the caller is responsible for cleaning up the partial output file).
  */
@@ -45,10 +45,12 @@ function release(sem: Semaphore): void {
 
 const encoderSem = makeSemaphore(() => env.TRANSCODE_MAX_PARALLEL);
 
-/** Container + codec pairing the encoder is willing to produce. Internal — clients select via the GraphQL `Quality` × `FormatLossy` enums, which `resolve.ts` translates into one of these. */
+/** Container + codec pairing the encoder is willing to produce. Internal — `resolve.ts` translates a client's quality + supported-format lists into one of these. `webm/vorbis` is only ever reached as a passthrough copy (we never encode to Vorbis); `webm/opus` and `mp4/opus` may be either copy or transcode. */
 export type EncodeFormat =
   | { container: 'mp4'; codec: 'opus' }
   | { container: 'mp4'; codec: 'flac' }
+  | { container: 'webm'; codec: 'opus' }
+  | { container: 'webm'; codec: 'vorbis' }
   | { container: 'mp3'; codec: 'mp3' };
 
 export type EncodeTarget = {
@@ -79,27 +81,37 @@ function mp3BitrateKbps(q: Quality): number {
   return { MIN: 64, LOW: 128, MEDIUM: 192, HIGH: 256, MAX: 320 }[q];
 }
 
+function opusEncodeArgs(quality: Quality): string[] {
+  return [
+    '-c:a',
+    'libopus',
+    '-b:a',
+    `${opusBitrateKbps(quality)}k`,
+    '-vbr',
+    'on',
+    '-application',
+    'audio',
+    // libopus runs at 48 kHz internally — force soxr at max precision so the resample on non-48 sources doesn't introduce ringing artefacts.
+    '-af',
+    'aresample=resampler=soxr:precision=28:dither_method=triangular_hp',
+    '-ar',
+    '48000',
+  ];
+}
+
 function mp4CodecArgs(codec: 'opus' | 'flac', quality: Quality, passthrough: boolean): string[] {
   switch (codec) {
     case 'opus':
-      return [
-        '-c:a',
-        'libopus',
-        '-b:a',
-        `${opusBitrateKbps(quality)}k`,
-        '-vbr',
-        'on',
-        '-application',
-        'audio',
-        // libopus runs at 48 kHz internally — force soxr at max precision so the resample on non-48 sources doesn't introduce ringing artefacts.
-        '-af',
-        'aresample=resampler=soxr:precision=28:dither_method=triangular_hp',
-        '-ar',
-        '48000',
-      ];
+      return passthrough ? ['-c:a', 'copy'] : opusEncodeArgs(quality);
     case 'flac':
       return passthrough ? ['-c:a', 'copy'] : ['-c:a', 'flac', '-compression_level', '5'];
   }
+}
+
+function webmCodecArgs(codec: 'opus' | 'vorbis', quality: Quality, passthrough: boolean): string[] {
+  // Vorbis is copy-only — `resolve.ts` only ever picks webm/vorbis when the source is already Vorbis.
+  if (codec === 'vorbis' || passthrough) return ['-c:a', 'copy'];
+  return opusEncodeArgs(quality);
 }
 
 function mp3CodecArgs(quality: Quality, passthrough: boolean): string[] {
@@ -112,6 +124,7 @@ function buildArgs(opts: EncoderOpts): string[] {
   const { source, target, outPath, chunkDurationSeconds, passthrough = false } = opts;
   const base = ['-hide_banner', '-loglevel', 'error', '-i', source, '-vn'];
   const fragDurationMicros = String(Math.round(chunkDurationSeconds * 1_000_000));
+  const clusterMillis = String(Math.round(chunkDurationSeconds * 1000));
 
   switch (target.format.container) {
     case 'mp4':
@@ -125,6 +138,24 @@ function buildArgs(opts: EncoderOpts): string[] {
         '+frag_keyframe+empty_moov+default_base_moof',
         '-frag_duration',
         fragDurationMicros,
+        '-y',
+        outPath,
+      ];
+    case 'webm':
+      return [
+        ...base,
+        ...webmCodecArgs(target.format.codec, target.quality, passthrough),
+        '-f',
+        'webm',
+        // dash mode emits a Cues element and keyframe-aligned, single-track clusters — the layout
+        // the WebM MSE byte-stream format expects; cluster_time_limit splits clusters on the nominal
+        // chunk boundary so the live-tail scanner's per-cluster byte ranges line up with seek points.
+        '-dash',
+        '1',
+        '-dash_track_number',
+        '1',
+        '-cluster_time_limit',
+        clusterMillis,
         '-y',
         outPath,
       ];
@@ -213,7 +244,19 @@ export function spawnEncoder(opts: EncoderOpts): FfmpegHandle {
   };
 }
 
+/** Nominal encode bitrate (kbps) for a transcoded lossy target, or `null` for codecs without a fixed target bitrate (flac, or any copy). For display only. */
+export function encodeBitrateKbps(target: EncodeTarget): number | null {
+  switch (target.format.codec) {
+    case 'opus':
+      return opusBitrateKbps(target.quality);
+    case 'mp3':
+      return mp3BitrateKbps(target.quality);
+    default:
+      return null;
+  }
+}
+
 /** Cache key fragment derived from a target. Used by the cache module to build per-entry filenames. */
 export function targetKey(target: EncodeTarget): string {
-  return `f-${target.format.codec}_q-${target.quality.toLowerCase()}`;
+  return `f-${target.format.container}-${target.format.codec}_q-${target.quality.toLowerCase()}`;
 }

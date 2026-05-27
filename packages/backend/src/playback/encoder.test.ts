@@ -128,14 +128,18 @@ test('kill() terminates the encoder and resolves done without throwing', async (
   await expect(handle.done).resolves.toBeUndefined();
 }, 30_000);
 
-test('targetKey() produces a stable filesystem-safe key per (codec, quality)', () => {
+test('targetKey() produces a stable filesystem-safe key per (container, codec, quality)', () => {
   expect(targetKey({ format: { container: 'mp4', codec: 'opus' }, quality: Quality.HIGH })).toBe(
-    'f-opus_q-high',
+    'f-mp4-opus_q-high',
   );
   expect(targetKey({ format: { container: 'mp4', codec: 'flac' }, quality: Quality.MAX })).toBe(
-    'f-flac_q-max',
+    'f-mp4-flac_q-max',
+  );
+  // Same codec, different container must not collide.
+  expect(targetKey({ format: { container: 'webm', codec: 'opus' }, quality: Quality.HIGH })).toBe(
+    'f-webm-opus_q-high',
   );
   expect(targetKey({ format: { container: 'mp3', codec: 'mp3' }, quality: Quality.LOW })).toBe(
-    'f-mp3_q-low',
+    'f-mp3-mp3_q-low',
   );
 });

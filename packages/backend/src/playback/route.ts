@@ -12,10 +12,11 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { db } from '../db/client.js';
 import { tracks as tracksTable } from '../db/schema/index.js';
+import { abbreviateCodec } from '../graphql/codec.js';
 import type { CacheEntry } from './cache.js';
 import { defaultCache } from './cache.js';
 import { parseOptionSegments } from './options.js';
-import { contentTypeFor, resolveTarget } from './resolve.js';
+import { contentTypeFor } from './resolve.js';
 import { verifySignature } from './sign.js';
 
 // A still-encoding entry's bytes (and its total length) keep growing, so its responses must never
@@ -151,8 +152,8 @@ export async function registerPlaybackRoute(app: FastifyInstance): Promise<void>
       reply.code(403);
       return reply.send({ error: 'invalid signature' });
     }
-    const opts = parseOptionSegments(optionSegments);
-    if (opts == null) {
+    const target = parseOptionSegments(optionSegments);
+    if (target == null) {
       reply.code(400);
       return reply.send({ error: 'invalid options' });
     }
@@ -164,12 +165,11 @@ export async function registerPlaybackRoute(app: FastifyInstance): Promise<void>
       return reply.send({ error: 'unknown track' });
     }
 
-    const target = resolveTarget(track, opts);
     const entry = await defaultCache.getOrStart({
       trackId: track.id,
       sourceMtime: track.sourceMtime,
       sourcePath: track.file,
-      sourceCodec: track.codec.toLowerCase(),
+      sourceCodec: abbreviateCodec(track.codec),
       target,
     });
 

@@ -104,9 +104,36 @@ test('skips an ID3v2 tag at the start of the file', () => {
   expect(r.resumeOffset).toBe(tag.length + FRAME_BYTES * 4);
 });
 
-test('throws on invalid frame header bytes (defensively — ffmpeg should never emit them)', () => {
-  const garbage = Buffer.from([0x00, 0x00, 0x00, 0x00, 0x00]);
-  expect(() => SCANNER_100MS.scan(garbage, 0, false)).toThrow(/invalid mp3 frame header/);
+test('resyncs past inter-frame garbage, keeping the skipped bytes inside the spanning chunk', () => {
+  const gap = Buffer.alloc(50, 0); // non-audio bytes between frame 4 and frame 5
+  const buf = Buffer.concat([
+    ...Array.from({ length: 4 }, () => FRAME()),
+    gap,
+    ...Array.from({ length: 4 }, () => FRAME()),
+  ]);
+  const r = SCANNER_100MS.scan(buf, 0, true);
+  expect(r.chunks).toEqual([
+    { byte: [0, FRAME_BYTES * 4], rawDuration: 4 * SAMPLES_PER_FRAME },
+    // Second window spans the 50-byte gap; the browser's decoder skips it just as we do.
+    { byte: [FRAME_BYTES * 4, FRAME_BYTES * 8 + 50], rawDuration: 4 * SAMPLES_PER_FRAME },
+  ]);
+  expect(r.resumeOffset).toBe(FRAME_BYTES * 8 + 50);
+});
+
+test('isFinal drops trailing non-audio bytes (chunk ends at the last whole frame)', () => {
+  const buf = Buffer.concat([...Array.from({ length: 6 }, () => FRAME()), Buffer.alloc(30, 0)]);
+  const r = SCANNER_100MS.scan(buf, 0, true);
+  expect(r.chunks).toEqual([
+    { byte: [0, FRAME_BYTES * 4], rawDuration: 4 * SAMPLES_PER_FRAME },
+    { byte: [FRAME_BYTES * 4, FRAME_BYTES * 6], rawDuration: 2 * SAMPLES_PER_FRAME },
+  ]);
+  expect(r.resumeOffset).toBe(FRAME_BYTES * 6);
+});
+
+test('tolerates an all-garbage buffer without throwing (no chunks)', () => {
+  const garbage = Buffer.alloc(64, 0);
+  const r = SCANNER_100MS.scan(garbage, 0, false);
+  expect(r.chunks).toEqual([]);
 });
 
 test('init field is always null', () => {

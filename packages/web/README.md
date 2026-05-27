@@ -32,16 +32,27 @@ Set `SCHEMA_URL` to point at a non-default backend (defaults to
 
 ## Playback
 
-The quality picker in the header maps to a coarse preset:
+Playback is MSE-only. The header has two controls:
 
-| Choice           | What the player does                                                                                                                                                                                                                                   |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Max (lossless)   | Sends `Accept: audio/flac, <fallback>`. Server passes the source through when it's already FLAC, otherwise encodes the first fallback at the highest preset. Bare `<audio>` plays the FLAC blob; no MSE. Disabled when the browser cannot decode FLAC. |
-| High / Med / Low | Sends `Accept: <encoded-formats>` and the matching `quality` GraphQL enum. The server picks the first acceptable container (mp4/opus or mp3) and chunks it; the player consumes the chunks via MSE.                                                    |
+- **Quality** — `Max` asks for the best representation of the source the
+  browser can play (lossless or a copy where possible); the lower tiers
+  (`High`/`Med`/`Low`/`Min`) force a transcode at an ascending bitrate.
+- **Codec** — a _preference_ used only when the server has to transcode
+  (below Max, or a lossy source at Max with no matching copy): `Prefer
+Opus` or `Prefer MP3`. Sources are still copied without re-encoding
+  whenever possible regardless of this.
 
-`Accept` is derived once per page load from `MediaSource.isTypeSupported`
-checks and `<audio>.canPlayType('audio/flac')`. MSE failures or
-unreachable endpoints raise a toast.
+`capabilities.ts` probes `MediaSource.isTypeSupported` once per page load
+and exposes the supported formats as the preference-ordered
+`losslessFormats` / `lossyFormats` MIME lists. The player sends these
+plus `quality` as the `TrackFormat`, and reads `Track.delivery` back —
+`{ url, mimeType, isPassthrough, description }` — so it learns the
+SourceBuffer MIME type and a tooltip-ready summary in one query, then
+streams chunk byte ranges via the `trackManifest` subscription (see the
+backend README). The format badge by the track title shows the resolved
+codec, distinguishing a copy (no re-encode) from a transcode, with
+`description` as its tooltip. MSE failures or unreachable endpoints raise
+a toast.
 
 ## Tag editing
 

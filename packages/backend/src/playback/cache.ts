@@ -23,17 +23,19 @@ import { env } from '../env.js';
 import { logger } from '../logger.js';
 import { type EncodeTarget, type FfmpegHandle, spawnEncoder, targetKey } from './encoder.js';
 import { type IndexFile, type LiveTailHandle, startLiveTail } from './live-tail.js';
+import { isPassthrough } from './resolve.js';
 
 const tracer = trace.getTracer('lofify.playback.cache');
 import { makeMp3Scanner } from './scan-mp3.js';
 import { mp4Scanner } from './scan-mp4.js';
 import type { Scanner } from './scan-types.js';
+import { webmScanner } from './scan-webm.js';
 
 export type CacheRequest = {
   trackId: string;
   sourceMtime: Date;
   sourcePath: string;
-  /** Lower-cased on-disk codec of the source file, e.g. `'flac'`, `'mp3'`. Used to decide whether `-c:a copy` is safe (source codec == target codec). */
+  /** Abbreviated on-disk codec of the source file, e.g. `'flac'`, `'mp3'`, `'vorbis'`, `'opus'` (i.e. `Track.sourceFormat`). Used to decide whether `-c:a copy` is safe (source codec == target codec). */
   sourceCodec: string;
   target: EncodeTarget;
 };
@@ -84,13 +86,12 @@ function scannerFor(target: EncodeTarget, chunkDurationSeconds: number): Scanner
     case 'mp4':
       // fmp4 reads its own per-fragment timing from tfdt, so it needs no nominal hint.
       return mp4Scanner;
+    case 'webm':
+      // WebM clusters carry their own absolute Timecode, like fmp4 fragments.
+      return webmScanner;
     case 'mp3':
       return makeMp3Scanner(chunkDurationSeconds);
   }
-}
-
-function isPassthrough(req: CacheRequest): boolean {
-  return req.sourceCodec.toLowerCase() === req.target.format.codec;
 }
 
 function entryDir(root: string, trackId: string, sourceMtime: Date): string {
@@ -167,7 +168,7 @@ export function createCache(opts: CacheOpts): Cache {
       target: req.target,
       outPath: binPath,
       chunkDurationSeconds,
-      passthrough: isPassthrough(req),
+      passthrough: isPassthrough(req.target, req.sourceCodec),
     });
     const liveTail = startLiveTail({
       scanner: scannerFor(req.target, chunkDurationSeconds),

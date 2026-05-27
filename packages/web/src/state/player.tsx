@@ -14,7 +14,7 @@ import {
 import { PlaybackBarDocument } from '../components/playback-bar.tsx';
 import { TracksDocument } from '../components/track-list.tsx';
 import { getAudioElement } from '../lib/audio-element.ts';
-import { type Capabilities, capabilities } from '../lib/capabilities.ts';
+import { type Capabilities, capabilities, type LossyPreference } from '../lib/capabilities.ts';
 import { graphql, type ResultOf, type VariablesOf } from '../lib/gql.ts';
 import { gqlRequest } from '../lib/gql-request.ts';
 import { createPlayer, type CreatePlayerError, type Player as MsePlayer } from '../lib/mse.ts';
@@ -25,8 +25,12 @@ export const TrackByIdDocument = graphql(
     query TrackById($id: ID!, $format: TrackFormat) {
       track(id: $id) {
         id
-        isLossless
-        url(format: $format)
+        delivery(format: $format) {
+          url
+          mimeType
+          isPassthrough
+          description
+        }
         ...PlaybackBar
       }
     }
@@ -55,49 +59,39 @@ export const TrackManifestDocument = graphql(`
 /** Derived from the `TrackById` variables so the frontend's enum strings can't drift from the GraphQL schema. */
 export type TrackFormat = NonNullable<VariablesOf<typeof TrackByIdDocument>['format']>;
 export type Quality = TrackFormat['quality'];
-export type FormatLossy = TrackFormat['formatLossy'];
 
 /** Server-emitted manifest snapshot. The player consumes this shape directly. */
 export type ManifestSnapshot = NonNullable<ResultOf<typeof TrackManifestDocument>['trackManifest']>;
 export type ManifestChunk = ManifestSnapshot['chunks'][number];
 
 type TrackNode = NonNullable<ResultOf<typeof TrackByIdDocument>['track']>;
+/** The resolved delivery plan for the current track, as returned by the server. */
+export type Delivery = TrackNode['delivery'];
 
-/** Resolved delivery codec inferred from `(quality, formatLossy, isLossless)` — the same rule the server uses in `resolve.ts`. */
-export type ActualFormat = 'flac' | 'opus' | 'mp3';
-
-function resolveActualFormat(
-  quality: Quality,
-  formatLossy: FormatLossy,
-  isLossless: boolean,
-): ActualFormat {
-  if (isLossless && quality === 'MAX') return 'flac';
-  return formatLossy === 'OPUS' ? 'opus' : 'mp3';
+/** Build the `TrackFormat` to request: quality plus the capability-derived MIME lists, with the lossy list ordered by the user's codec preference. */
+export function trackFormatFor(quality: Quality, preference: LossyPreference): TrackFormat {
+  return {
+    quality,
+    losslessFormats: capabilities.losslessFormats,
+    lossyFormats: capabilities.lossyFormats(preference),
+  };
 }
 
-function contentTypeFor(actual: ActualFormat): string {
-  switch (actual) {
-    case 'flac':
-      return 'audio/mp4; codecs="flac"';
-    case 'opus':
-      return 'audio/mp4; codecs="opus"';
-    case 'mp3':
-      return 'audio/mpeg';
-  }
+export function isLossyPreferenceAvailable(
+  p: LossyPreference,
+  caps: Capabilities = capabilities,
+): boolean {
+  return p === 'OPUS' ? caps.opusSupported : caps.mp3Supported;
 }
 
-export function isFormatLossyAvailable(f: FormatLossy, caps: Capabilities = capabilities): boolean {
-  return f === 'OPUS' ? caps.opusInMp4 : caps.mp3;
-}
-
-export function defaultFormatLossy(caps: Capabilities = capabilities): FormatLossy {
-  return caps.opusInMp4 ? 'OPUS' : 'MP3';
+export function defaultLossyPreference(caps: Capabilities = capabilities): LossyPreference {
+  return caps.opusSupported ? 'OPUS' : 'MP3';
 }
 
 const QUALITY_STORAGE_KEY = 'lofify.player.quality';
 const QUALITY_VALUES: readonly Quality[] = ['MAX', 'HIGH', 'MEDIUM', 'LOW', 'MIN'];
-const FORMAT_STORAGE_KEY = 'lofify.player.format-lossy';
-const FORMAT_VALUES: readonly FormatLossy[] = ['OPUS', 'MP3'];
+const FORMAT_STORAGE_KEY = 'lofify.player.lossy-preference';
+const FORMAT_VALUES: readonly LossyPreference[] = ['OPUS', 'MP3'];
 
 const GRAPHQL_URL = import.meta.env.VITE_GRAPHQL_URL ?? '/graphql';
 
@@ -121,15 +115,15 @@ function loadStoredQuality(): Quality {
   return 'MAX';
 }
 
-function loadStoredFormatLossy(): FormatLossy {
-  if (typeof window === 'undefined') return defaultFormatLossy();
+function loadStoredLossyPreference(): LossyPreference {
+  if (typeof window === 'undefined') return defaultLossyPreference();
   const stored = window.localStorage.getItem(FORMAT_STORAGE_KEY);
   if (stored && (FORMAT_VALUES as readonly string[]).includes(stored)) {
-    const f = stored as FormatLossy;
-    if (!isFormatLossyAvailable(f)) return defaultFormatLossy();
-    return f;
+    const p = stored as LossyPreference;
+    if (!isLossyPreferenceAvailable(p)) return defaultLossyPreference();
+    return p;
   }
-  return defaultFormatLossy();
+  return defaultLossyPreference();
 }
 
 export type BufferedRange = { start: number; end: number };
@@ -144,11 +138,11 @@ type PlayerCtx = {
   readySeconds: number;
   quality: Quality;
   setQuality: (q: Quality) => void;
-  formatLossy: FormatLossy;
-  formatLossyAvailability: Record<FormatLossy, boolean>;
-  setFormatLossy: (f: FormatLossy) => void;
-  /** Codec actually being delivered for the current track, derived from `(quality, formatLossy, track.isLossless)`. `null` between track changes or when no track is loaded. */
-  actualFormat: ActualFormat | null;
+  lossyPreference: LossyPreference;
+  lossyPreferenceAvailability: Record<LossyPreference, boolean>;
+  setLossyPreference: (p: LossyPreference) => void;
+  /** Resolved delivery plan for the current track (codec, MIME, copy-vs-transcode, description). `null` between track changes or when no track is loaded. */
+  delivery: Delivery | null;
   error: PlayerError | null;
   dismissError: () => void;
   play: (id: string) => void;
@@ -179,16 +173,17 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const [bufferedRanges, setBufferedRanges] = useState<BufferedRange[]>([]);
   const [readySeconds, setReadySeconds] = useState(0);
   const [quality, setQualityState] = useState<Quality>(loadStoredQuality);
-  const [formatLossy, setFormatLossyState] = useState<FormatLossy>(loadStoredFormatLossy);
+  const [lossyPreference, setLossyPreferenceState] =
+    useState<LossyPreference>(loadStoredLossyPreference);
   const [error, setError] = useState<PlayerError | null>(null);
-  const [actualFormat, setActualFormat] = useState<ActualFormat | null>(null);
+  const [delivery, setDelivery] = useState<Delivery | null>(null);
   const setQuality = useCallback((q: Quality) => {
     setQualityState(q);
     if (typeof window !== 'undefined') window.localStorage.setItem(QUALITY_STORAGE_KEY, q);
   }, []);
-  const setFormatLossy = useCallback((f: FormatLossy) => {
-    setFormatLossyState(f);
-    if (typeof window !== 'undefined') window.localStorage.setItem(FORMAT_STORAGE_KEY, f);
+  const setLossyPreference = useCallback((p: LossyPreference) => {
+    setLossyPreferenceState(p);
+    if (typeof window !== 'undefined') window.localStorage.setItem(FORMAT_STORAGE_KEY, p);
   }, []);
   const dismissError = useCallback(() => setError(null), []);
   const nextRef = useRef<() => void>(() => undefined);
@@ -252,13 +247,17 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         const nextId = data.tracks?.edges[0]?.node.id;
         if (!nextId) return;
         await queryClient.prefetchQuery({
-          queryKey: ['track', nextId, quality, formatLossy],
+          queryKey: ['track', nextId, quality, lossyPreference],
           queryFn: ({ signal }) =>
-            gqlRequest(TrackByIdDocument, { id: nextId, format: { quality, formatLossy } }, signal),
+            gqlRequest(
+              TrackByIdDocument,
+              { id: nextId, format: trackFormatFor(quality, lossyPreference) },
+              signal,
+            ),
         });
       })();
     },
-    [queryClient, quality, formatLossy],
+    [queryClient, quality, lossyPreference],
   );
 
   const loadTrack = useCallback(
@@ -267,24 +266,22 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       setPositionSeconds(0);
       setBufferedRanges([]);
       setReadySeconds(0);
-      setActualFormat(null);
+      setDelivery(null);
       const audio = audioRef.current;
       if (!audio) return;
       playerRef.current?.dispose();
       playerRef.current = null;
       manifestUnsubRef.current?.();
 
-      const actual = resolveActualFormat(quality, formatLossy, track.isLossless);
-      const contentType = contentTypeFor(actual);
-      setActualFormat(actual);
+      setDelivery(track.delivery);
 
       const meta = readFragment(PlaybackBarDocument, track);
       const totalSeconds = meta.duration.seconds;
 
       const created = await createPlayer(
         audio,
-        resolvePlaybackUrl(track.url),
-        contentType,
+        resolvePlaybackUrl(track.delivery.url),
+        track.delivery.mimeType,
         totalSeconds,
         { onError: (err) => setError({ message: errorMessageFor(err) }) },
       );
@@ -299,7 +296,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       let chunks: ManifestChunk[] = [];
       manifestUnsubRef.current = subscribe(
         TrackManifestDocument,
-        { trackId: track.id, format: { quality, formatLossy } },
+        { trackId: track.id, format: trackFormatFor(quality, lossyPreference) },
         {
           next: (data) => {
             const snap = data.trackManifest;
@@ -329,19 +326,23 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       await audio.play().catch(() => undefined);
       prefetchNext(track.id);
     },
-    [prefetchNext, quality, formatLossy],
+    [prefetchNext, quality, lossyPreference],
   );
 
   const playTrack = useCallback(
     async (id: string) => {
       const data = await queryClient.fetchQuery({
-        queryKey: ['track', id, quality, formatLossy],
+        queryKey: ['track', id, quality, lossyPreference],
         queryFn: ({ signal }) =>
-          gqlRequest(TrackByIdDocument, { id, format: { quality, formatLossy } }, signal),
+          gqlRequest(
+            TrackByIdDocument,
+            { id, format: trackFormatFor(quality, lossyPreference) },
+            signal,
+          ),
       });
       if (data.track) await loadTrack(data.track);
     },
-    [queryClient, quality, formatLossy, loadTrack],
+    [queryClient, quality, lossyPreference, loadTrack],
   );
 
   const togglePlay = useCallback(() => {
@@ -393,13 +394,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       readySeconds,
       quality,
       setQuality,
-      formatLossy,
-      formatLossyAvailability: {
-        OPUS: isFormatLossyAvailable('OPUS'),
-        MP3: isFormatLossyAvailable('MP3'),
+      lossyPreference,
+      lossyPreferenceAvailability: {
+        OPUS: isLossyPreferenceAvailable('OPUS'),
+        MP3: isLossyPreferenceAvailable('MP3'),
       },
-      setFormatLossy,
-      actualFormat,
+      setLossyPreference,
+      delivery,
       error,
       dismissError,
       play: (id) => void playTrack(id),
@@ -416,9 +417,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       readySeconds,
       quality,
       setQuality,
-      formatLossy,
-      setFormatLossy,
-      actualFormat,
+      lossyPreference,
+      setLossyPreference,
+      delivery,
       error,
       dismissError,
       playTrack,

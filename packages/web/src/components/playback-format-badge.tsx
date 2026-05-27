@@ -1,7 +1,7 @@
-import { Gem, Wifi, WifiHigh, WifiLow, WifiZero } from 'lucide-react';
+import { Copy, Gem, Wifi, WifiHigh, WifiLow, WifiZero } from 'lucide-react';
 import type { ComponentType, SVGProps } from 'react';
 
-import { type ActualFormat, type Quality, usePlayer } from '../state/player.tsx';
+import { type Delivery, type Quality, usePlayer } from '../state/player.tsx';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip.tsx';
 
 type IconComponent = ComponentType<SVGProps<SVGSVGElement>>;
@@ -13,12 +13,6 @@ type BadgeShape = {
   tooltip: string;
 };
 
-const FORMAT_LABEL: Record<ActualFormat, string> = {
-  flac: 'FLAC',
-  opus: 'Opus',
-  mp3: 'MP3',
-};
-
 // Lucide's wifi family has four levels (full → zero). The four lossy tiers map one-to-one onto them, descending: high → full, medium, low, min → the bare dot.
 const LOSSY_TIER_ICON: Record<Exclude<Quality, 'MAX'>, IconComponent> = {
   HIGH: Wifi,
@@ -27,26 +21,23 @@ const LOSSY_TIER_ICON: Record<Exclude<Quality, 'MAX'>, IconComponent> = {
   MIN: WifiZero,
 };
 
-function badgeFor(quality: Quality, actual: ActualFormat | null): BadgeShape | null {
-  if (!actual) return null;
-  if (quality === 'MAX') {
-    if (actual === 'flac') {
-      return { Icon: Gem, label: 'FLAC', tone: 'accent', tooltip: 'Lossless · FLAC' };
-    }
-    return {
-      Icon: Wifi,
-      label: FORMAT_LABEL[actual],
-      tone: 'warn',
-      tooltip: `Lossless requested, but the source is lossy — delivered as ${FORMAT_LABEL[actual]}.`,
-    };
-  }
-  const tierLabel = quality.charAt(0) + quality.slice(1).toLowerCase();
-  return {
-    Icon: LOSSY_TIER_ICON[quality],
-    label: FORMAT_LABEL[actual],
-    tone: 'muted',
-    tooltip: `${tierLabel} · ${FORMAT_LABEL[actual]}`,
-  };
+/** Short codec label from the delivery MIME type. */
+function codecLabel(mimeType: string): string {
+  if (mimeType.includes('flac')) return 'FLAC';
+  if (mimeType.includes('opus')) return 'Opus';
+  if (mimeType.includes('vorbis')) return 'Vorbis';
+  return 'MP3';
+}
+
+function badgeFor(quality: Quality, delivery: Delivery): BadgeShape {
+  const label = codecLabel(delivery.mimeType);
+  const tooltip = delivery.description;
+  // FLAC is always lossless; a passthrough copy is the original bytes — both are "no quality loss".
+  if (label === 'FLAC') return { Icon: Gem, label, tone: 'accent', tooltip };
+  if (delivery.isPassthrough) return { Icon: Copy, label, tone: 'accent', tooltip };
+  // A transcode. At MAX that means a lossy source delivered lossy (or FLAC unavailable) — flag it; below MAX it's an expected tier.
+  if (quality === 'MAX') return { Icon: Wifi, label, tone: 'warn', tooltip };
+  return { Icon: LOSSY_TIER_ICON[quality], label, tone: 'muted', tooltip };
 }
 
 const TONE_CLASS: Record<BadgeShape['tone'], string> = {
@@ -56,10 +47,9 @@ const TONE_CLASS: Record<BadgeShape['tone'], string> = {
 };
 
 export function PlaybackFormatBadge() {
-  const { current, quality, actualFormat } = usePlayer();
-  const shape = current ? badgeFor(quality, actualFormat) : null;
-  if (!shape) return null;
-  const { Icon, label, tone, tooltip } = shape;
+  const { current, quality, delivery } = usePlayer();
+  if (!current || !delivery) return null;
+  const { Icon, label, tone, tooltip } = badgeFor(quality, delivery);
   return (
     <TooltipProvider delayDuration={150}>
       <Tooltip>

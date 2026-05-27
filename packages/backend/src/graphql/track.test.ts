@@ -273,17 +273,18 @@ test('Query.track returns derived format/duration and a signed url', async () =>
   expect(t.format).toBe('ogg vorbis');
   expect(t.duration).toEqual({ seconds: 332, formatted: '05:32' });
 
-  // Default url() with no format yields the canonical q:max/f:opus path.
+  // Default url() with no format resolves this vorbis source to opus-in-mp4 at max (no opus copy
+  // possible, so it transcodes) and bakes the concrete target into the path.
   expect(t.url).toMatchInlineSnapshot(
-    `"/play/5daebd929253c90023440fa891febcdd1ce4604e4b2236cc82e4603e9a17a425/q:max/f:opus/01934567-89ab-7cde-8123-456789abcdef"`,
+    `"/play/9190c88f0efa8d31b3086857a0c37d3bcc2215be76e637488940c86fa2a600e3/c:mp4/a:opus/q:max/01934567-89ab-7cde-8123-456789abcdef"`,
   );
 
   const { data: signed } = await gqlRequest(app)
     .query(TrackUrlQuery)
-    .variables({ id, format: { quality: 'HIGH', formatLossy: 'MP3' } })
+    .variables({ id, format: { quality: 'HIGH', lossyFormats: ['audio/mpeg'] } })
     .expectNoErrors();
   expect(signed.track!.url).toMatchInlineSnapshot(
-    `"/play/b3d71a400093a5a9a8e3e1db5ebd59c5a9640161adc8a7b2c0681422563d1506/q:h/f:mp3/01934567-89ab-7cde-8123-456789abcdef"`,
+    `"/play/1f81408837b9000aee36727a92ef4b53da39c7bddc8a2d96b9e7e281904e672c/c:mp3/a:mp3/q:h/01934567-89ab-7cde-8123-456789abcdef"`,
   );
 });
 
@@ -317,7 +318,10 @@ test('Track.url rejects quality values outside the Quality enum', async () => {
   const { errors } = await gqlRequest(app)
     .query(TrackUrlQuery)
     // Cast around gql.tada's literal-union typing so we can exercise the schema rejection at runtime.
-    .variables({ id, format: { quality: 'ULTRA' as 'LOW', formatLossy: 'OPUS' } })
+    .variables({
+      id,
+      format: { quality: 'ULTRA' as 'LOW', lossyFormats: ['audio/mp4; codecs="opus"'] },
+    })
     .expectErrors();
   expect(errors[0]?.message).toMatch(/Quality/);
 });

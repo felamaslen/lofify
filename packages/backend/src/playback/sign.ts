@@ -1,18 +1,15 @@
 import crypto from 'node:crypto';
 
 import { env } from '../env.js';
-import { formatLossyToToken, type ParsedOptions, qualityToToken } from './options.js';
-
-function encodeOptionsSegments(opts: ParsedOptions): string[] {
-  return [`q:${qualityToToken(opts.quality)}`, `f:${formatLossyToToken(opts.formatLossy)}`];
-}
+import type { EncodeTarget } from './encoder.js';
+import { encodeTargetSegments } from './options.js';
 
 export function signPayload(payload: string): string {
   return crypto.createHmac('sha256', env.PLAYBACK_SIGNING_SECRET).update(payload).digest('hex');
 }
 
-export function signPlaybackUrl(id: string, opts: ParsedOptions): string {
-  const payload = [...encodeOptionsSegments(opts), id].join('/');
+export function signPlaybackUrl(id: string, target: EncodeTarget): string {
+  const payload = [...encodeTargetSegments(target), id].join('/');
   return `/play/${signPayload(payload)}/${payload}`;
 }
 

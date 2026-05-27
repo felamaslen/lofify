@@ -15,7 +15,7 @@
     "dev": "pnpm -r --parallel dev",
     "build": "pnpm -r build",
     "codegen": "pnpm -r --parallel codegen",
-    "prepare": "husky",
+    "prepare": "husky || true",
     "precommit:codegen": "sh scripts/precommit-codegen.sh",
     "db:generate": "pnpm --filter @lofify/backend db:generate",
     "db:migrate": "pnpm --filter @lofify/backend db:migrate",

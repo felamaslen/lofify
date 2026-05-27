@@ -3,7 +3,7 @@
  */
 
 /**
- * Coarse playback quality. `MIN` / `LOW` / `MEDIUM` / `HIGH` map to lossy presets in ascending bitrate; `MAX` asks for lossless when the source is lossless and the highest lossy preset (in `formatLossy`) when it isn't.
+ * Coarse playback quality. `MIN` / `LOW` / `MEDIUM` / `HIGH` ask for a transcode at an ascending bitrate; `MAX` delivers the best representation of the source the client can play, copying without re-encoding whenever possible.
  *
  * @gqlEnum
  */
@@ -16,21 +16,16 @@ export enum Quality {
 }
 
 /**
- * Codec the lossy delivery path uses.
+ * How the client wants the track delivered. The client advertises what it can decode as two preference-ordered MIME lists: `losslessFormats` (e.g. `audio/mp4; codecs="flac"`) and `lossyFormats` (e.g. `audio/webm; codecs="opus"`). `lossyFormats` must be non-empty.
  *
- * @gqlEnum
- */
-export enum FormatLossy {
-  OPUS = 'OPUS',
-  MP3 = 'MP3',
-}
-
-/**
- * How the client wants the track delivered. `formatLossy` is always required — even when `quality: MAX`, the server falls through to a lossy stream for non-lossless sources, so it always needs a codec to fall back to.
+ * Below `MAX` the server transcodes into the first `lossyFormats` entry it can encode to (opus or mp3) at the requested bitrate. At `MAX` it picks the best representation of the source the client can play, copying without re-encoding whenever possible.
  *
  * @gqlInput
  */
 export type TrackFormat = {
   quality: Quality;
-  formatLossy: FormatLossy;
+  /** Preference-ordered MIME types the client can play that carry lossless audio. Consulted at `MAX` for lossless sources. */
+  losslessFormats?: string[] | null;
+  /** Preference-ordered MIME types the client can play that carry lossy audio. At `MAX` the server copies the source into the first one whose codec matches the source, otherwise transcodes into the first it can produce; below `MAX` it transcodes into the first it can produce. Must be non-empty. */
+  lossyFormats: string[];
 };

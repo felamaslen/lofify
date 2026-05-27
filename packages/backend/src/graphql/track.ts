@@ -1,11 +1,19 @@
 import type { ID, Int } from 'grats';
 
 import type { Track as DbTrack } from '../db/schema/index.js';
+import {
+  contentTypeFor,
+  deliveryDescription,
+  isPassthrough,
+  resolveTarget,
+} from '../playback/resolve.js';
 import { signPlaybackUrl } from '../playback/sign.js';
+import { abbreviateCodec, deriveFormat } from './codec.js';
 import { Duration } from './duration.js';
-import { FormatLossy, Quality, type TrackFormat } from './playback-format.js';
+import { Quality, type TrackFormat } from './playback-format.js';
 
-export { FormatLossy, Quality, type TrackFormat };
+export { abbreviateCodec, deriveFormat } from './codec.js';
+export { Quality, type TrackFormat };
 
 /**
  * A single audio file in the library.
@@ -41,18 +49,59 @@ export type Track = {
   sourceMtime: Date;
 };
 
-const DEFAULT_FORMAT: TrackFormat = { quality: Quality.MAX, formatLossy: FormatLossy.OPUS };
+const DEFAULT_FORMAT: TrackFormat = {
+  quality: Quality.MAX,
+  losslessFormats: ['audio/mp4; codecs="flac"'],
+  lossyFormats: ['audio/mp4; codecs="opus"'],
+};
 
 /**
- * Signed URL the client should `GET` (with `Range:` headers) to stream this track. The URL bakes in `format` so a single URL is reusable for the lifetime of a playback session.
+ * Signed URL the client should `GET` (with `Range:` headers) to stream this track. The resolver picks the concrete container + codec from `format` (see `TrackFormat`) and bakes it into the URL, so a single URL is reusable for the lifetime of a playback session and the stateless `/play` route needs no capability data.
  *
- * Defaults to `{ quality: MAX, formatLossy: OPUS }`.
+ * Defaults to a MAX request supporting only flac-in-mp4 and opus-in-mp4 — the universally safe baseline.
  *
  * @gqlField
  */
 export function url(track: Track, format?: TrackFormat | null): string {
-  const f = format ?? DEFAULT_FORMAT;
-  return signPlaybackUrl(track.id, { quality: f.quality, formatLossy: f.formatLossy });
+  const target = resolveTarget(
+    { isLossless: track.isLossless, sourceCodec: track.sourceFormat },
+    format ?? DEFAULT_FORMAT,
+  );
+  return signPlaybackUrl(track.id, target);
+}
+
+/**
+ * How a track will be delivered for a requested `format`: the URL to fetch, the MIME type the bytes carry, whether it's a copy or a transcode, and a short description for the format tooltip. Resolves the same way `url` does, so a client can read everything it needs from one field.
+ *
+ * @gqlType
+ */
+export type TrackDelivery = {
+  /** Signed URL the client should `GET` (with `Range:` headers) to stream this track. @gqlField */
+  url: string;
+  /** MIME type the bytes are served as — the value to pass to `MediaSource.addSourceBuffer`. @gqlField */
+  mimeType: string;
+  /** Whether the source is delivered without re-encoding (a container-only copy). @gqlField */
+  isPassthrough: boolean;
+  /** Short human-readable summary of the delivery, e.g. "Original Vorbis, copied without re-encoding" or "Transcoded to Opus at 256 kbps". @gqlField */
+  description: string;
+};
+
+/**
+ * Delivery plan for this track at the given `format`. See `TrackDelivery`. Defaults to the same baseline as `url`.
+ *
+ * @gqlField */
+export function delivery(track: Track, format?: TrackFormat | null): TrackDelivery {
+  const target = resolveTarget(
+    { isLossless: track.isLossless, sourceCodec: track.sourceFormat },
+    format ?? DEFAULT_FORMAT,
+  );
+  const passthrough = isPassthrough(target, track.sourceFormat);
+  return {
+    url: signPlaybackUrl(track.id, target),
+    mimeType: contentTypeFor(target),
+    isPassthrough: passthrough,
+    description: deliveryDescription(target, passthrough),
+  };
 }
 
 /**
@@ -62,35 +111,6 @@ export function url(track: Track, format?: TrackFormat | null): string {
  */
 export function path(track: Track): string {
   return track.file;
-}
-
-export function deriveFormat(format: string, codec: string): string {
-  const f = format.toLowerCase();
-  const c = codec.toLowerCase();
-  if (f === c) return f;
-  if (c.includes(f) || f.includes(c)) return c.length >= f.length ? c : f;
-  return `${f} ${c}`;
-}
-
-/** Collapse the verbose `music-metadata` codec string (e.g. `"mpeg 1 layer 3"`) into a short, human-friendly abbreviation suitable for display (e.g. `"mp3"`). Falls back to the raw input when no rule matches. */
-export function abbreviateCodec(raw: string): string {
-  const c = raw.toLowerCase().trim();
-  if (!c) return c;
-  if (/\bmpeg\b.*\blayer\s*3\b/.test(c) || c === 'mp3') return 'mp3';
-  if (/\bmpeg\b.*\blayer\s*2\b/.test(c) || c === 'mp2') return 'mp2';
-  if (c === 'flac') return 'flac';
-  if (c === 'alac' || c.includes('apple lossless')) return 'alac';
-  if (c === 'opus') return 'opus';
-  if (c.includes('vorbis')) return 'vorbis';
-  if (c.includes('aac')) return 'aac';
-  if (c.includes('windows media') || c === 'wma') return 'wma';
-  if (c.includes("monkey's audio") || c === 'ape') return 'ape';
-  if (c.includes('wavpack') || c === 'wv') return 'wv';
-  if (c.includes('musepack') || c === 'mpc') return 'mpc';
-  if (c === 'tta' || c.includes('true audio')) return 'tta';
-  if (c.startsWith('pcm')) return 'pcm';
-  if (c.includes('dsd')) return 'dsd';
-  return c;
 }
 
 export function toGqlTrack(row: DbTrack): Track {

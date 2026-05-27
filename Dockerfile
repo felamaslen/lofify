@@ -9,8 +9,9 @@ WORKDIR /app
 
 # ---------- deps ----------
 FROM base AS deps
-COPY pnpm-workspace.yaml package.json pnpm-lock.yaml* tsconfig.json tsconfig.build.json patches ./
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml* tsconfig.json tsconfig.build.json ./
 COPY packages ./packages
+COPY patches ./patches
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
     pnpm install --frozen-lockfile || pnpm install
 

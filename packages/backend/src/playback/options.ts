@@ -1,6 +1,5 @@
-import { z } from 'zod';
-
-import { FormatLossy, Quality } from '../graphql/playback-format.js';
+import { Quality } from '../graphql/playback-format.js';
+import type { EncodeFormat, EncodeTarget } from './encoder.js';
 
 const QUALITY_TO_URL = {
   [Quality.MIN]: 'min',
@@ -14,35 +13,37 @@ const URL_TO_QUALITY = Object.fromEntries(
   Object.entries(QUALITY_TO_URL).map(([k, v]) => [v, k]),
 ) as Record<string, Quality>;
 
-const FORMAT_LOSSY_TO_URL = {
-  [FormatLossy.OPUS]: 'opus',
-  [FormatLossy.MP3]: 'mp3',
-} satisfies Record<FormatLossy, string>;
-const URL_TO_FORMAT_LOSSY = Object.fromEntries(
-  Object.entries(FORMAT_LOSSY_TO_URL).map(([k, v]) => [v, k]),
-) as Record<string, FormatLossy>;
+// The signed URL bakes a fully-resolved `(container, codec)` rather than the client's request, because
+// `auto` resolution at MAX depends on client capabilities the stateless `/play` route never sees. The
+// resolver runs once in `Track.url`; the route and the manifest subscription just decode the result.
+const VALID_FORMATS = [
+  'mp4/opus',
+  'mp4/flac',
+  'webm/opus',
+  'webm/vorbis',
+  'mp3/mp3',
+] as const satisfies `${EncodeFormat['container']}/${EncodeFormat['codec']}`[];
 
 export function qualityToToken(q: Quality): string {
   return QUALITY_TO_URL[q];
 }
 
-export function formatLossyToToken(f: FormatLossy): string {
-  return FORMAT_LOSSY_TO_URL[f];
+/** URL option segments for a resolved target: `c:<container>`, `a:<codec>`, `q:<quality>`. */
+export function encodeTargetSegments(target: EncodeTarget): string[] {
+  return [
+    `c:${target.format.container}`,
+    `a:${target.format.codec}`,
+    `q:${qualityToToken(target.quality)}`,
+  ];
 }
 
-const OptionsSchema = z.object({
-  quality: z.enum(Quality),
-  formatLossy: z.enum(FormatLossy),
-});
-
-export type ParsedOptions = z.infer<typeof OptionsSchema>;
-
 /**
- * Parse the option segments of a `/play/...` URL. The grammar is `q:<min|l|m|h|max>` and `f:<opus|mp3>`, in any order — both are required. Returns `null` if a key repeats, an unknown key appears, a value is outside the supported set, or a required key is missing.
+ * Parse the option segments of a `/play/...` URL into the resolved `EncodeTarget`. The grammar is `c:<container>`, `a:<codec>` and `q:<min|l|m|h|max>`, in any order — all three are required. Returns `null` if a key repeats, an unknown key appears, a value is outside the supported set, a required key is missing, or the `(container, codec)` pair isn't one the encoder produces.
  */
-export function parseOptionSegments(segments: string[]): ParsedOptions | null {
+export function parseOptionSegments(segments: string[]): EncodeTarget | null {
+  let container: string | undefined;
+  let codec: string | undefined;
   let quality: Quality | undefined;
-  let formatLossy: FormatLossy | undefined;
   for (const segment of segments) {
     if (segment === '') continue;
     const idx = segment.indexOf(':');
@@ -50,6 +51,14 @@ export function parseOptionSegments(segments: string[]): ParsedOptions | null {
     const key = segment.slice(0, idx);
     const value = segment.slice(idx + 1);
     switch (key) {
+      case 'c':
+        if (container !== undefined) return null;
+        container = value;
+        break;
+      case 'a':
+        if (codec !== undefined) return null;
+        codec = value;
+        break;
       case 'q': {
         if (quality !== undefined) return null;
         const mapped = URL_TO_QUALITY[value];
@@ -57,18 +66,15 @@ export function parseOptionSegments(segments: string[]): ParsedOptions | null {
         quality = mapped;
         break;
       }
-      case 'f': {
-        if (formatLossy !== undefined) return null;
-        const mapped = URL_TO_FORMAT_LOSSY[value];
-        if (!mapped) return null;
-        formatLossy = mapped;
-        break;
-      }
       default:
         return null;
     }
   }
-  if (quality === undefined || formatLossy === undefined) return null;
-  const result = OptionsSchema.safeParse({ quality, formatLossy });
-  return result.success ? result.data : null;
+  if (container === undefined || codec === undefined || quality === undefined) return null;
+  const pair = `${container}/${codec}`;
+  if (!(VALID_FORMATS as readonly string[]).includes(pair)) return null;
+  return {
+    format: { container, codec } as EncodeFormat,
+    quality,
+  };
 }
