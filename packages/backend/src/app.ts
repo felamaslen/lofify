@@ -11,7 +11,9 @@ import { createHandler as createSseHandler } from 'graphql-sse/lib/use/fastify';
 
 import { env, libraryPaths } from './env.js';
 import { buildSchema } from './graphql/index.js';
+import { defaultCache } from './playback/cache.js';
 import { registerPlaybackRoute } from './playback/route.js';
+import { startCacheSweepSchedule } from './playback/sweep.js';
 import { startScanSchedule } from './scanner/cron.js';
 import { watchLibrary } from './scanner/watch.js';
 
@@ -77,8 +79,10 @@ async function buildApp(): Promise<FastifyInstance> {
 
   const watcher = watchLibrary(libraryPaths);
   const stopSchedule = startScanSchedule();
+  const stopSweep = startCacheSweepSchedule(defaultCache);
   app.addHook('onClose', async () => {
     stopSchedule();
+    stopSweep();
     await watcher.close();
   });
 

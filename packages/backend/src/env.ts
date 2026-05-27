@@ -29,7 +29,13 @@ const Schema = z.object({
   TRANSCODE_MAX_PARALLEL: z.coerce.number().int().positive().default(12),
 
   /** Persistent directory where the unified per-entry cache writes `<trackId>-<mtimeMs>/<targetKey>.{bin,idx}`. Survives process restarts; the `.idx` sidecar is the durable manifest. Defaults to `${os.tmpdir()}/lofify-cache`. */
-  PLAYBACK_CACHE_DIR: z.string().optional(),
+  DISK_CACHE_DIR: z.string().optional(),
+
+  /** Soft byte budget for the on-disk playback cache. When set, completed entries are swept least-recently-accessed-first once total usage exceeds this value. Unset disables sweeping, leaving the cache unbounded. */
+  DISK_CACHE_MAX_BYTES: z.coerce.number().int().positive().optional(),
+
+  /** Cron expression for the periodic cache sweep. Empty disables the schedule (the post-transcode and ENOSPC sweeps still run). Has no effect unless `DISK_CACHE_MAX_BYTES` is set. */
+  DISK_CACHE_SWEEP_CRON: z.string().default('*/15 * * * *'),
 
   /** Absolute path to the built web client (`vite build` output). When unset, defaults to the workspace's `packages/web/dist`. The backend serves these as a catch-all SPA route when the directory exists. */
   WEB_DIST_PATH: z.string().optional(),

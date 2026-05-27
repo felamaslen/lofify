@@ -217,11 +217,15 @@ export function spawnEncoder(opts: EncoderOpts): FfmpegHandle {
               return;
             }
             if (code !== 0) {
-              reject(
-                new Error(
-                  `ffmpeg exited with code ${code} signal ${signal ?? '-'}: ${stderr.trim()}`,
-                ),
+              const error = new Error(
+                `ffmpeg exited with code ${code} signal ${signal ?? '-'}: ${stderr.trim()}`,
               );
+              // ffmpeg reports a full disk on stderr rather than via an errno; tag it so the
+              // cache can recognise it as ENOSPC and trigger an emergency sweep.
+              if (/No space left on device/i.test(stderr)) {
+                (error as Error & { code?: string }).code = 'ENOSPC';
+              }
+              reject(error);
               return;
             }
             resolve();

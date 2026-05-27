@@ -125,7 +125,7 @@ whenever possible:
 | `MIN`/`LOW`/`MEDIUM`/`HIGH` | any      | transcode to the first `lossyFormats` entry the server can encode (opus or mp3) at the preset bitrate                                                    |
 
 Each target maps to one cache entry under
-`PLAYBACK_CACHE_DIR/<trackId>-<sourceMtimeMs>/<targetKey>.{bin,idx}`
+`DISK_CACHE_DIR/<trackId>-<sourceMtimeMs>/<targetKey>.{bin,idx}`
 (`targetKey` includes the container, so `mp4/opus` and `webm/opus` don't
 collide). The `.bin` is what the route streams from; the `.idx` is a
 live-updating JSON manifest (chunk byte ranges + cumulative
@@ -140,6 +140,22 @@ Vorbis-in-Ogg → Vorbis-in-WebM): the codec packets are untouched but the
 output bytes differ from the source, so the remuxed `.bin` is still
 generated and cached. Up to `TRANSCODE_MAX_PARALLEL` ffmpeg encodes run
 concurrently.
+
+The in-memory layer is an LRU over live handles; evicting one keeps the
+`.bin`/`.idx` on disk for a future warm load, so the on-disk footprint
+grows unbounded by default. Set `DISK_CACHE_MAX_BYTES` to bound it:
+once usage exceeds the budget, completed entries are deleted
+least-recently-**accessed** first. Recency and size live in the
+`PlaybackCacheAccess` table (one row per entry dir), so a sweep is a
+query — read the entries oldest-access-first, pick enough to drop under
+budget, delete those dirs — not a disk scan; files on disk with no row
+(orphaned partials) are ignored. The `lastAccess` write is bumped on
+every request (throttled per entry so a streamed track doesn't write
+per range request) which keeps a popular track from ageing out; an
+entry with no row yet sorts oldest (evict-first). The sweep runs after
+each transcode, on `DISK_CACHE_SWEEP_CRON`, and — as a backstop
+that should rarely fire — when a write hits `ENOSPC`. Entries currently
+live in memory or mid-encode are never evicted.
 
 `Track.delivery(format)` returns the resolved `{ url, mimeType,
 isPassthrough, description }` in one field, so a client gets the
@@ -158,18 +174,20 @@ true` snapshot and complete.
 
 ## Env
 
-| Variable                      | Default                                       | Notes                                                                                                                                       |
-| ----------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `BACKEND_HOST`                | `0.0.0.0`                                     |                                                                                                                                             |
-| `BACKEND_PORT`                | `4000`                                        |                                                                                                                                             |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://otel-lgtm:4318`                       | OTLP/HTTP base URL                                                                                                                          |
-| `OTEL_SERVICE_NAME`           | `lofify-backend`                              |                                                                                                                                             |
-| `DATABASE_URL`                | _(unset)_                                     | Postgres connection string for the Drizzle pool.                                                                                            |
-| `LIBRARY_PATH`                | _required_                                    | Comma-separated list of absolute paths to the music library roots. The scanner and chokidar watcher cover every listed directory at boot.   |
-| `SCAN_CONCURRENCY`            | `4`                                           | Max files parsed and upserted in parallel by the scanner.                                                                                   |
-| `SCAN_CRON`                   | `0 2 * * *`                                   | Cron expression for the recurring full library scan. Empty disables.                                                                        |
-| `CORS_ALLOW_ORIGINS`          | `http://localhost:5173,http://127.0.0.1:5173` | Comma-separated allowlist of browser origins. `*` allows any.                                                                               |
-| `PLAYBACK_SIGNING_SECRET`     | `dev-secret`                                  | HMAC key used to sign and verify `/play` URLs.                                                                                              |
-| `TRANSCODE_MAX_PARALLEL`      | `12`                                          | Maximum concurrent ffmpeg encode processes.                                                                                                 |
-| `PLAYBACK_CACHE_DIR`          | `${os.tmpdir()}/lofify-cache`                 | Persistent root for cache entries (`<trackId>-<mtimeMs>/<targetKey>.{bin,idx}`). Survives restarts; point at durable storage in production. |
-| `WEB_DIST_PATH`               | `packages/web/dist`                           | Built web client served as an SPA catch-all when present.                                                                                   |
+| Variable                      | Default                                       | Notes                                                                                                                                                                       |
+| ----------------------------- | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BACKEND_HOST`                | `0.0.0.0`                                     |                                                                                                                                                                             |
+| `BACKEND_PORT`                | `4000`                                        |                                                                                                                                                                             |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://otel-lgtm:4318`                       | OTLP/HTTP base URL                                                                                                                                                          |
+| `OTEL_SERVICE_NAME`           | `lofify-backend`                              |                                                                                                                                                                             |
+| `DATABASE_URL`                | _(unset)_                                     | Postgres connection string for the Drizzle pool.                                                                                                                            |
+| `LIBRARY_PATH`                | _required_                                    | Comma-separated list of absolute paths to the music library roots. The scanner and chokidar watcher cover every listed directory at boot.                                   |
+| `SCAN_CONCURRENCY`            | `4`                                           | Max files parsed and upserted in parallel by the scanner.                                                                                                                   |
+| `SCAN_CRON`                   | `0 2 * * *`                                   | Cron expression for the recurring full library scan. Empty disables.                                                                                                        |
+| `CORS_ALLOW_ORIGINS`          | `http://localhost:5173,http://127.0.0.1:5173` | Comma-separated allowlist of browser origins. `*` allows any.                                                                                                               |
+| `PLAYBACK_SIGNING_SECRET`     | `dev-secret`                                  | HMAC key used to sign and verify `/play` URLs.                                                                                                                              |
+| `TRANSCODE_MAX_PARALLEL`      | `12`                                          | Maximum concurrent ffmpeg encode processes.                                                                                                                                 |
+| `DISK_CACHE_DIR`              | `${os.tmpdir()}/lofify-cache`                 | Persistent root for cache entries (`<trackId>-<mtimeMs>/<targetKey>.{bin,idx}`). Survives restarts; point at durable storage in production.                                 |
+| `DISK_CACHE_MAX_BYTES`        | _(unset)_                                     | Soft byte budget for the on-disk cache. When set, completed entries are swept least-recently-accessed-first once usage exceeds it. Unset leaves the cache unbounded.        |
+| `DISK_CACHE_SWEEP_CRON`       | `*/15 * * * *`                                | Cron expression for the periodic cache sweep. Empty disables the schedule (the post-transcode and ENOSPC sweeps still run). No effect unless `DISK_CACHE_MAX_BYTES` is set. |
+| `WEB_DIST_PATH`               | `packages/web/dist`                           | Built web client served as an SPA catch-all when present.                                                                                                                   |

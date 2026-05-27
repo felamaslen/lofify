@@ -7,18 +7,23 @@
  *   3. Concurrent callers for the same key share a single pending start.
  *   4. The LRU drops in-memory handles but keeps the on-disk `.bin`/`.idx` so the next access can warm-load.
  *
- * The factory shape (`createCache`) exists so tests can run against a fresh root without trampling each other's state; the module also exports a `defaultCache` configured from `env.PLAYBACK_CACHE_DIR` for the production wiring.
+ * Because in-memory eviction leaves files behind, the on-disk footprint is bounded separately by `sweep`: when `maxBytes` is set, completed entries are deleted least-recently-accessed-first. Recency and size live in the `PlaybackCacheAccess` table — `lastAccess` is bumped (throttled) on every `getOrStart`, so a streamed track keeps itself warm, and an entry with no row yet sorts oldest. The sweep picks the oldest non-protected entry one row at a time rather than loading the table; see `sweep.ts` for the surrounding lifecycle.
+ *
+ * The factory shape (`createCache`) exists so tests can run against a fresh root without trampling each other's state; the module also exports a `defaultCache` configured from `env.DISK_CACHE_DIR` for the production wiring.
  */
 
 import { EventEmitter } from 'node:events';
-import { mkdir, readFile, rm, stat } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { SpanStatusCode, trace } from '@opentelemetry/api';
+import { asc, eq, notInArray, sum } from 'drizzle-orm';
 import { LRUCache } from 'lru-cache';
 
 import { DEFAULT_CHUNK_DURATION_SECONDS } from '../config.js';
+import { db } from '../db/client.js';
+import { playbackCacheAccess } from '../db/schema/index.js';
 import { env } from '../env.js';
 import { logger } from '../logger.js';
 import { type EncodeTarget, type FfmpegHandle, spawnEncoder, targetKey } from './encoder.js';
@@ -30,6 +35,7 @@ import { makeMp3Scanner } from './scan-mp3.js';
 import { mp4Scanner } from './scan-mp4.js';
 import type { Scanner } from './scan-types.js';
 import { webmScanner } from './scan-webm.js';
+import { isDiskFullError } from './sweep.js';
 
 export type CacheRequest = {
   trackId: string;
@@ -64,10 +70,14 @@ export type CacheOpts = {
   lruMax?: number;
   /** TTL for in-memory entries since last access. */
   lruTtlSeconds?: number;
+  /** Soft byte budget for the on-disk cache. When set, `sweep` evicts completed entries least-recently-accessed-first once usage exceeds it. Unset leaves the cache unbounded (sweeping is a no-op). */
+  maxBytes?: number;
 };
 
 export type Cache = {
   getOrStart(req: CacheRequest): Promise<CacheEntry>;
+  /** Evict completed on-disk entries least-recently-accessed-first until usage falls below the budget (no-op when `maxBytes` is unset). `targetBytes` overrides the default stop point (`maxBytes`) — emergency sweeps pass a lower value for headroom. */
+  sweep(targetBytes?: number): Promise<{ freedBytes: number; evicted: string[] }>;
   /** Drop all in-memory handles. On-disk cache files are left intact. Intended for tests; production callers should not need this. */
   reset(): void;
 };
@@ -108,6 +118,8 @@ export function createCache(opts: CacheOpts): Cache {
   const lruMax = opts.lruMax ?? 64;
   const lruTtl = (opts.lruTtlSeconds ?? 3600) * 1000;
 
+  const maxBytes = opts.maxBytes;
+
   const lru = new LRUCache<string, InternalEntry>({
     max: lruMax,
     ttl: lruTtl,
@@ -119,6 +131,141 @@ export function createCache(opts: CacheOpts): Cache {
   });
 
   const inFlightStart = new Map<string, Promise<InternalEntry>>();
+
+  // Recency/size of each on-disk entry live in Postgres (`PlaybackCacheAccess`); `sweep` reads that
+  // table to decide evictions. Access bumps fire on every request, so we throttle the per-entry
+  // `lastAccess` write to avoid an UPDATE per range request on a hot track.
+  const lastWrittenAt = new Map<string, number>();
+  const ACCESS_WRITE_THROTTLE_MS = 60_000;
+  // After an emergency sweep, leave 10% headroom so a single freed slot isn't instantly refilled.
+  const EMERGENCY_TARGET_FRACTION = 0.9;
+
+  function dirOf(key: string): string {
+    return key.slice(0, key.lastIndexOf('/'));
+  }
+
+  /** Upsert the access row for an entry dir. `sizeBytes` is written only when supplied (a plain access bump must not zero a recorded size). Failures are logged, never thrown — recency tracking must not break playback. */
+  async function upsertAccess(dirName: string, sizeBytes?: number): Promise<void> {
+    const lastAccess = new Date();
+    try {
+      await db
+        .insert(playbackCacheAccess)
+        .values({ entryDir: dirName, lastAccess, sizeBytes: sizeBytes ?? 0 })
+        .onConflictDoUpdate({
+          target: playbackCacheAccess.entryDir,
+          set: { lastAccess, ...(sizeBytes !== undefined ? { sizeBytes } : {}) },
+        });
+    } catch (err) {
+      logger.warn(
+        `playback cache: failed to record access for ${dirName}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
+  /** Record an access against an entry's dir. The first touch for a dir always writes (creating the row immediately); subsequent touches are throttled. */
+  function bumpAccess(key: string): void {
+    if (maxBytes == null) return;
+    const dir = dirOf(key);
+    const now = Date.now();
+    if (now - (lastWrittenAt.get(dir) ?? 0) < ACCESS_WRITE_THROTTLE_MS) return;
+    lastWrittenAt.set(dir, now);
+    void upsertAccess(dir);
+  }
+
+  /** Persist the completed entry's on-disk size so the sweep can weigh it against the budget. */
+  async function recordEntrySize(dirName: string): Promise<void> {
+    if (maxBytes == null) return;
+    const full = path.join(cacheRoot, dirName);
+    let bytes = 0;
+    try {
+      for (const name of await readdir(full)) {
+        try {
+          bytes += (await stat(path.join(full, name))).size;
+        } catch {
+          // File vanished between readdir and stat; skip it.
+        }
+      }
+    } catch {
+      // Dir gone (evicted already); nothing to record.
+      return;
+    }
+    lastWrittenAt.set(dirName, Date.now());
+    await upsertAccess(dirName, bytes);
+  }
+
+  function protectedDirs(): Set<string> {
+    const dirs = new Set<string>();
+    for (const key of lru.keys()) dirs.add(dirOf(key));
+    for (const key of inFlightStart.keys()) dirs.add(dirOf(key));
+    return dirs;
+  }
+
+  async function totalCachedBytes(): Promise<number> {
+    const [row] = await db
+      .select({ total: sum(playbackCacheAccess.sizeBytes) })
+      .from(playbackCacheAccess);
+    return Number(row?.total ?? 0);
+  }
+
+  async function sweep(targetBytes?: number): Promise<{ freedBytes: number; evicted: string[] }> {
+    if (maxBytes == null) return { freedBytes: 0, evicted: [] };
+    const target = targetBytes ?? maxBytes;
+
+    let total = await totalCachedBytes();
+    if (total <= maxBytes) return { freedBytes: 0, evicted: [] };
+
+    // Evict the oldest non-protected entry one at a time until under target. Recency and size live
+    // in Postgres, so we never load the whole table: each step is an indexed `ORDER BY lastAccess
+    // LIMIT 1` pick. Protected dirs (live in memory or mid-encode) are excluded in SQL, so an active
+    // stream is never deleted; `total` is decremented locally to avoid re-summing each iteration.
+    const evicted: string[] = [];
+    let freedBytes = 0;
+    while (total > target) {
+      const protectedArr = [...protectedDirs()];
+      const [oldest] = await db
+        .select({
+          entryDir: playbackCacheAccess.entryDir,
+          sizeBytes: playbackCacheAccess.sizeBytes,
+        })
+        .from(playbackCacheAccess)
+        .where(
+          protectedArr.length > 0
+            ? notInArray(playbackCacheAccess.entryDir, protectedArr)
+            : undefined,
+        )
+        .orderBy(asc(playbackCacheAccess.lastAccess))
+        .limit(1);
+      if (!oldest) break; // everything left is protected
+      try {
+        await rm(path.join(cacheRoot, oldest.entryDir), { recursive: true, force: true });
+      } catch (err) {
+        logger.warn(
+          `playback cache: failed to evict ${oldest.entryDir}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+      await db.delete(playbackCacheAccess).where(eq(playbackCacheAccess.entryDir, oldest.entryDir));
+      lastWrittenAt.delete(oldest.entryDir);
+      total -= oldest.sizeBytes;
+      freedBytes += oldest.sizeBytes;
+      evicted.push(oldest.entryDir);
+    }
+    return { freedBytes, evicted };
+  }
+
+  function emergencySweep(): void {
+    if (maxBytes == null) return;
+    sweep(Math.floor(maxBytes * EMERGENCY_TARGET_FRACTION)).catch((err: unknown) => {
+      logger.error(
+        `playback cache: emergency sweep failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    });
+  }
 
   async function loadWarm(binPath: string, idxPath: string): Promise<InternalEntry | null> {
     let idx: IndexFile;
@@ -178,19 +325,34 @@ export function createCache(opts: CacheOpts): Cache {
     });
     const internal: InternalEntry = { binPath, idxPath, liveTail, ffmpeg, error: null };
 
+    // A full disk can surface either as an ffmpeg failure or as a live-tail index-write failure.
+    // Either way, free space so the next request has room — the current request still fails. This
+    // backstop should almost never fire when a sensible budget is configured.
+    liveTail.emitter.on('error', (err: unknown) => {
+      if (isDiskFullError(err)) emergencySweep();
+    });
+
     ffmpeg.done.then(
       () => {
-        liveTail.finalise().catch((err: unknown) => {
-          logger.error('live-tail finalise failed', {
-            key: entryKey(req),
-            err: err instanceof Error ? err.message : String(err),
+        liveTail
+          .finalise()
+          .then(async () => {
+            // Record the finished entry's size, then keep the cache under budget.
+            await recordEntrySize(path.basename(dir));
+            await sweep();
+          })
+          .catch((err: unknown) => {
+            logger.error('live-tail finalise failed', {
+              key: entryKey(req),
+              err: err instanceof Error ? err.message : String(err),
+            });
           });
-        });
       },
       (err: Error) => {
         internal.error = err;
         liveTail.emitter.emit('error', err);
         void liveTail.stop();
+        if (isDiskFullError(err)) emergencySweep();
         logger.error('encoder failed', { key: entryKey(req), err: err.message });
       },
     );
@@ -251,6 +413,7 @@ export function createCache(opts: CacheOpts): Cache {
       async (span): Promise<CacheEntry> => {
         try {
           const key = entryKey(req);
+          bumpAccess(key);
           const cached = lru.get(key);
           if (cached) {
             span.setAttribute('playback.cache.outcome', 'hit-inmem');
@@ -295,6 +458,7 @@ export function createCache(opts: CacheOpts): Cache {
 
   return {
     getOrStart,
+    sweep,
     reset(): void {
       lru.clear();
       inFlightStart.clear();
@@ -304,5 +468,6 @@ export function createCache(opts: CacheOpts): Cache {
 
 /** Production singleton wired from env. Tests should build their own via `createCache`. */
 export const defaultCache: Cache = createCache({
-  cacheRoot: env.PLAYBACK_CACHE_DIR ?? path.join(tmpdir(), 'lofify-cache'),
+  cacheRoot: env.DISK_CACHE_DIR ?? path.join(tmpdir(), 'lofify-cache'),
+  ...(env.DISK_CACHE_MAX_BYTES !== undefined ? { maxBytes: env.DISK_CACHE_MAX_BYTES } : {}),
 });

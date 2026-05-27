@@ -57,7 +57,7 @@ creates the volume from those options on first `up` — to repoint it at a
 different server later, remove the `playback-cache` volume on the remote
 (`docker volume rm <project>_playback-cache`) before redeploying. The
 share root is mounted at `/playback-cache`; the backend writes into the
-`lofify` subdirectory (`PLAYBACK_CACHE_DIR`), which it creates on first
+`lofify` subdirectory (`DISK_CACHE_DIR`), which it creates on first
 use, so the export can be shared with other consumers.
 
 ## Root scripts
