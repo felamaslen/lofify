@@ -7,7 +7,9 @@
  *   - **Init segment.** fmp4 (opus/flac) ships an init range that must be appended once to configure the SourceBuffer; mp3 has no init, so `manifest.init` is `null`. (The init survives `remove()`, so it's only appended once even across evictions.)
  *   - **`timestampOffset`.** fmp4 fragments carry `tfdt` (absolute decode time), so MSE places them automatically. mp3 frames have no timestamps — each chunk starts at PTS 0 — so the player sets `sourceBuffer.timestampOffset = chunk.startSeconds` before each append. Decided at construction from the content type.
  *
- * Lossless↔lossy switching mid-track is not supported here: the SourceBuffer's codec parameters are locked at `addSourceBuffer(contentType)`. Switching requires tearing the player down and starting again — `player.tsx` does this on quality/format changes.
+ * Lossless↔lossy switching mid-track is not supported here: the SourceBuffer's codec parameters are locked at `addSourceBuffer(contentType)`. Switching codecs requires tearing the player down and starting again — `player.tsx` does this on codec-crossing changes (to/from Max, Opus↔MP3).
+ *
+ * Bitrate-only switching within the same codec (e.g. MEDIUM→HIGH opus) is supported live via `switchStream`: the codec config is unchanged (the opus init segment is bitrate-independent, mp3 has none) and fragments carry their own timestamps, so new-bitrate fragments splice into the existing buffer without a teardown.
  *
  * `ManifestSnapshot` and `ManifestChunk` are derived from the `TrackManifest` subscription document in `state/player.tsx`, so the player consumes the exact GraphQL response shape with no in-between conversion.
  */
@@ -28,6 +30,8 @@ type Range = { start: number; end: number };
 export interface Player {
   /** Update the player's view of the manifest. Newly-available chunks become eligible for prefetch. */
   setManifest(m: ManifestSnapshot): void;
+  /** Swap to a new playback URL for the same codec (a bitrate-only change). Keeps the SourceBuffer and already-buffered audio; the caller must feed the matching manifest via `setManifest`. Not for codec changes — those need a fresh player. */
+  switchStream(url: string): void;
   /** Seek to `time`. The audio element waits for data and resumes once the chunk under `time` is fetched and appended by the reconcile loop. */
   seekTo(time: number): void;
   dispose(): void;
@@ -109,6 +113,19 @@ class MsePlayer implements Player {
     if (this.disposed) return;
     // Clamp into the encoded region; the seeking event drives reconcile to fetch the target chunk.
     this.audio.currentTime = Math.min(time, this.manifest.durationSeconds || time);
+  }
+
+  switchStream(url: string): void {
+    if (this.disposed) return;
+    // Drop everything tied to the old URL: in-flight fetches and queued appends reference its byte
+    // offsets. The buffered audio and the appended init stay — the new stream is the same codec at a
+    // different bitrate, so its fragments splice onto the existing buffer and reuse the same init.
+    this.cancelAllPending();
+    this.appendQueue = [];
+    this.url = url;
+    this.manifest = EMPTY_MANIFEST;
+    this.lastUncoveredFetch = null;
+    this.tick();
   }
 
   dispose(): void {

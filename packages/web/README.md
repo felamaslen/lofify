@@ -39,6 +39,10 @@ format controls:
 - **Quality** — `Max` asks for the best representation of the source the
   browser can play (lossless or a copy where possible); the lower tiers
   (`High`/`Med`/`Low`/`Min`) force a transcode at an ascending bitrate.
+  Changing quality between sub-`Max` tiers applies **live mid-track**: the
+  codec is unchanged, so the new bitrate splices into the existing buffer
+  with no gap. Changes that cross a codec boundary (to/from `Max`, or
+  switching the codec preference) take effect on the next track instead.
 - **Codec** — a _preference_ used only when the server has to transcode
   (below Max, or a lossy source at Max with no matching copy): `Prefer
 Opus` or `Prefer MP3`. At Max, sources are copied without re-encoding

@@ -177,18 +177,21 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     useState<LossyPreference>(loadStoredLossyPreference);
   const [error, setError] = useState<PlayerError | null>(null);
   const [delivery, setDelivery] = useState<Delivery | null>(null);
-  const setQuality = useCallback((q: Quality) => {
-    setQualityState(q);
-    if (typeof window !== 'undefined') window.localStorage.setItem(QUALITY_STORAGE_KEY, q);
-  }, []);
-  const setLossyPreference = useCallback((p: LossyPreference) => {
-    setLossyPreferenceState(p);
-    if (typeof window !== 'undefined') window.localStorage.setItem(FORMAT_STORAGE_KEY, p);
-  }, []);
   const dismissError = useCallback(() => setError(null), []);
   const nextRef = useRef<() => void>(() => undefined);
   const playerRef = useRef<MsePlayer | null>(null);
   const manifestUnsubRef = useRef<(() => void) | null>(null);
+  // Read inside changeFormat without re-creating it on every change (which would churn the context
+  // value and the manifest subscription). changeTokenRef is a latest-wins guard for its async fetch.
+  const currentRef = useRef<TrackNode | null>(null);
+  const deliveryRef = useRef<Delivery | null>(null);
+  const qualityRef = useRef<Quality>(quality);
+  const lossyPreferenceRef = useRef<LossyPreference>(lossyPreference);
+  const changeTokenRef = useRef(0);
+  currentRef.current = current;
+  deliveryRef.current = delivery;
+  qualityRef.current = quality;
+  lossyPreferenceRef.current = lossyPreference;
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -260,6 +263,46 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     [queryClient, quality, lossyPreference],
   );
 
+  const startManifest = useCallback(
+    (trackId: string, totalSeconds: number, format: TrackFormat) => {
+      manifestUnsubRef.current?.();
+      // The subscription sends `chunks` as deltas (only the chunks finalised since the previous
+      // emission). Accumulate them into the full list the player consumes. This `chunks` is fresh per
+      // call, so a track/format change starts from empty. A transparent SSE reconnect, though, restarts
+      // the server stream and replays the whole list into this same closure — so merge idempotently,
+      // appending only chunks beyond our tail (endSeconds strictly increases).
+      let chunks: ManifestChunk[] = [];
+      manifestUnsubRef.current = subscribe(
+        TrackManifestDocument,
+        { trackId, format },
+        {
+          next: (data) => {
+            const snap = data.trackManifest;
+            if (!snap) return;
+            if (snap.chunks.length > 0) {
+              const merged = chunks.slice();
+              for (const c of snap.chunks) {
+                const tailEnd = merged.length > 0 ? merged[merged.length - 1]!.endSeconds : 0;
+                if (c.endSeconds > tailEnd) merged.push(c);
+              }
+              chunks = merged;
+            }
+            playerRef.current?.setManifest({ ...snap, chunks });
+            const ready = snap.done ? totalSeconds : snap.durationSeconds;
+            setReadySeconds(Math.min(ready, totalSeconds));
+          },
+          error: () => {
+            manifestUnsubRef.current = null;
+          },
+          complete: () => {
+            manifestUnsubRef.current = null;
+          },
+        },
+      );
+    },
+    [],
+  );
+
   const loadTrack = useCallback(
     async (track: TrackNode) => {
       setCurrent(track);
@@ -288,45 +331,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       if (!created) return;
       playerRef.current = created;
 
-      // The subscription sends `chunks` as deltas (only the chunks finalised since the previous
-      // emission). Accumulate them into the full list the player consumes. This `chunks` is fresh
-      // per `loadTrack`, so a track/format change starts from empty. A transparent SSE reconnect,
-      // though, restarts the server stream and replays the whole list into this same closure — so
-      // merge idempotently, appending only chunks beyond our tail (endSeconds strictly increases).
-      let chunks: ManifestChunk[] = [];
-      manifestUnsubRef.current = subscribe(
-        TrackManifestDocument,
-        { trackId: track.id, format: trackFormatFor(quality, lossyPreference) },
-        {
-          next: (data) => {
-            const snap = data.trackManifest;
-            if (!snap) return;
-            if (snap.chunks.length > 0) {
-              const merged = chunks.slice();
-              for (const c of snap.chunks) {
-                const tailEnd = merged.length > 0 ? merged[merged.length - 1]!.endSeconds : 0;
-                if (c.endSeconds > tailEnd) merged.push(c);
-              }
-              chunks = merged;
-            }
-            playerRef.current?.setManifest({ ...snap, chunks });
-            const ready = snap.done ? totalSeconds : snap.durationSeconds;
-            setReadySeconds(Math.min(ready, totalSeconds));
-          },
-          error: () => {
-            manifestUnsubRef.current = null;
-          },
-          complete: () => {
-            manifestUnsubRef.current = null;
-          },
-        },
-      );
+      startManifest(track.id, totalSeconds, trackFormatFor(quality, lossyPreference));
 
       audio.currentTime = 0;
       await audio.play().catch(() => undefined);
       prefetchNext(track.id);
     },
-    [prefetchNext, quality, lossyPreference],
+    [prefetchNext, quality, lossyPreference, startManifest],
   );
 
   const playTrack = useCallback(
@@ -343,6 +354,50 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       if (data.track) await loadTrack(data.track);
     },
     [queryClient, quality, lossyPreference, loadTrack],
+  );
+
+  // Re-target the playing track at a new quality/preference. A bitrate-only change (same codec ⇒
+  // same delivery mimeType) swaps the stream live with no gap; a codec-crossing change (to/from Max,
+  // Opus↔MP3) is left for the next track to pick up, since the SourceBuffer codec can't be changed.
+  const changeFormat = useCallback(
+    async (nextQuality: Quality, nextPreference: LossyPreference) => {
+      const track = currentRef.current;
+      const player = playerRef.current;
+      if (!track || !player) return;
+      const token = ++changeTokenRef.current;
+      const format = trackFormatFor(nextQuality, nextPreference);
+      const data = await queryClient.fetchQuery({
+        queryKey: ['track', track.id, nextQuality, nextPreference],
+        queryFn: ({ signal }) => gqlRequest(TrackByIdDocument, { id: track.id, format }, signal),
+      });
+      if (token !== changeTokenRef.current || currentRef.current?.id !== track.id) return;
+      const next = data.track;
+      if (!next) return;
+      if (next.delivery.mimeType !== deliveryRef.current?.mimeType) return;
+      setCurrent(next);
+      setDelivery(next.delivery);
+      player.switchStream(resolvePlaybackUrl(next.delivery.url));
+      const totalSeconds = readFragment(PlaybackBarDocument, next).duration.seconds;
+      startManifest(next.id, totalSeconds, format);
+    },
+    [queryClient, startManifest],
+  );
+
+  const setQuality = useCallback(
+    (q: Quality) => {
+      setQualityState(q);
+      if (typeof window !== 'undefined') window.localStorage.setItem(QUALITY_STORAGE_KEY, q);
+      void changeFormat(q, lossyPreferenceRef.current);
+    },
+    [changeFormat],
+  );
+  const setLossyPreference = useCallback(
+    (p: LossyPreference) => {
+      setLossyPreferenceState(p);
+      if (typeof window !== 'undefined') window.localStorage.setItem(FORMAT_STORAGE_KEY, p);
+      void changeFormat(qualityRef.current, p);
+    },
+    [changeFormat],
   );
 
   const togglePlay = useCallback(() => {
