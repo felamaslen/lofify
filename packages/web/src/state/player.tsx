@@ -16,7 +16,7 @@ import { getAudioElement } from '../lib/audio-element.ts';
 import { type Capabilities, capabilities, type LossyPreference } from '../lib/capabilities.ts';
 import { graphql, type ResultOf, type VariablesOf } from '../lib/gql.ts';
 import { gqlRequest } from '../lib/gql-request.ts';
-import { createPlayer, type CreatePlayerError, type Player as MsePlayer } from '../lib/mse.ts';
+import { type CreatePlayerOptions, MsePlayer, type QueuedTrack } from '../lib/mse.ts';
 import { subscribe as subscribeToStream } from '../lib/sse-client.ts';
 
 export const TrackByIdDocument = graphql(
@@ -148,6 +148,8 @@ export function resolvePlaybackUrl(url: string): string {
 
 function loadStoredMode(): QualityMode {
   if (typeof window === 'undefined') return 'ADAPTIVE';
+  // Force Adaptive in a PWA: gapless cross-track buffering needs a single codec, which only Adaptive guarantees. See QualityPicker / lib/mse.ts for the rationale.
+  if (capabilities.standalone) return 'ADAPTIVE';
   const stored = window.localStorage.getItem(MODE_STORAGE_KEY);
   if (stored === 'ADAPTIVE' || stored === 'ORIGINAL') return stored;
   // Migrate the pre-adaptive single-tier setting: `MAX` becomes Original, any lower tier Adaptive.
@@ -256,7 +258,8 @@ class Player {
   private snapshot: PlayerSnapshot;
   private readonly listeners = new Set<() => void>();
   private mse: MsePlayer | null = null;
-  private manifestUnsub: (() => void) | null = null;
+  /** Resolved track metadata by id, populated when a track is fetched. Looked up when the mse player reports a track change so the UI snapshot can swap to the new track without another fetch. */
+  private readonly tracksById = new Map<string, TrackNode>();
   private lastSwitchAt = 0;
   /** Latest-wins guard for `changeFormat`'s async fetch. */
   private changeToken = 0;
@@ -282,8 +285,6 @@ class Player {
       error: null,
     };
   }
-
-  // --- External-store interface ------------------------------------------------------------------
 
   /** Register a listener invoked on every snapshot change; returns an unsubscribe. The `useSyncExternalStore` contract. */
   subscribe = (listener: () => void): (() => void) => {
@@ -322,12 +323,11 @@ class Player {
     if (track) await this.loadTrack(track, saved.startAt, false);
   }
 
-  /** Detach the audio listeners, end the manifest subscription, and tear down the current `MsePlayer`. The teardown returned by `activate`. */
+  /** Detach the audio listeners and tear down the current `MsePlayer` (which closes its per-track manifest subscriptions). The teardown returned by `activate`. */
   private dispose(): void {
     this.flushUrl();
     for (const detach of this.detachers) detach();
     this.detachers.length = 0;
-    this.manifestUnsub?.();
     this.mse?.dispose();
     this.mse = null;
     if (hasMediaSession()) {
@@ -335,8 +335,6 @@ class Player {
       navigator.mediaSession.metadata = null;
     }
   }
-
-  // --- Audio element wiring ----------------------------------------------------------------------
 
   private on(type: string, handler: () => void): void {
     this.audio.addEventListener(type, handler);
@@ -354,29 +352,38 @@ class Player {
       this.flushUrl();
     });
     this.on('timeupdate', () => {
-      this.set({ positionSeconds: this.audio.currentTime });
+      this.set({ positionSeconds: this.mse?.currentPosition() ?? 0 });
       this.updateMediaPosition();
       this.scheduleUrlWrite();
     });
-    const onBuffered = () => this.set({ bufferedRanges: this.readBuffered() });
+    const onBuffered = () =>
+      this.set({
+        bufferedRanges: this.readBuffered(),
+        readySeconds: this.mse?.currentTrackReadySeconds() ?? 0,
+      });
     this.on('progress', onBuffered);
     this.on('seeked', onBuffered);
     this.on('loadedmetadata', onBuffered);
     this.on('emptied', onBuffered);
+    // `ended` only fires after `MediaSource.endOfStream()` — which the mse player calls when the
+    // queue is closed. Same-codec cross-track boundaries happen *without* `ended` (the next track's
+    // bytes splice onto the buffer in the same `MediaSource`); they're handled by `onTrackChange`.
+    // `endQueue` runs in two cases: no successor exists (end of library) or the next track has a
+    // different codec (can't splice — needs a fresh `MsePlayer`). For the codec-mismatch case we
+    // need to advance into the new codec; `step('next')` does that by reloading. For the end-of-
+    // library case `step('next')` is a no-op (the query returns no successor), so the same call
+    // handles both.
+    // TODO: make MsePlayer support cross-codec splicing, and remove this
     this.on('ended', () => {
       this.set({ isPlaying: false });
       void this.step('next');
     });
   }
 
+  /** Read the buffered ranges for the current track in its local timeline, for the progress bar. */
   private readBuffered(): BufferedRange[] {
-    const out: BufferedRange[] = [];
-    const b = this.audio.buffered;
-    for (let i = 0; i < b.length; i++) out.push({ start: b.start(i), end: b.end(i) });
-    return out;
+    return this.mse?.currentBuffered() ?? [];
   }
-
-  // --- Media Session ------------------------------------------------------------------------------
 
   /** Register the OS media-control handlers once. These are what make a backgrounded PWA keep playing and surface lock-screen / notification controls — without them mobile platforms (iOS especially) pause hidden web audio. Idempotent: the handlers close over `this`, so re-registering is harmless. */
   private setupMediaSession(): void {
@@ -414,7 +421,7 @@ class Player {
     if (!track) return;
     const duration = readFragment(PlaybackBarDocument, track).duration.seconds;
     if (!Number.isFinite(duration) || duration <= 0) return;
-    const position = Math.min(Math.max(this.audio.currentTime, 0), duration);
+    const position = Math.min(this.mse?.currentPosition() ?? 0, duration);
     try {
       navigator.mediaSession.setPositionState({
         duration,
@@ -431,7 +438,7 @@ class Player {
     if (this.urlWriteTimer !== null) return;
     this.urlWriteTimer = setTimeout(() => {
       this.urlWriteTimer = null;
-      writePlaybackToUrl(this.snapshot.current?.id ?? null, this.audio.currentTime);
+      writePlaybackToUrl(this.snapshot.current?.id ?? null, this.mse?.currentPosition() ?? 0);
     }, URL_WRITE_THROTTLE_MS);
   }
 
@@ -441,10 +448,8 @@ class Player {
       clearTimeout(this.urlWriteTimer);
       this.urlWriteTimer = null;
     }
-    writePlaybackToUrl(this.snapshot.current?.id ?? null, this.audio.currentTime);
+    writePlaybackToUrl(this.snapshot.current?.id ?? null, this.mse?.currentPosition() ?? 0);
   }
-
-  // --- Public actions ----------------------------------------------------------------------------
 
   /** Load the track with id `id`, fetched at the current tier/preference, and start it from the top. */
   async play(id: string): Promise<void> {
@@ -463,11 +468,13 @@ class Player {
     else this.audio.pause();
   }
 
-  /** Seek to `seconds`; the reconcile loop fetches the chunk under the new playhead and resumes. */
+  /** Seek to `seconds` within the current track; the reconcile loop fetches the chunk under the new playhead and resumes. */
   seek(seconds: number): void {
     if (!this.mse) return;
+    const track = this.snapshot.current;
+    if (!track) return;
     this.set({ positionSeconds: seconds });
-    this.mse.seekTo(seconds);
+    this.mse.seekTo(track.id, seconds);
     void this.audio.play().catch(() => undefined);
   }
 
@@ -483,6 +490,7 @@ class Player {
 
   /** Switch between Adaptive and Original, re-targeting the playing track (a live swap or, across a codec boundary, a reload at the current position). */
   setQualityMode(mode: QualityMode): void {
+    if (mode === 'ORIGINAL' && capabilities.standalone) return;
     this.set({ qualityMode: mode });
     if (typeof window !== 'undefined') window.localStorage.setItem(MODE_STORAGE_KEY, mode);
     const tier = mode === 'ORIGINAL' ? 'MAX' : loadStoredAdaptiveTier();
@@ -501,10 +509,10 @@ class Player {
     this.set({ error: null });
   }
 
-  // --- Track lifecycle ---------------------------------------------------------------------------
-
-  /** Tear down the current `MsePlayer` and start `track` from `startAt`. Called to play a new track and, via `changeFormat`, when a format change crosses a codec boundary. Pass `autoPlay = false` to load paused (restoring from the URL on a fresh page load, where there's no gesture to satisfy autoplay). */
+  /** Start `track` from `startAt`, replacing whatever is queued. Reuses the existing `MsePlayer` when the codec matches (Adaptive's case — the SourceBuffer stays, the buffer gets wiped, the new track's chunks land in the same MediaSource), otherwise tears it down and creates a fresh one for the new codec. Pass `autoPlay = false` to load paused (restoring from the URL on a fresh page load, where there's no gesture to satisfy autoplay). */
   async loadTrack(track: TrackNode, startAt = 0, autoPlay = true): Promise<void> {
+    this.tracksById.set(track.id, track);
+    // Pre-seed snapshot for synchronous consumers; `onTrackChange` will fire and confirm.
     writePlaybackToUrl(track.id, startAt);
     this.set({
       current: track,
@@ -515,41 +523,98 @@ class Player {
       playingQuality: null,
     });
     this.updateMediaMetadata(track);
-    this.mse?.dispose();
-    this.mse = null;
-    this.manifestUnsub?.();
 
     const totalSeconds = readFragment(PlaybackBarDocument, track).duration.seconds;
-    const mse = await createPlayer(
-      this.audio,
-      resolvePlaybackUrl(track.delivery.url),
-      track.delivery.mimeType,
-      totalSeconds,
-      {
-        onError: (err) => this.set({ error: { message: errorMessageFor(err) } }),
-        onQuality: (q) => this.set({ playingQuality: q as Quality | null }),
-        onThroughput: (bytes, transferMs) => this.onThroughput(bytes, transferMs),
-        onProgress: (bytes, elapsedMs) => this.onProgress(bytes, elapsedMs),
-      },
-    );
-    if (!mse) return;
-    this.mse = mse;
+    const queued = this.buildQueuedTrack(track, totalSeconds);
 
-    this.startManifest(
-      track.id,
-      totalSeconds,
-      trackFormatFor(this.snapshot.requestedTier, this.snapshot.lossyPreference),
-    );
+    try {
+      this.mse = await MsePlayer.init(
+        this.mse,
+        this.audio,
+        queued,
+        startAt,
+        () => this.resolveNextTrack(),
+        this.mseOptions(),
+      );
+    } catch (err) {
+      this.mse = null;
+      this.set({ error: { message: (err as Error).message } });
+      return;
+    }
 
-    this.audio.currentTime = startAt;
     this.updateMediaPosition();
     if (autoPlay) await this.audio.play().catch(() => undefined);
-    void this.prefetchNext(track.id);
   }
 
-  /**
-   * Re-target the playing track at a new tier/preference. A same-codec change (equal delivery mimeType — every Adaptive bitrate step, and Original↔Adaptive when the source copies into the same codec) swaps the stream live with no gap; a codec-crossing change reloads at the current playback position, since the SourceBuffer codec can't be changed in place.
-   */
+  /** Bundle of construction-time callbacks the player gives mse. Stable across `init` calls — same hooks apply whether mse reuses or rebuilds. */
+  private mseOptions(): CreatePlayerOptions {
+    return {
+      onQuality: (q) => this.set({ playingQuality: q as Quality | null }),
+      onThroughput: (bytes, transferMs) => this.onThroughput(bytes, transferMs),
+      onProgress: (bytes, elapsedMs) => this.onProgress(bytes, elapsedMs),
+      onTrackChange: (trackId) => this.handleTrackChange(trackId),
+    };
+  }
+
+  /** Assemble the `QueuedTrack` mse needs, bundling the per-track manifest-subscription factory the player owns. The factory captures `trackId` and reads `lossyPreference` live so a preference change between enqueue and a later live tier swap is picked up automatically. */
+  private buildQueuedTrack(track: TrackNode, totalSeconds: number): QueuedTrack {
+    const trackId = track.id;
+    return {
+      id: trackId,
+      url: resolvePlaybackUrl(track.delivery.url),
+      contentType: track.delivery.mimeType,
+      quality: this.snapshot.requestedTier,
+      totalSeconds,
+      /** Open a `trackManifest` SSE subscription for `trackId` at `quality` and pipe cumulative snapshots into `onEmit`. The closure handles SSE delta merging (each emission carries only the chunks finalised since the previous one) and idempotent replay after a transparent reconnect. Returns the teardown mse will run on slot replacement / live swap / dispose. */
+      subscribeManifest: (quality, onEmit) => {
+        const format = trackFormatFor(quality as Quality, this.snapshot.lossyPreference);
+        let chunks: ManifestChunk[] = [];
+        return subscribeToStream(
+          TrackManifestDocument,
+          { trackId, format },
+          {
+            next: (data) => {
+              const snap = data.trackManifest;
+              if (!snap) return;
+              if (snap.chunks.length > 0) {
+                const merged = chunks.slice();
+                for (const c of snap.chunks) {
+                  const tailEnd = merged.length > 0 ? merged[merged.length - 1]!.endSeconds : 0;
+                  if (c.endSeconds > tailEnd) merged.push(c);
+                }
+                chunks = merged;
+              }
+              onEmit({ ...snap, chunks });
+            },
+            error: () => {},
+            complete: () => {},
+          },
+        );
+      },
+    };
+  }
+
+  /** Called by the mse player when the playhead crosses into a new track. Swaps snapshot + Media Session metadata and prunes the now-past track from the player's local cache so it doesn't grow across a long session. No-op when the callback fires for the track the snapshot already shows — that's the initial-load case (during `loadTrack`, mse fires `onTrackChange` for the freshly-installed `current` *before* `audio.currentTime` is set, so `currentPosition()` would read 0 and stomp the caller-provided `startAt` already baked into the snapshot and the URL). */
+  private handleTrackChange(trackId: string): void {
+    const track = this.tracksById.get(trackId);
+    if (!track) return;
+    const prevId = this.snapshot.current?.id;
+    if (prevId === trackId) return;
+    if (prevId) this.tracksById.delete(prevId);
+    const position = this.mse?.currentPosition() ?? 0;
+    this.set({
+      current: track,
+      delivery: track.delivery,
+      positionSeconds: position,
+      bufferedRanges: this.readBuffered(),
+      readySeconds: this.mse?.currentTrackReadySeconds() ?? 0,
+      playingQuality: null,
+    });
+    this.updateMediaMetadata(track);
+    writePlaybackToUrl(track.id, position);
+  }
+
+  /** Re-target the playing track at a new tier/preference. `MsePlayer.init` decides internally whether the change is a live tier swap (same id, same codec — no gap) or a codec-crossing rebuild (different codec) — we just hand it the freshly-resolved delivery, then refresh snapshot state from the new mse and resume playback if it was running. */
   private async changeFormat(tier: Quality, preference: LossyPreference): Promise<void> {
     this.applyTier(tier);
     const track = this.snapshot.current;
@@ -558,14 +623,45 @@ class Player {
     const format = trackFormatFor(tier, preference);
     const next = await this.fetchTrack(track.id, tier, preference, format);
     if (token !== this.changeToken || this.snapshot.current?.id !== track.id || !next) return;
+    this.tracksById.set(next.id, next);
     const totalSeconds = readFragment(PlaybackBarDocument, next).duration.seconds;
-    if (next.delivery.mimeType === this.snapshot.delivery?.mimeType && this.mse) {
-      this.set({ current: next, delivery: next.delivery });
-      this.mse.switchStream(resolvePlaybackUrl(next.delivery.url), tier);
-      this.startManifest(next.id, totalSeconds, format);
-    } else {
-      await this.loadTrack(next, this.audio.currentTime);
+    const queued = this.buildQueuedTrack(next, totalSeconds);
+    const startAt = this.mse.currentPosition();
+    const wasPlaying = !this.audio.paused;
+    // Pre-seed the snapshot to the post-init resting state. Otherwise the `emptied` event that
+    // fires during `init`'s audio.src reassignment lands on the still-pointing-to-the-old mse and
+    // bleeds old `readySeconds` / `bufferedRanges` into the new track's bar (the "next track in
+    // transcoding state" artefact).
+    this.set({
+      current: next,
+      delivery: next.delivery,
+      positionSeconds: startAt,
+      bufferedRanges: [],
+      readySeconds: 0,
+      playingQuality: null,
+    });
+    try {
+      this.mse = await MsePlayer.init(
+        this.mse,
+        this.audio,
+        queued,
+        startAt,
+        () => this.resolveNextTrack(),
+        this.mseOptions(),
+      );
+    } catch (err) {
+      this.mse = null;
+      this.set({ error: { message: (err as Error).message } });
+      return;
     }
+    // Refresh from the new instance (live-swap leaves the buffered audio in place; rebuild starts
+    // empty — either way mse holds the right values now).
+    this.set({
+      bufferedRanges: this.readBuffered(),
+      readySeconds: this.mse.currentTrackReadySeconds(),
+      positionSeconds: this.mse.currentPosition(),
+    });
+    if (wasPlaying) await this.audio.play().catch(() => undefined);
   }
 
   /** Record the tier being requested and remember it (sub-Max only) as the Adaptive cold-start tier. */
@@ -575,8 +671,6 @@ class Player {
       window.localStorage.setItem(ADAPTIVE_TIER_STORAGE_KEY, tier);
     }
   }
-
-  // --- Adaptive controller -----------------------------------------------------------------------
 
   /**
    * Upscale on a just-finished chunk fetch's observed speed (`bytes / transferMs`, TTFB already excluded). Climbing is the on-completion concern: it wants a full, confident sample and buffer headroom, and can't sensibly happen mid-download (that would abort a perfectly good fetch on a partial reading). With a healthy buffer it jumps straight to the highest tier the speed covers with `UP_FACTOR` headroom. Downscaling is owned entirely by `onProgress`, which reacts during the transfer rather than after it. Gated by a cooldown so it can't flap, and logged for diagnosing churn.
@@ -662,45 +756,6 @@ class Player {
     void this.changeFormat(ADAPTIVE_LADDER[nextIdx]!, this.snapshot.lossyPreference);
   }
 
-  // --- Manifest + queries ------------------------------------------------------------------------
-
-  private startManifest(trackId: string, totalSeconds: number, format: TrackFormat): void {
-    this.manifestUnsub?.();
-    // The subscription sends `chunks` as deltas (only the chunks finalised since the previous
-    // emission). Accumulate them into the full list the player consumes. This `chunks` is fresh per
-    // call, so a track/format change starts from empty. A transparent SSE reconnect, though, restarts
-    // the server stream and replays the whole list into this same closure — so merge idempotently,
-    // appending only chunks beyond our tail (endSeconds strictly increases).
-    let chunks: ManifestChunk[] = [];
-    this.manifestUnsub = subscribeToStream(
-      TrackManifestDocument,
-      { trackId, format },
-      {
-        next: (data) => {
-          const snap = data.trackManifest;
-          if (!snap) return;
-          if (snap.chunks.length > 0) {
-            const merged = chunks.slice();
-            for (const c of snap.chunks) {
-              const tailEnd = merged.length > 0 ? merged[merged.length - 1]!.endSeconds : 0;
-              if (c.endSeconds > tailEnd) merged.push(c);
-            }
-            chunks = merged;
-          }
-          this.mse?.setManifest({ ...snap, chunks });
-          const ready = snap.done ? totalSeconds : snap.durationSeconds;
-          this.set({ readySeconds: Math.min(ready, totalSeconds) });
-        },
-        error: () => {
-          this.manifestUnsub = null;
-        },
-        complete: () => {
-          this.manifestUnsub = null;
-        },
-      },
-    );
-  }
-
   private fetchTrack(
     id: string,
     tier: Quality,
@@ -715,7 +770,10 @@ class Player {
       .then((data) => data.track);
   }
 
-  private async prefetchNext(currentId: string): Promise<void> {
+  /** mse-invoked thunk: resolve the track after whatever is currently playing, fetch its delivery at the current tier/preference, stash the metadata for `handleTrackChange`, and return a `QueuedTrack`. Returns `null` if no successor exists (end of library) — mse interprets that as "play out and end". mse also handles codec-mismatch detection on the returned track. Reads the current id from the live snapshot so the lookup re-anchors after every boundary cross. */
+  private async resolveNextTrack(): Promise<QueuedTrack | null> {
+    const currentId = this.snapshot.current?.id;
+    if (!currentId) return null;
     const data = await this.queryClient.fetchQuery({
       queryKey: ['step', 'next', currentId],
       queryFn: ({ signal }) =>
@@ -726,18 +784,14 @@ class Player {
         ),
     });
     const nextId = data.tracks?.edges[0]?.node.id;
-    if (!nextId) return;
+    if (!nextId) return null;
     const tier = this.snapshot.requestedTier;
     const preference = this.snapshot.lossyPreference;
-    await this.queryClient.prefetchQuery({
-      queryKey: ['track', nextId, tier, preference],
-      queryFn: ({ signal }) =>
-        gqlRequest(
-          TrackByIdDocument,
-          { id: nextId, format: trackFormatFor(tier, preference) },
-          signal,
-        ),
-    });
+    const next = await this.fetchTrack(nextId, tier, preference);
+    if (!next) return null;
+    this.tracksById.set(next.id, next);
+    const totalSeconds = readFragment(PlaybackBarDocument, next).duration.seconds;
+    return this.buildQueuedTrack(next, totalSeconds);
   }
 
   private async step(direction: 'next' | 'previous'): Promise<void> {
@@ -753,15 +807,6 @@ class Player {
     });
     const nextId = data.tracks?.edges[0]?.node.id;
     if (nextId) await this.play(nextId);
-  }
-}
-
-function errorMessageFor(err: CreatePlayerError): string {
-  switch (err.kind) {
-    case 'mse-unsupported':
-      return 'This browser does not support Media Source Extensions; playback is unavailable.';
-    case 'codec-unsupported':
-      return `This browser cannot decode ${err.contentType}. Pick a different format.`;
   }
 }
 
