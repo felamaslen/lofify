@@ -1,7 +1,7 @@
 import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
-import { useVirtualizer } from '@tanstack/react-virtual';
+import { useWindowVirtualizer } from '@tanstack/react-virtual';
 import { readFragment } from 'gql.tada';
-import { type MouseEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { type MouseEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { useIsMobile } from '../hooks/use-is-mobile.ts';
 import { graphql } from '../lib/gql.ts';
@@ -123,7 +123,7 @@ export function TrackList() {
   const totalCount = query.data?.pages[0]?.tracks?.totalCount ?? 0;
   const rowCount = Math.max(edges.length, totalCount);
 
-  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const spacerRef = useRef<HTMLDivElement | null>(null);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
@@ -195,11 +195,23 @@ export function TrackList() {
     }
   };
 
-  const virtualizer = useVirtualizer({
+  // The page itself scrolls (body scroll), so the virtualizer tracks the window.
+  // `scrollMargin` is how far the row container sits below the document top (the
+  // sticky app + column headers), so virtual offsets map onto page scroll.
+  const [scrollMargin, setScrollMargin] = useState(0);
+  const hasRows = edges.length > 0;
+  useLayoutEffect(() => {
+    const measure = () => setScrollMargin(spacerRef.current?.offsetTop ?? 0);
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, [hasRows, isMobile, artist, album]);
+
+  const virtualizer = useWindowVirtualizer({
     count: rowCount,
-    getScrollElement: () => scrollRef.current,
     estimateSize: () => rowHeight,
     overscan: 12,
+    scrollMargin,
   });
 
   useEffect(() => {
@@ -217,29 +229,29 @@ export function TrackList() {
 
   if (query.isError) {
     return (
-      <div className="p-6 text-sm text-destructive-foreground">
+      <div className="flex-1 p-6 text-sm text-destructive-foreground">
         Failed to load: {(query.error as Error).message}
       </div>
     );
   }
   if (edges.length === 0 && query.isLoading) {
-    return <div className="p-6 text-sm text-muted-foreground">Loading…</div>;
+    return <div className="flex-1 p-6 text-sm text-muted-foreground">Loading…</div>;
   }
   if (edges.length === 0) {
     return (
-      <div className="p-6 text-sm text-muted-foreground">
+      <div className="flex-1 p-6 text-sm text-muted-foreground">
         {artist || album ? 'No tracks match this filter.' : 'No tracks yet. Run a library scan.'}
       </div>
     );
   }
 
   return (
-    <div className="grid grid-rows-[auto_1fr] overflow-hidden">
+    <div className="flex-1">
       <div
         role="row"
         className={cn(
           COLS,
-          'border-b border-border py-2 text-[11px] uppercase tracking-wider text-muted-foreground max-sm:hidden',
+          'sticky top-10 z-20 border-b border-border bg-background py-2 text-[11px] uppercase tracking-wider text-muted-foreground max-sm:hidden',
         )}
       >
         <span>#</span>
@@ -253,127 +265,123 @@ export function TrackList() {
       </div>
       <ContextMenu>
         <ContextMenuTrigger asChild>
-          <div ref={scrollRef} className="relative overflow-y-auto">
-            <div
-              style={{
-                height: virtualizer.getTotalSize(),
-                position: 'relative',
-                width: '100%',
-              }}
-            >
-              {items.map((virtualRow) => {
-                const edge = edges[virtualRow.index];
-                if (!edge) {
-                  // A row within the library's range that paging hasn't reached yet.
-                  return (
-                    <div
-                      key={virtualRow.key}
-                      role="row"
-                      aria-hidden
-                      className={cn(COLS, 'text-sm')}
-                      style={{
-                        position: 'absolute',
-                        top: 0,
-                        left: 0,
-                        width: '100%',
-                        height: virtualRow.size,
-                        transform: `translateY(${virtualRow.start}px)`,
-                      }}
-                    />
-                  );
-                }
-                const t = readFragment(TrackListRowDocument, edge.node);
-                const active = current?.id === edge.node.id;
-                const isSelected = selected.has(edge.node.id);
+          <div
+            ref={spacerRef}
+            className="relative w-full"
+            style={{ height: virtualizer.getTotalSize() }}
+          >
+            {items.map((virtualRow) => {
+              const edge = edges[virtualRow.index];
+              if (!edge) {
+                // A row within the library's range that paging hasn't reached yet.
                 return (
                   <div
-                    key={edge.cursor}
+                    key={virtualRow.key}
                     role="row"
-                    aria-selected={isSelected}
-                    onMouseDown={(e) => {
-                      // Suppress the browser's native text-selection on
-                      // double-click and shift-click (range select); plain
-                      // click-and-drag selection is left untouched.
-                      if (e.detail >= 2 || e.shiftKey) e.preventDefault();
-                    }}
-                    onClick={(e) => {
-                      // Touch has no hover/double-click affordance, so a plain
-                      // tap plays; long-press still opens the context menu.
-                      if (isMobile) {
-                        play(edge.node.id);
-                        return;
-                      }
-                      selectRow(e, virtualRow.index, edge.node.id);
-                    }}
-                    onContextMenu={() => {
-                      if (!selected.has(edge.node.id)) {
-                        setSelected(new Set([edge.node.id]));
-                        anchorRef.current = virtualRow.index;
-                      }
-                    }}
-                    onMouseEnter={() => onRowEnter(edge.node.id)}
-                    onMouseLeave={onRowLeave}
-                    onDoubleClick={() => play(edge.node.id)}
-                    className={cn(
-                      COLS,
-                      'cursor-pointer text-sm hover:bg-accent/40',
-                      t.isLossless && 'shadow-[inset_3px_0_0_0] shadow-amber-400',
-                      isSelected && 'bg-accent/60',
-                      active && 'bg-primary/15 text-primary-foreground',
-                    )}
+                    aria-hidden
+                    className={cn(COLS, 'text-sm')}
                     style={{
                       position: 'absolute',
                       top: 0,
                       left: 0,
                       width: '100%',
                       height: virtualRow.size,
-                      transform: `translateY(${virtualRow.start}px)`,
+                      transform: `translateY(${virtualRow.start - scrollMargin}px)`,
                     }}
+                  />
+                );
+              }
+              const t = readFragment(TrackListRowDocument, edge.node);
+              const active = current?.id === edge.node.id;
+              const isSelected = selected.has(edge.node.id);
+              return (
+                <div
+                  key={edge.cursor}
+                  role="row"
+                  aria-selected={isSelected}
+                  onMouseDown={(e) => {
+                    // Suppress the browser's native text-selection on
+                    // double-click and shift-click (range select); plain
+                    // click-and-drag selection is left untouched.
+                    if (e.detail >= 2 || e.shiftKey) e.preventDefault();
+                  }}
+                  onClick={(e) => {
+                    // Touch has no hover/double-click affordance, so a plain
+                    // tap plays; long-press still opens the context menu.
+                    if (isMobile) {
+                      play(edge.node.id);
+                      return;
+                    }
+                    selectRow(e, virtualRow.index, edge.node.id);
+                  }}
+                  onContextMenu={() => {
+                    if (!selected.has(edge.node.id)) {
+                      setSelected(new Set([edge.node.id]));
+                      anchorRef.current = virtualRow.index;
+                    }
+                  }}
+                  onMouseEnter={() => onRowEnter(edge.node.id)}
+                  onMouseLeave={onRowLeave}
+                  onDoubleClick={() => play(edge.node.id)}
+                  className={cn(
+                    COLS,
+                    'cursor-pointer text-sm hover:bg-accent/40',
+                    t.isLossless && 'shadow-[inset_3px_0_0_0] shadow-amber-400',
+                    isSelected && 'bg-accent/60',
+                    active && 'bg-primary/15 text-primary-foreground',
+                  )}
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    height: virtualRow.size,
+                    transform: `translateY(${virtualRow.start - scrollMargin}px)`,
+                  }}
+                >
+                  <span className="text-muted-foreground tabular-nums max-sm:hidden">
+                    {t.discNumber ?? ''}
+                  </span>
+                  <span className="text-muted-foreground tabular-nums max-sm:hidden">
+                    {t.trackNumber ?? ''}
+                  </span>
+                  <span
+                    className={cn(
+                      'truncate max-sm:col-start-1 max-sm:row-start-1 max-sm:self-baseline max-sm:font-medium max-sm:leading-tight',
+                      t.isLossless && 'font-medium',
+                    )}
                   >
-                    <span className="text-muted-foreground tabular-nums max-sm:hidden">
-                      {t.discNumber ?? ''}
-                    </span>
-                    <span className="text-muted-foreground tabular-nums max-sm:hidden">
-                      {t.trackNumber ?? ''}
-                    </span>
+                    {t.title ?? (
+                      <>
+                        (untitled) <span className="text-muted-foreground/60">{t.path}</span>
+                      </>
+                    )}
+                  </span>
+                  <span className="tabular-nums text-muted-foreground max-sm:col-start-2 max-sm:row-start-1 max-sm:self-baseline max-sm:text-xs">
+                    {t.duration.formatted}
+                  </span>
+                  <span className="truncate text-muted-foreground max-sm:col-start-1 max-sm:row-start-2 max-sm:self-start max-sm:text-xs max-sm:leading-tight">
+                    {t.artist ?? ''}
+                  </span>
+                  <span className="truncate text-muted-foreground max-sm:hidden">
+                    {t.album ?? ''}
+                  </span>
+                  <span className="text-muted-foreground tabular-nums max-sm:hidden">
+                    {t.year ?? ''}
+                  </span>
+                  <span className="flex justify-end max-sm:col-start-3 max-sm:row-start-1 max-sm:self-baseline">
                     <span
                       className={cn(
-                        'truncate max-sm:col-start-1 max-sm:row-start-1 max-sm:self-baseline max-sm:font-medium max-sm:leading-tight',
-                        t.isLossless && 'font-medium',
+                        'text-[10px] uppercase tracking-wide',
+                        t.isLossless ? 'text-primary/80' : 'text-muted-foreground/70',
                       )}
                     >
-                      {t.title ?? (
-                        <>
-                          (untitled) <span className="text-muted-foreground/60">{t.path}</span>
-                        </>
-                      )}
+                      {t.sourceFormat}
                     </span>
-                    <span className="tabular-nums text-muted-foreground max-sm:col-start-2 max-sm:row-start-1 max-sm:self-baseline max-sm:text-xs">
-                      {t.duration.formatted}
-                    </span>
-                    <span className="truncate text-muted-foreground max-sm:col-start-1 max-sm:row-start-2 max-sm:self-start max-sm:text-xs max-sm:leading-tight">
-                      {t.artist ?? ''}
-                    </span>
-                    <span className="truncate text-muted-foreground max-sm:hidden">
-                      {t.album ?? ''}
-                    </span>
-                    <span className="text-muted-foreground tabular-nums max-sm:hidden">
-                      {t.year ?? ''}
-                    </span>
-                    <span className="flex justify-end max-sm:col-start-3 max-sm:row-start-1 max-sm:self-baseline">
-                      <span
-                        className={cn(
-                          'text-[10px] uppercase tracking-wide',
-                          t.isLossless ? 'text-primary/80' : 'text-muted-foreground/70',
-                        )}
-                      >
-                        {t.sourceFormat}
-                      </span>
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
+                  </span>
+                </div>
+              );
+            })}
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent>

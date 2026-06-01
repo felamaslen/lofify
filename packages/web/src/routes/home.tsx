@@ -26,8 +26,8 @@ function FilterChip() {
 export function Home() {
   return (
     <LibraryFilterProvider>
-      <div className="grid h-full grid-rows-[auto_1fr_auto]">
-        <header className="flex items-center gap-3 border-b border-border px-3 py-1">
+      <div className="flex min-h-screen flex-col">
+        <header className="sticky top-0 z-30 flex h-10 items-center gap-3 border-b border-border bg-background px-3 max-sm:h-auto max-sm:py-1.5">
           <h1 className="m-0 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             Lofify
           </h1>
@@ -35,7 +35,9 @@ export function Home() {
           <FilterChip />
         </header>
         <TrackList />
-        <PlaybackBar />
+        <div className="sticky bottom-0 z-30">
+          <PlaybackBar />
+        </div>
         <ErrorToast />
       </div>
     </LibraryFilterProvider>
