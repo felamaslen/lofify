@@ -18,6 +18,7 @@ import { graphql, type ResultOf, type VariablesOf } from '../lib/gql.ts';
 import { gqlRequest } from '../lib/gql-request.ts';
 import { type CreatePlayerOptions, MsePlayer, type QueuedTrack } from '../lib/mse.ts';
 import { subscribe as subscribeToStream } from '../lib/sse-client.ts';
+import { libraryFilterVars } from './library-filter.tsx';
 
 export const TrackByIdDocument = graphql(
   `
@@ -748,12 +749,13 @@ class Player {
   private async resolveNextTrack(): Promise<QueuedTrack | null> {
     const currentId = this.snapshot.current?.id;
     if (!currentId) return null;
+    const filter = libraryFilterVars();
     const data = await this.queryClient.fetchQuery({
-      queryKey: ['step', 'next', currentId],
+      queryKey: ['step', 'next', currentId, filter.filterArtistIn, filter.filterAlbumIn],
       queryFn: ({ signal }) =>
         gqlRequest(
           TracksDocument,
-          { first: 1, last: null, after: currentId, before: null },
+          { first: 1, last: null, after: currentId, before: null, ...filter },
           signal,
         ),
     });
@@ -771,12 +773,13 @@ class Player {
   private async step(direction: 'next' | 'previous'): Promise<void> {
     const current = this.snapshot.current;
     if (!current) return;
+    const filter = libraryFilterVars();
     const variables =
       direction === 'next'
-        ? { first: 1, last: null, after: current.id, before: null }
-        : { first: null, last: 1, after: null, before: current.id };
+        ? { first: 1, last: null, after: current.id, before: null, ...filter }
+        : { first: null, last: 1, after: null, before: current.id, ...filter };
     const data = await this.queryClient.fetchQuery({
-      queryKey: ['step', direction, current.id],
+      queryKey: ['step', direction, current.id, filter.filterArtistIn, filter.filterAlbumIn],
       queryFn: ({ signal }) => gqlRequest(TracksDocument, variables, signal),
     });
     const nextId = data.tracks?.edges[0]?.node.id;

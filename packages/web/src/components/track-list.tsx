@@ -7,6 +7,7 @@ import { useIsMobile } from '../hooks/use-is-mobile.ts';
 import { graphql } from '../lib/gql.ts';
 import { gqlRequest } from '../lib/gql-request.ts';
 import { cn } from '../lib/utils.ts';
+import { useLibraryFilter } from '../state/library-filter.tsx';
 import { TrackByIdDocument, trackFormatFor, usePlayer } from '../state/player.tsx';
 import { type EditableTrack, TagEditDialog } from './tag-edit-dialog.tsx';
 import {
@@ -36,8 +37,22 @@ const TrackListRowDocument = graphql(`
 
 export const TracksDocument = graphql(
   `
-    query Tracks($first: Int, $last: Int, $after: String, $before: String) {
-      tracks(first: $first, last: $last, after: $after, before: $before) {
+    query Tracks(
+      $first: Int
+      $last: Int
+      $after: String
+      $before: String
+      $filterArtistIn: [String!]
+      $filterAlbumIn: [String!]
+    ) {
+      tracks(
+        first: $first
+        last: $last
+        after: $after
+        before: $before
+        filterArtistIn: $filterArtistIn
+        filterAlbumIn: $filterAlbumIn
+      ) {
         totalCount
         pageInfo {
           hasNextPage
@@ -73,13 +88,24 @@ export function TrackList() {
   const isMobile = useIsMobile();
   const rowHeight = isMobile ? ROW_HEIGHT_MOBILE : ROW_HEIGHT;
 
+  const { artist, album } = useLibraryFilter();
+  const filterArtistIn = artist ? [artist] : null;
+  const filterAlbumIn = album ? [album] : null;
+
   const query = useInfiniteQuery({
-    queryKey: ['tracks'],
+    queryKey: ['tracks', artist, album],
     initialPageParam: null as string | null,
     queryFn: ({ pageParam, signal }) =>
       gqlRequest(
         TracksDocument,
-        { first: PAGE_SIZE, last: null, after: pageParam, before: null },
+        {
+          first: PAGE_SIZE,
+          last: null,
+          after: pageParam,
+          before: null,
+          filterArtistIn,
+          filterAlbumIn,
+        },
         signal,
       ),
     getNextPageParam: (last) =>
@@ -195,7 +221,9 @@ export function TrackList() {
   }
   if (edges.length === 0) {
     return (
-      <div className="p-6 text-sm text-muted-foreground">No tracks yet. Run a library scan.</div>
+      <div className="p-6 text-sm text-muted-foreground">
+        {artist || album ? 'No tracks match this filter.' : 'No tracks yet. Run a library scan.'}
+      </div>
     );
   }
 

@@ -128,6 +128,19 @@ lock-screen scrub position in sync, and handles the hardware/lock-screen
 Session handlers are what stop mobile platforms (iOS especially) from
 pausing hidden web audio.
 
+## Search
+
+The search box in the header runs `Query.search` as you type (debounced),
+showing a keyboard-navigable dropdown grouped into artists, albums, and
+tracks (↑/↓ to move, Enter to choose, Esc to close). Choosing a track
+plays it; choosing an artist or album sets a library filter — held in a
+`LibraryFilterProvider` context that the track list reads into its
+`tracks(filterArtistIn:/filterAlbumIn:)` query. Choosing an album pins
+its artist only when the album is credited to exactly one. The active
+filter is mirrored into the URL (`?artist=` / `?album=`, alongside the
+player's `track`/`t` params) so a refresh or shared link restores it,
+and shows as a chip beside the search box; click it to clear.
+
 ## Tag editing
 
 Rows in the track list are selectable: click to select one, cmd/ctrl-click
