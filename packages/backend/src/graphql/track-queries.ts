@@ -75,6 +75,17 @@ function buildFilterClause(
   return clauses.length > 0 ? sql.join(clauses, sql` and `) : null;
 }
 
+/** The library's stable ascending sort order, shared by cursor paging, the `offset` window, and `artistIndex` so all three address the same row sequence. */
+const ASC_ORDER = sql`coalesce(${tracksTable.artistOverride}, ${tracksTable.artist}, '') asc, coalesce(${tracksTable.albumOverride}, ${tracksTable.album}, '') asc, coalesce(${tracksTable.discNumberOverride}, ${tracksTable.discNumber}, 0) asc, coalesce(${tracksTable.trackNumberOverride}, ${tracksTable.trackNumber}, 0) asc, ${tracksTable.file} asc, ${tracksTable.id} asc`;
+
+async function countTracks(filterClause: SQL | null): Promise<number> {
+  const row = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(tracksTable)
+    .where(filterClause ?? sql`true`);
+  return row[0]?.count ?? 0;
+}
+
 /**
  * Look up a single track by id. Returns `null` when no track with that id exists.
  *
@@ -93,6 +104,8 @@ export async function track(id: ID): Promise<Track | null> {
 /**
  * List the library in Relay-cursor pagination order: by `artist`, `album`, `discNumber`, `trackNumber`, then `id` for stability. Supply exactly one of `first`/`last` and at most one of `after`/`before`.
  *
+ * Pass `offset` instead to fetch an arbitrary window (`first` rows from that zero-based index) in the same order — used for index-addressed scrolling (e.g. the letter scrubber jumping anywhere without paging through the gaps). When `offset` is set, the cursor arguments are ignored.
+ *
  * @gqlQueryField
  */
 export async function tracks(
@@ -104,7 +117,35 @@ export async function tracks(
   filterArtistIn?: string[] | null,
   /** Restrict the result to tracks whose effective album is one of these names. An empty or omitted list applies no filter. */
   filterAlbumIn?: string[] | null,
+  /** Zero-based index of the first row to return, in the library sort order. When set, returns `first` rows from here and ignores `after`/`before`/`last`. */
+  offset?: Int | null,
 ): Promise<TrackConnection | null> {
+  const filterClause = buildFilterClause(filterArtistIn, filterAlbumIn);
+
+  if (offset != null) {
+    const limit = clampLimit(first) ?? DEFAULT_PAGE_SIZE;
+    const off = Number.isFinite(offset) && offset > 0 ? Math.floor(offset) : 0;
+    const rows = await db
+      .select()
+      .from(tracksTable)
+      .where(filterClause ?? sql`true`)
+      .orderBy(ASC_ORDER)
+      .limit(limit)
+      .offset(off);
+    const edges: TrackEdge[] = rows.map((row) => ({ node: toGqlTrack(row), cursor: row.id }));
+    const totalCount = await countTracks(filterClause);
+    return {
+      edges,
+      pageInfo: {
+        hasNextPage: off + rows.length < totalCount,
+        hasPreviousPage: off > 0,
+        startCursor: edges[0]?.cursor ?? null,
+        endCursor: edges.at(-1)?.cursor ?? null,
+      },
+      totalCount,
+    };
+  }
+
   if (first != null && last != null) {
     throw new Error('Pass either `first` or `last`, not both.');
   }
@@ -126,7 +167,6 @@ export async function tracks(
   const sortKey = sql`(coalesce(${tracksTable.artistOverride}, ${tracksTable.artist}, ''), coalesce(${tracksTable.albumOverride}, ${tracksTable.album}, ''), coalesce(${tracksTable.discNumberOverride}, ${tracksTable.discNumber}, 0), coalesce(${tracksTable.trackNumberOverride}, ${tracksTable.trackNumber}, 0), ${tracksTable.file}, ${tracksTable.id})`;
   const cursorSortKey = sql`(select coalesce(c."artistOverride", c.artist, ''), coalesce(c."albumOverride", c.album, ''), coalesce(c."discNumberOverride", c."discNumber", 0), coalesce(c."trackNumberOverride", c."trackNumber", 0), c.file, c.id from "Tracks" c where c.id = ${cursorId})`;
 
-  const filterClause = buildFilterClause(filterArtistIn, filterAlbumIn);
   const cursorWhere = cursorId
     ? isBackward
       ? sql`${sortKey} < ${cursorSortKey}`
@@ -154,11 +194,7 @@ export async function tracks(
     cursor: row.id,
   }));
 
-  const totalRow = await db
-    .select({ count: sql<number>`count(*)::int` })
-    .from(tracksTable)
-    .where(filterClause ?? sql`true`);
-  const totalCount = totalRow[0]?.count ?? 0;
+  const totalCount = await countTracks(filterClause);
 
   return {
     edges,
@@ -170,4 +206,41 @@ export async function tracks(
     },
     totalCount,
   };
+}
+
+/**
+ * Where a first-letter bucket begins in the `tracks` ordering.
+ *
+ * @gqlType
+ */
+export type ArtistInitial = {
+  /** Upper-case first letter of the effective artist, or `#` for anything non-alphabetic (digits, symbols, non-Latin scripts, untagged). @gqlField */
+  label: string;
+  /** Zero-based index of the bucket's first track within the full `tracks` order, suitable as the `offset` to jump there. @gqlField */
+  offset: Int;
+};
+
+/**
+ * The first-letter buckets present in the library, in `tracks` order, each with the index where it starts. Powers an A–Z scrubber: map a scroll position to its bucket, or jump to a letter by feeding its `offset` to `Query.tracks`. Honours the same `filterArtistIn`/`filterAlbumIn` as `tracks`.
+ *
+ * @gqlQueryField
+ */
+export async function artistIndex(
+  filterArtistIn?: string[] | null,
+  filterAlbumIn?: string[] | null,
+): Promise<ArtistInitial[] | null> {
+  const filterClause = buildFilterClause(filterArtistIn, filterAlbumIn);
+  const effectiveArtist = sql`coalesce(${tracksTable.artistOverride}, ${tracksTable.artist}, '')`;
+  const bucket = sql`case when ${effectiveArtist} ~ '^[A-Za-z]' then upper(left(${effectiveArtist}, 1)) else '#' end`;
+  const result = await db.execute<{ label: string; offset: number }>(sql`
+    select bucket as label, (min(rn) - 1)::int as "offset"
+    from (
+      select ${bucket} as bucket, row_number() over (order by ${ASC_ORDER}) as rn
+      from ${tracksTable}
+      ${filterClause ? sql`where ${filterClause}` : sql``}
+    ) t
+    group by bucket
+    order by min(rn)
+  `);
+  return result.rows.map((r) => ({ label: r.label, offset: Number(r.offset) }));
 }

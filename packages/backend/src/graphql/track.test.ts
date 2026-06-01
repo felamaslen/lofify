@@ -368,3 +368,69 @@ test('Query.tracks orders untagged tracks by file path and exposes Track.path', 
   ]);
   expect(data.tracks!.edges.every((e) => e.node.title === null)).toBe(true);
 });
+
+const OffsetTracksQuery = graphql(`
+  query OffsetTracks($first: Int, $offset: Int) {
+    tracks(first: $first, offset: $offset) {
+      totalCount
+      pageInfo {
+        hasNextPage
+        hasPreviousPage
+      }
+      edges {
+        node {
+          artist
+        }
+      }
+    }
+  }
+`);
+
+const ArtistIndexQuery = graphql(`
+  query ArtistIndex {
+    artistIndex {
+      label
+      offset
+    }
+  }
+`);
+
+function seedArtists(artists: (string | null)[]) {
+  return seed(
+    artists.map((artist, i) => ({
+      artist,
+      album: 'Al',
+      discNumber: 1,
+      trackNumber: i + 1,
+      title: `t${i}`,
+      format: 'mp3',
+      codec: 'mp3',
+      durationSeconds: 60,
+    })),
+  );
+}
+
+test('Query.tracks offset returns an arbitrary window without paging through the gap', async () => {
+  await seedArtists(['A', 'B', 'C', 'D', 'E']);
+
+  const { data } = await gqlRequest(app)
+    .query(OffsetTracksQuery)
+    .variables({ first: 2, offset: 2 })
+    .expectNoErrors();
+  expect(data.tracks!.totalCount).toBe(5);
+  expect(data.tracks!.edges.map((e) => e.node.artist)).toEqual(['C', 'D']);
+  expect(data.tracks!.pageInfo).toEqual({ hasNextPage: true, hasPreviousPage: true });
+});
+
+test('Query.artistIndex buckets by first letter with the offset each begins at', async () => {
+  // The untagged track sorts first (empty effective artist) under the `#` bucket.
+  await seedArtists([null, 'Alpha', 'Apex', 'Beta', 'Zeta']);
+
+  const { data } = await gqlRequest(app).query(ArtistIndexQuery).expectNoErrors();
+  expect(data.artistIndex).toEqual([
+    { label: '#', offset: 0 },
+    { label: 'A', offset: 1 },
+    { label: 'B', offset: 3 },
+    { label: 'Z', offset: 4 },
+  ]);
+});

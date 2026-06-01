@@ -101,6 +101,19 @@ artist name.
 effective artist/album names that restrict the page and `totalCount`.
 Feed them the `name` values returned by `search`.
 
+## Index-addressed scrolling
+
+Cursor pagination only walks relative to a cursor, so it can't jump to an
+arbitrary position without paging through the gap. For random access,
+`Query.tracks(offset:)` returns an arbitrary window (`first` rows from a
+zero-based index) in the same sort order. `Query.artistIndex` returns the
+first-letter buckets present in the library (`#` for non-alphabetic),
+each with the index it begins at — enough to drive an A–Z scrubber:
+highlight the bucket for the current scroll position, or jump to a letter
+by feeding its `offset` to `tracks`. Both honour the same filters. The
+player keeps using cursor paging for next/previous, which is relative by
+nature.
+
 ## Artist synonyms
 
 `ArtistSynonyms` maps alternative names (alias, romanisation,
