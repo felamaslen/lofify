@@ -85,6 +85,47 @@ columns, so overrides survive rescans. Every read (`Query.track`,
 `Query.tracks`, including the pagination sort) returns the effective
 value, `coalesce(override, scanned)`.
 
+## Search
+
+`Query.search(query)` matches `query` as a case-insensitive prefix
+(start of string) against the effective artist, album, and title, and
+returns three relay-style connections: `artists`, `albums`, and
+`tracks`. Each group is resolved independently and capped (no
+pagination — it backs a top-N dropdown). A blank query returns `null`.
+An `Album` carries every artist credited across its tracks (`artists`),
+so a multi-artist album isn't collapsed to one. `artists` also matches
+on registered synonyms (see below), always returning the canonical
+artist name.
+
+`Query.tracks` accepts `filterArtistIn` / `filterAlbumIn`: lists of
+effective artist/album names that restrict the page and `totalCount`.
+Feed them the `name` values returned by `search`.
+
+## Index-addressed scrolling
+
+Cursor pagination only walks relative to a cursor, so it can't jump to an
+arbitrary position without paging through the gap. For random access,
+`Query.tracks(offset:)` returns an arbitrary window (`first` rows from a
+zero-based index) in the same sort order. `Query.artistIndex` returns the
+first-letter buckets present in the library (`#` for non-alphabetic),
+each with the index it begins at — enough to drive an A–Z scrubber:
+highlight the bucket for the current scroll position, or jump to a letter
+by feeding its `offset` to `tracks`. Both honour the same filters. The
+player keeps using cursor paging for next/previous, which is relative by
+nature.
+
+## Artist synonyms
+
+`ArtistSynonyms` maps alternative names (alias, romanisation,
+misspelling) to a canonical artist; `(artist, synonym)` is the primary
+key. A synonym whose prefix matches a search query surfaces its
+canonical `artist` in `Search.artists` — deduped against a direct match
+— so `filterArtistIn` is only ever fed real artist names, never
+synonyms. `Track.artistSynonyms` lists the synonyms for a track's
+effective artist. `Mutation.artistSynonym{Create,Update,Delete}` manage
+them; create/update reject blank or colliding pairs, delete is
+idempotent.
+
 ## Endpoints
 
 - `GET /healthz` — liveness probe; returns `{ "status": "ok" }`.

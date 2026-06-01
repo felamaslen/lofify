@@ -128,6 +128,34 @@ lock-screen scrub position in sync, and handles the hardware/lock-screen
 Session handlers are what stop mobile platforms (iOS especially) from
 pausing hidden web audio.
 
+## Search
+
+The search box in the header runs `Query.search` as you type (debounced),
+showing a keyboard-navigable dropdown grouped into artists, albums, and
+tracks (↑/↓ to move, Enter to choose, Esc to close). Choosing a track
+plays it; choosing an artist or album sets a library filter — held in a
+`LibraryFilterProvider` context that the track list reads into its
+`tracks(filterArtistIn:/filterAlbumIn:)` query. Choosing an album pins
+its artist only when the album is credited to exactly one. The active
+filter is mirrored into the URL (`?artist=` / `?album=`, alongside the
+player's `track`/`t` params) so a refresh or shared link restores it,
+and shows as a chip beside the search box; click it to clear.
+
+## Track list scrolling
+
+The list is window-virtualised (the page scrolls, not an inner box) and
+loaded by **index**, not cursor: it fetches only the index-pages covering
+the visible range via `tracks(offset:)`, so jumping anywhere loads just
+that window instead of paging through the gap. `tracks` still reports
+`totalCount`, which sizes the scrollbar to the whole library up front;
+unloaded rows render as placeholders until their window arrives.
+
+An A–Z **letter scrubber** is pinned to the right edge (`LetterScrubber`).
+It reads `Query.artistIndex` for each first-letter bucket's starting
+index: the active letter updates as you scroll, and tapping or dragging
+(mouse or touch) jumps to that letter's offset. Letters with no tracks
+are dimmed and snap to the next populated bucket.
+
 ## Tag editing
 
 Rows in the track list are selectable: click to select one, cmd/ctrl-click
@@ -138,6 +166,12 @@ restricts to the album-shared tags (artist, album, CD, year) and leaves any
 blank field unchanged. Saving issues one `trackUpdate` mutation per selected
 track and refetches the list. Clearing a field on a single track reverts it
 to the tag scanned from the file.
+
+When every selected track shares one artist, the dialog also lists that
+artist's search **synonyms** with inline add/rename/remove. These apply
+immediately via `artistSynonym{Create,Update,Delete}` (independently of the
+tag form's Save); the section is hidden when the selection spans more than
+one artist.
 
 ## Env
 

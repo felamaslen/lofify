@@ -3,14 +3,34 @@
  * Do not manually edit. Regenerate by running `npx grats`.
  */
 
-import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, GraphQLInt, specifiedDirectives, GraphQLObjectType, GraphQLString, GraphQLID, GraphQLBoolean, GraphQLList, GraphQLEnumType, GraphQLInputObjectType, GraphQLFloat } from "graphql";
+import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, GraphQLInt, specifiedDirectives, GraphQLObjectType, GraphQLList, GraphQLString, GraphQLID, GraphQLBoolean, GraphQLEnumType, GraphQLInputObjectType, GraphQLFloat } from "graphql";
+import { artistIndex as queryArtistIndexResolver, track as queryTrackResolver, tracks as queryTracksResolver } from "./../track-queries.js";
 import { libraryScan as queryLibraryScanResolver, libraryScanCancel as mutationLibraryScanCancelResolver, libraryScanStart as mutationLibraryScanStartResolver, libraryScanSubscription as subscriptionLibraryScanResolver } from "./../library-scan.js";
 import { ping as queryPingResolver, noop as mutationNoopResolver } from "./../root.js";
+import { artistSynonyms as trackArtistSynonymsResolver, artistSynonymCreate as mutationArtistSynonymCreateResolver, artistSynonymDelete as mutationArtistSynonymDeleteResolver, artistSynonymUpdate as mutationArtistSynonymUpdateResolver } from "./../artist-synonyms.js";
 import { delivery as trackDeliveryResolver, path as trackPathResolver, url as trackUrlResolver } from "./../track.js";
-import { track as queryTrackResolver, tracks as queryTracksResolver } from "./../track-queries.js";
+import { search as querySearchResolver } from "./../search.js";
 import { trackUpdate as mutationTrackUpdateResolver } from "./../track-mutations.js";
 import { trackManifestSubscription as subscriptionTrackManifestResolver } from "./../track-manifest.js";
 export function getSchema(): GraphQLSchema {
+    const ArtistInitialType: GraphQLObjectType = new GraphQLObjectType({
+        name: "ArtistInitial",
+        description: "Where a first-letter bucket begins in the `tracks` ordering.",
+        fields() {
+            return {
+                label: {
+                    description: "Upper-case first letter of the effective artist, or `#` for anything non-alphabetic (digits, symbols, non-Latin scripts, untagged).",
+                    name: "label",
+                    type: new GraphQLNonNull(GraphQLString)
+                },
+                offset: {
+                    description: "Zero-based index of the bucket's first track within the full `tracks` order, suitable as the `offset` to jump there.",
+                    name: "offset",
+                    type: new GraphQLNonNull(GraphQLInt)
+                }
+            };
+        }
+    });
     const LibraryScanType: GraphQLObjectType = new GraphQLObjectType({
         name: "LibraryScan",
         description: "Snapshot of an ongoing or completed library scan.",
@@ -43,6 +63,105 @@ export function getSchema(): GraphQLSchema {
                 scannedTotal: {
                     description: "Files successfully parsed and upserted so far.",
                     name: "scannedTotal",
+                    type: new GraphQLNonNull(GraphQLInt)
+                }
+            };
+        }
+    });
+    const ArtistType: GraphQLObjectType = new GraphQLObjectType({
+        name: "Artist",
+        description: "A distinct artist in the library.",
+        fields() {
+            return {
+                name: {
+                    description: "The artist's name, suitable to pass back as `Query.tracks(filterArtistIn:)`.",
+                    name: "name",
+                    type: new GraphQLNonNull(GraphQLString)
+                }
+            };
+        }
+    });
+    const AlbumType: GraphQLObjectType = new GraphQLObjectType({
+        name: "Album",
+        description: "A distinct album in the library.",
+        fields() {
+            return {
+                artists: {
+                    description: "Every artist credited on a track of this album.",
+                    name: "artists",
+                    type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(ArtistType)))
+                },
+                name: {
+                    description: "The album's title, suitable to pass back as `Query.tracks(filterAlbumIn:)`.",
+                    name: "name",
+                    type: new GraphQLNonNull(GraphQLString)
+                }
+            };
+        }
+    });
+    const AlbumEdgeType: GraphQLObjectType = new GraphQLObjectType({
+        name: "AlbumEdge",
+        description: "An edge in an `AlbumConnection`.",
+        fields() {
+            return {
+                cursor: {
+                    description: "Opaque cursor for this edge; equal to the album's title.",
+                    name: "cursor",
+                    type: new GraphQLNonNull(GraphQLString)
+                },
+                node: {
+                    name: "node",
+                    type: new GraphQLNonNull(AlbumType)
+                }
+            };
+        }
+    });
+    const AlbumConnectionType: GraphQLObjectType = new GraphQLObjectType({
+        name: "AlbumConnection",
+        description: "Albums matching a search.",
+        fields() {
+            return {
+                edges: {
+                    name: "edges",
+                    type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(AlbumEdgeType)))
+                },
+                totalCount: {
+                    description: "Total distinct albums matching the search, ignoring the result cap.",
+                    name: "totalCount",
+                    type: new GraphQLNonNull(GraphQLInt)
+                }
+            };
+        }
+    });
+    const ArtistEdgeType: GraphQLObjectType = new GraphQLObjectType({
+        name: "ArtistEdge",
+        description: "An edge in an `ArtistConnection`.",
+        fields() {
+            return {
+                cursor: {
+                    description: "Opaque cursor for this edge; equal to the artist's name.",
+                    name: "cursor",
+                    type: new GraphQLNonNull(GraphQLString)
+                },
+                node: {
+                    name: "node",
+                    type: new GraphQLNonNull(ArtistType)
+                }
+            };
+        }
+    });
+    const ArtistConnectionType: GraphQLObjectType = new GraphQLObjectType({
+        name: "ArtistConnection",
+        description: "Artists matching a search.",
+        fields() {
+            return {
+                edges: {
+                    name: "edges",
+                    type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(ArtistEdgeType)))
+                },
+                totalCount: {
+                    description: "Total distinct artists matching the search, ignoring the result cap.",
+                    name: "totalCount",
                     type: new GraphQLNonNull(GraphQLInt)
                 }
             };
@@ -170,6 +289,14 @@ export function getSchema(): GraphQLSchema {
                 artist: {
                     name: "artist",
                     type: GraphQLString
+                },
+                artistSynonyms: {
+                    description: "Alternative names registered for this track's effective artist, alphabetically. Empty when the track has no artist or none are registered.",
+                    name: "artistSynonyms",
+                    type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(GraphQLString))),
+                    resolve(source) {
+                        return trackArtistSynonymsResolver(source);
+                    }
                 },
                 delivery: {
                     description: "Delivery plan for this track at the given `format`. See `TrackDelivery`. Defaults to the same baseline as `url`.",
@@ -306,9 +433,32 @@ export function getSchema(): GraphQLSchema {
                     type: new GraphQLNonNull(PageInfoType)
                 },
                 totalCount: {
-                    description: "Total number of tracks in the library, ignoring pagination arguments.",
+                    description: "Total number of tracks matching the active filters, ignoring pagination arguments.",
                     name: "totalCount",
                     type: new GraphQLNonNull(GraphQLInt)
+                }
+            };
+        }
+    });
+    const SearchType: GraphQLObjectType = new GraphQLObjectType({
+        name: "Search",
+        description: "Results of a library search, grouped by the kind of thing matched. Each group is resolved independently, so a client may select only the kinds it intends to render.",
+        fields() {
+            return {
+                albums: {
+                    description: "Distinct albums whose title matches the query, each carrying its credited artists.",
+                    name: "albums",
+                    type: new GraphQLNonNull(AlbumConnectionType)
+                },
+                artists: {
+                    description: "Distinct artists whose name \u2014 or one of their registered synonyms \u2014 matches the query. A synonym match contributes its canonical artist, so the result is always a real artist name (never a synonym), suitable for `filterArtistIn`.",
+                    name: "artists",
+                    type: new GraphQLNonNull(ArtistConnectionType)
+                },
+                tracks: {
+                    description: "Tracks whose title matches the query, in library order.",
+                    name: "tracks",
+                    type: new GraphQLNonNull(TrackConnectionType)
                 }
             };
         }
@@ -317,6 +467,22 @@ export function getSchema(): GraphQLSchema {
         name: "Query",
         fields() {
             return {
+                artistIndex: {
+                    description: "The first-letter buckets present in the library, in `tracks` order, each with the index where it starts. Powers an A\u2013Z scrubber: map a scroll position to its bucket, or jump to a letter by feeding its `offset` to `Query.tracks`. Honours the same `filterArtistIn`/`filterAlbumIn` as `tracks`.",
+                    name: "artistIndex",
+                    type: new GraphQLList(new GraphQLNonNull(ArtistInitialType)),
+                    args: {
+                        filterAlbumIn: {
+                            type: new GraphQLList(new GraphQLNonNull(GraphQLString))
+                        },
+                        filterArtistIn: {
+                            type: new GraphQLList(new GraphQLNonNull(GraphQLString))
+                        }
+                    },
+                    resolve(_source, args) {
+                        return queryArtistIndexResolver(args.filterArtistIn, args.filterAlbumIn);
+                    }
+                },
                 libraryScan: {
                     description: "The current library scan, if one is in progress or recently completed within the server's grace window. Null when no scan has run recently.",
                     name: "libraryScan",
@@ -333,6 +499,19 @@ export function getSchema(): GraphQLSchema {
                         return queryPingResolver();
                     }
                 },
+                search: {
+                    description: "Search the library for artists, albums and tracks whose name matches `query` as a case-insensitive prefix. Returns `null` for a blank query.",
+                    name: "search",
+                    type: SearchType,
+                    args: {
+                        query: {
+                            type: new GraphQLNonNull(GraphQLString)
+                        }
+                    },
+                    resolve(_source, args) {
+                        return querySearchResolver(args.query);
+                    }
+                },
                 track: {
                     description: "Look up a single track by id. Returns `null` when no track with that id exists.",
                     name: "track",
@@ -347,7 +526,7 @@ export function getSchema(): GraphQLSchema {
                     }
                 },
                 tracks: {
-                    description: "List the library in Relay-cursor pagination order: by `artist`, `album`, `discNumber`, `trackNumber`, then `id` for stability. Supply exactly one of `first`/`last` and at most one of `after`/`before`.",
+                    description: "List the library in Relay-cursor pagination order: by `artist`, `album`, `discNumber`, `trackNumber`, then `id` for stability. Supply exactly one of `first`/`last` and at most one of `after`/`before`.\n\nPass `offset` instead to fetch an arbitrary window (`first` rows from that zero-based index) in the same order \u2014 used for index-addressed scrolling (e.g. the letter scrubber jumping anywhere without paging through the gaps). When `offset` is set, the cursor arguments are ignored.",
                     name: "tracks",
                     type: TrackConnectionType,
                     args: {
@@ -357,16 +536,46 @@ export function getSchema(): GraphQLSchema {
                         before: {
                             type: GraphQLString
                         },
+                        filterAlbumIn: {
+                            description: "Restrict the result to tracks whose effective album is one of these names. An empty or omitted list applies no filter.",
+                            type: new GraphQLList(new GraphQLNonNull(GraphQLString))
+                        },
+                        filterArtistIn: {
+                            description: "Restrict the result to tracks whose effective artist is one of these names. Pass the names returned by `Query.search` (not synonyms); an empty or omitted list applies no filter.",
+                            type: new GraphQLList(new GraphQLNonNull(GraphQLString))
+                        },
                         first: {
                             type: GraphQLInt
                         },
                         last: {
                             type: GraphQLInt
+                        },
+                        offset: {
+                            description: "Zero-based index of the first row to return, in the library sort order. When set, returns `first` rows from here and ignores `after`/`before`/`last`.",
+                            type: GraphQLInt
                         }
                     },
                     resolve(_source, args) {
-                        return queryTracksResolver(args.first, args.last, args.after, args.before);
+                        return queryTracksResolver(args.first, args.last, args.after, args.before, args.filterArtistIn, args.filterAlbumIn, args.offset);
                     }
+                }
+            };
+        }
+    });
+    const ArtistSynonymType: GraphQLObjectType = new GraphQLObjectType({
+        name: "ArtistSynonym",
+        description: "An alternative name for an artist, used to surface that artist in search.",
+        fields() {
+            return {
+                artist: {
+                    description: "The canonical artist, as it appears on tracks and is passed to `Query.tracks(filterArtistIn:)`.",
+                    name: "artist",
+                    type: new GraphQLNonNull(GraphQLString)
+                },
+                synonym: {
+                    description: "The alternative name that matches the artist in search.",
+                    name: "synonym",
+                    type: new GraphQLNonNull(GraphQLString)
                 }
             };
         }
@@ -387,6 +596,57 @@ export function getSchema(): GraphQLSchema {
         name: "Mutation",
         fields() {
             return {
+                artistSynonymCreate: {
+                    description: "Register `synonym` as an alternative name for `artist`. Throws when either is blank or the pair already exists.",
+                    name: "artistSynonymCreate",
+                    type: new GraphQLNonNull(ArtistSynonymType),
+                    args: {
+                        artist: {
+                            type: new GraphQLNonNull(GraphQLString)
+                        },
+                        synonym: {
+                            type: new GraphQLNonNull(GraphQLString)
+                        }
+                    },
+                    resolve(_source, args) {
+                        return mutationArtistSynonymCreateResolver(args.artist, args.synonym);
+                    }
+                },
+                artistSynonymDelete: {
+                    description: "Remove the synonym `synonym` from `artist`. No-op when the pair doesn't exist.",
+                    name: "artistSynonymDelete",
+                    type: new GraphQLNonNull(VoidType),
+                    args: {
+                        artist: {
+                            type: new GraphQLNonNull(GraphQLString)
+                        },
+                        synonym: {
+                            type: new GraphQLNonNull(GraphQLString)
+                        }
+                    },
+                    resolve(_source, args) {
+                        return mutationArtistSynonymDeleteResolver(args.artist, args.synonym);
+                    }
+                },
+                artistSynonymUpdate: {
+                    description: "Rename the synonym `synonym` of `artist` to `newSynonym`. Throws when `newSynonym` is blank, the original pair is unknown, or the renamed pair already exists.",
+                    name: "artistSynonymUpdate",
+                    type: new GraphQLNonNull(ArtistSynonymType),
+                    args: {
+                        artist: {
+                            type: new GraphQLNonNull(GraphQLString)
+                        },
+                        newSynonym: {
+                            type: new GraphQLNonNull(GraphQLString)
+                        },
+                        synonym: {
+                            type: new GraphQLNonNull(GraphQLString)
+                        }
+                    },
+                    resolve(_source, args) {
+                        return mutationArtistSynonymUpdateResolver(args.artist, args.synonym, args.newSynonym);
+                    }
+                },
                 libraryScanCancel: {
                     description: "Requests cancellation of the named in-progress scan. No-op when the scan is unknown or already completed.",
                     name: "libraryScanCancel",
@@ -580,6 +840,6 @@ export function getSchema(): GraphQLSchema {
         query: QueryType,
         mutation: MutationType,
         subscription: SubscriptionType,
-        types: [QualityType, TrackFormatType, DeliveryTierType, DurationType, LibraryScanType, MutationType, PageInfoType, QueryType, SubscriptionType, TrackType, TrackConnectionType, TrackDeliveryType, TrackEdgeType, TrackManifestType, TrackManifestChunkType, TrackManifestInitType, VoidType]
+        types: [QualityType, TrackFormatType, AlbumType, AlbumConnectionType, AlbumEdgeType, ArtistType, ArtistConnectionType, ArtistEdgeType, ArtistInitialType, ArtistSynonymType, DeliveryTierType, DurationType, LibraryScanType, MutationType, PageInfoType, QueryType, SearchType, SubscriptionType, TrackType, TrackConnectionType, TrackDeliveryType, TrackEdgeType, TrackManifestType, TrackManifestChunkType, TrackManifestInitType, VoidType]
     });
 }

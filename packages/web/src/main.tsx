@@ -24,7 +24,12 @@ const indexRoute = createRoute({
 });
 
 const routeTree = rootRoute.addChildren([indexRoute]);
-const router = createRouter({ routeTree });
+// The page scrolls (body scroll), so the router would otherwise reset window
+// scroll to the top on every navigation — including the player's ~2s playhead
+// writes to the URL. Scroll restoration preserves position per history entry
+// instead; the player keeps the same entry (it preserves history.state), so it
+// stays put while scrolling a playing library.
+const router = createRouter({ routeTree, scrollRestoration: true });
 
 declare module '@tanstack/react-router' {
   interface Register {

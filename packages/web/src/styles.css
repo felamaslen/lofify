@@ -33,7 +33,34 @@
   html,
   body,
   #root {
-    @apply h-full;
+    @apply min-h-full;
+  }
+
+  /* The whole page scrolls (body scroll), not an inner container, so chrome can be `position: sticky`. Reserve a stable gutter and force a visible, themed bar rather than the macOS overlay one. */
+  html {
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted-foreground) / 0.55) transparent;
+  }
+
+  html::-webkit-scrollbar {
+    width: 12px;
+  }
+
+  html::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  html::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--muted-foreground) / 0.55);
+    border-radius: 9999px;
+    /* Transparent border + content-box clip insets the thumb, leaving breathing room in the track. */
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+
+  html::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--muted-foreground) / 0.8);
   }
 
   body {
