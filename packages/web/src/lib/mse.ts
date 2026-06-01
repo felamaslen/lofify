@@ -26,10 +26,16 @@ const FETCH_AHEAD = 30;
 const KEEP_AHEAD = 45;
 /** Tolerance for treating the playhead as "inside" a buffered range (covers sub-frame gaps at fragment boundaries). */
 const PLAYHEAD_EPS = 0.1;
-/** How often, at most, to report in-flight download progress during a chunk fetch. */
+/** How often, at most, to fire an in-flight `onTransfer` report during a chunk fetch. */
 const PROGRESS_INTERVAL_MS = 250;
+/** Hold the first in-flight `onTransfer` report until this much body has streamed, so TCP slow-start doesn't inflate the sample the caller sees. */
+const TRANSFER_MIN_MS = 500;
 /** When the current track has at most this many seconds left to play, mse invokes `trackNext` to resolve and start fetching the successor. Must comfortably exceed worst-case manifest first-emission latency plus first-chunk fetch; otherwise the playhead hits the encoded tail before the successor has any buffered audio. */
 const NEXT_TRACK_PRELOAD_SECONDS = 20;
+/** How long `audio.currentTime` must remain unchanged (while not paused or seeking) before we treat playback as stalled at the boundary and bridge into the next track. Comfortably longer than the coarsest expected `currentTime` update interval (Firefox's privacy-resistance rounding tops out around 1s) so normal playback through a position never looks stalled. */
+const BOUNDARY_STALL_MS = 1500;
+/** Wall-clock interval for the watchdog `tick` driven by `setInterval`. Audio-element events (`timeupdate`, `updateend`) stop firing during a stall, so the stall detector wouldn't otherwise get a chance to run. Short enough that the bridge fires within ~2× `BOUNDARY_STALL_MS` of the true stall start. */
+const WATCHDOG_TICK_MS = 500;
 
 /** Half-open seconds interval `[start, end)`. Mirrors the shape of `TimeRanges` entries that `SourceBuffer.buffered` reports, so a buffered region round-trips through the public accessors without conversion. */
 export type Range = { start: number; end: number };
@@ -50,16 +56,18 @@ export type QueuedTrack = {
   subscribeManifest: (quality: string, onEmit: (m: ManifestSnapshot) => void) => () => void;
 };
 
+const bitsPerSecond = (bytes: number, ms: number): number => (bytes * 8000) / ms;
+
 /** Construction-time hooks; all optional. */
 export type CreatePlayerOptions = {
   /** Called with the `X-Quality` of the bytes under the playhead whenever it changes. Trails the requested tier mid-swap until the old-quality buffer drains. `null` before any chunk under the playhead has been fetched. */
   onQuality?: (quality: string | null) => void;
-  /** Called once per chunk fetch with the body-transfer measurement (TTFB excluded). Drives the adaptive-bitrate controller. */
-  onThroughput?: (bytes: number, transferMs: number, contentSeconds: number) => void;
-  /** Called periodically *while* a chunk download is in flight (TTFB excluded). Lets the controller spot a collapsing link and drop the tier before the buffer drains. */
-  onProgress?: (bytes: number, elapsedMs: number) => void;
+  /** Called with the body-transfer rate (bits per second, TTFB excluded) during chunk fetches. Fires periodically mid-flight (`chunkFinished = false`) so the ABR controller can react to a collapsing link before the buffer drains, and once on completion (`chunkFinished = true`) with the final rate so the controller has a confident sample for upscale decisions. */
+  onTransfer?: (bitsPerSecond: number, chunkFinished: boolean) => void;
   /** Called when the playhead crosses into a different track (or on first load). Track-local position and buffered ranges are available via the public accessors; concatenated-stream coordinates aren't exposed. */
   onTrackChange?: (trackId: string) => void;
+  /** Called whenever the current track's manifest emits — i.e. whenever `currentTrackReadySeconds()` / `currentTrackEncodedEnd()` may have advanced. Manifest growth doesn't ride on any audio-element event, so the caller can't otherwise know when to re-poll the buffer indicator UI. */
+  onReadyChange?: () => void;
 };
 
 /** First chunk index whose range covers `time`, or -1 if `time` is at/after the last chunk's end. */
@@ -157,7 +165,6 @@ export class MsePlayer {
   /**
    * Single entry point for the caller. Decision matrix:
    *
-   * 1. `existing` is null or disposed → build a fresh player for `track.contentType`, install `track` as `current`, seek `audio.currentTime` to `startAt`.
    * 2. Same codec, same id as `existing.current` → live tier switch: drop in-flight fetches and queued appends for the track, point at the new url/quality, re-open its manifest subscription, clear the `next` slot (its url was at the old tier). No seek.
    * 3. Same codec, different id → wipe-and-replace: cancel pending, clear append queue, remove buffered audio, close subscriptions, install new `current`, seek to `startAt`.
    * 4. Different codec → dispose `existing`, then case (1).
@@ -167,6 +174,9 @@ export class MsePlayer {
    * Throws `Error` (with a UI-ready message) when the browser can't satisfy the request.
    */
   static async init(
+    /**
+     * Existing `MsePlayer` instance. Will modify this instance and return it if possible and not already disposed. Set to `null` if not yet initialised.
+     */
     existing: MsePlayer | null,
     audio: HTMLAudioElement,
     track: QueuedTrack,
@@ -233,6 +243,11 @@ export class MsePlayer {
   private nextRequested = false;
   /** Whether the upcoming end of `current` should fire `MediaSource.endOfStream()`. Set when `trackNext` returns `null` (end of library) or a codec-mismatch successor (mse can't splice; caller's `ended` handler reloads). */
   private nextEnded = false;
+  /** Stall-detection state: the last `audio.currentTime` we observed and the wall-clock timestamp we observed it at. If `currentTime` doesn't advance across a real interval of wall-clock time while playback is meant to be live, audio is stalled — used by `updateCurrentTrack` to bridge a track boundary the playhead can't reach via the normal `>= next.durationOffset` route (codec padding, encoder overhead, etc.). Reset on every change of `currentTime` and whenever audio is paused or mid-seek. */
+  private observedPlayhead = -1;
+  private observedPlayheadAt = 0;
+  /** `setInterval` handle for the watchdog tick, or `null` when paused. Started/stopped via the audio element's `play`/`pause` events so a backgrounded paused player isn't burning a timer. */
+  private watchdog: ReturnType<typeof setInterval> | null = null;
 
   /** In-flight range fetches, keyed by `pendingKey(trackId, chunkIndex)` (`-1` = init). */
   private pending = new Map<PendingKey, AbortController>();
@@ -268,7 +283,26 @@ export class MsePlayer {
     sourceBuffer.addEventListener('updateend', this.onTick);
     audio.addEventListener('timeupdate', this.onTick);
     audio.addEventListener('seeking', this.onTick);
+    // Wall-clock watchdog. Audio events stop firing during a stall (no `timeupdate` if
+    // `currentTime` isn't advancing, no `updateend` if nothing is appending), so the stall
+    // detector in `updateCurrentTrack` wouldn't otherwise get a chance to run. Only ticks while
+    // audio is actually playing — when paused there's no playback to detect a stall against.
+    audio.addEventListener('play', this.startWatchdog);
+    audio.addEventListener('pause', this.stopWatchdog);
+    audio.addEventListener('ended', this.stopWatchdog);
+    if (!audio.paused) this.startWatchdog();
   }
+
+  private startWatchdog = (): void => {
+    if (this.watchdog !== null || this.disposed) return;
+    this.watchdog = setInterval(this.onTick, WATCHDOG_TICK_MS);
+  };
+
+  private stopWatchdog = (): void => {
+    if (this.watchdog === null) return;
+    clearInterval(this.watchdog);
+    this.watchdog = null;
+  };
 
   /** Track-local position of the playhead within the currently-playing track (seconds from its t=0). 0 when nothing is loaded. */
   currentPosition(): number {
@@ -309,14 +343,13 @@ export class MsePlayer {
     return chunks.length > 0 ? chunks[chunks.length - 1]!.endSeconds : null;
   }
 
-  /** Seek to `time` *within* the track identified by `trackId`. */
+  /** Seek to `time` *within* the track identified by `trackId`. Clamps to the track's nominal `totalSeconds` (not its currently-encoded length) so a seek into an un-encoded region just stalls waiting for the chunk to arrive, rather than landing past the `next.durationOffset` boundary and being misinterpreted as a track change. */
   seekTo(trackId: string, time: number): void {
     if (this.disposed) return;
     const entry = this.entryById(trackId);
     if (!entry || entry.durationOffset === null) return;
-    const concat = entry.durationOffset + Math.max(0, time);
-    const tail = trackEncodedEnd(entry);
-    this.audio.currentTime = tail !== null ? Math.min(concat, tail) : concat;
+    const clamped = Math.max(0, Math.min(time, entry.totalSeconds));
+    this.audio.currentTime = entry.durationOffset + clamped;
   }
 
   /** Tear the player down: abort in-flight fetches, close every manifest subscription, detach audio-element listeners, end the underlying `MediaSource`, and revoke its blob URL. */
@@ -328,20 +361,24 @@ export class MsePlayer {
     this.qualityByStart.clear();
     this.upgradedStarts.clear();
     this.cancelAllPending();
+    this.stopWatchdog();
     this.audio.removeEventListener('timeupdate', this.onTick);
     this.audio.removeEventListener('seeking', this.onTick);
+    this.audio.removeEventListener('play', this.startWatchdog);
+    this.audio.removeEventListener('pause', this.stopWatchdog);
+    this.audio.removeEventListener('ended', this.stopWatchdog);
     try {
       this.sourceBuffer.removeEventListener('updateend', this.onTick);
     } catch {
       // SourceBuffer may already be detached from the MediaSource.
     }
-    if (this.mediaSource.readyState === 'open') {
-      try {
-        this.mediaSource.endOfStream();
-      } catch {
-        // Already ended.
-      }
-    }
+    // We deliberately don't call `endOfStream()` here. For the codec-rebuild path in `MsePlayer.init`,
+    // the caller reassigns `audio.src` to a new MediaSource immediately afterwards — the old source
+    // detaches and is GC'd. Calling `endOfStream()` first clamps the old source's `duration` to its
+    // buffered tail, which can race with the src reassignment and let `ended` fire on the old
+    // source against the audio element, triggering the caller's `ended` handler and skipping a
+    // track. For final orchestrator teardown, the audio element is being thrown away too, so the
+    // signal is unnecessary.
     URL.revokeObjectURL(this.blobUrl);
   }
 
@@ -463,7 +500,7 @@ export class MsePlayer {
     this.options.onTrackChange?.(trackId);
   }
 
-  /** Called by each entry's `subscribeManifest` on every emission. Records the snapshot and, when `current` first reaches `done`, resolves `next`'s offset so its chunks become fetchable. */
+  /** Called by each entry's `subscribeManifest` on every emission. Records the snapshot, fires `onReadyChange` if the current track grew, and (when `current` first reaches `done`) resolves `next`'s offset so its chunks become fetchable. */
   private applyManifest(trackId: string, m: ManifestSnapshot): void {
     const entry = this.entryById(trackId);
     if (!entry) return;
@@ -471,27 +508,27 @@ export class MsePlayer {
     entry.manifest = m;
     if (m.done && !wasDone) this.resolveNextOffset();
     this.extendMediaSourceDuration();
+    if (entry === this.current) this.options.onReadyChange?.();
     this.tick();
   }
 
-  /** When `current` finishes encoding and `next` exists without an offset, anchor `next` to `current`'s encoded tail. */
+  /** When `current` finishes encoding and `next` exists without an offset, anchor `next` to `current`'s nominal end (`durationOffset + totalSeconds`). We trust `totalSeconds` rather than `chunks[last].endSeconds` so the boundary lines up with what the UI calls the end of the current track — anchoring to the actual encoded tail would let a slider drag into the last second of a track (still "current" from the UI's view) land past `next.durationOffset` and fire `onTrackChange` prematurely. Any drift between the backend's encoded length and `totalSeconds` is a server-side bug. */
   private resolveNextOffset(): void {
     if (!this.next || this.next.durationOffset !== null) return;
-    if (!this.current) return;
-    const tail = trackEncodedEnd(this.current);
-    if (tail === null) return;
-    this.next.durationOffset = tail;
+    if (!this.current || this.current.durationOffset === null) return;
+    if (!this.current.manifest.done) return;
+    this.next.durationOffset = this.current.durationOffset + this.current.totalSeconds;
   }
 
-  /** Push `MediaSource.duration` up to cover the live slots' span (encoded tail when known, else nominal). Extend-only — assigning a value below the buffered tail throws. */
+  /** Push `MediaSource.duration` up to cover the live slots' full nominal span. We deliberately use `totalSeconds` rather than `trackEncodedEnd`: the encoded tail is partial while a track is still encoding, and clamping `duration` to it would let the audio element treat a mid-track seek into the un-encoded region as "past the end", fire `ended`, and trigger a track-skip. Extend-only — assigning below the buffered tail throws. */
   private extendMediaSourceDuration(): void {
     let total = 0;
     for (const e of this.liveEntries()) {
-      const tail = trackEncodedEnd(e);
-      if (tail !== null) total = Math.max(total, tail);
-      else if (e.durationOffset !== null)
+      if (e.durationOffset !== null) {
         total = Math.max(total, e.durationOffset + e.totalSeconds);
-      else total += e.totalSeconds;
+      } else {
+        total += e.totalSeconds;
+      }
     }
     if (total <= this.mediaSourceDurationCap) return;
     this.mediaSourceDurationCap = total;
@@ -509,6 +546,7 @@ export class MsePlayer {
 
   /** The orchestration loop, fired by `updateend`/`timeupdate`/`seeking` and by internal state transitions. Runs reconcile, advances slots on a boundary cross, kicks off the preload thunk, ends the stream when due, and reports quality changes. */
   private tick(): void {
+    this.trackPlayheadStability();
     this.reconcile();
     this.updateCurrentTrack();
     this.maybeInvokeTrackNext();
@@ -516,10 +554,32 @@ export class MsePlayer {
     this.reportQuality();
   }
 
-  /** Detect the playhead crossing into `next`. Shift slots, fire `onTrackChange`, reset preload flags. */
+  /** Track when `audio.currentTime` last changed. The wall-clock-vs-playhead delta lets `updateCurrentTrack` distinguish "audio stalled" from "audio playing through this position". Reset on pause/seek so those states never look like a stall. */
+  private trackPlayheadStability(): void {
+    const t = this.audio.currentTime;
+    if (this.audio.paused || this.audio.seeking || t !== this.observedPlayhead) {
+      this.observedPlayhead = t;
+      this.observedPlayheadAt = performance.now();
+    }
+  }
+
+  /** Detect the playhead crossing into `next`. Shift slots, fire `onTrackChange`, reset preload flags. Bridges the gap that opens when `current`'s actual playable end falls short of `next.durationOffset` (codec padding, encoder overhead, frame-boundary rounding) by waiting until `audio.currentTime` has been stuck for `BOUNDARY_STALL_MS` of wall-clock time — a position check alone can't distinguish playing-through from stalled-at-end. */
   private updateCurrentTrack(): void {
     if (!this.next || this.next.durationOffset === null) return;
-    if (this.audio.currentTime < this.next.durationOffset) return;
+    const boundary = this.next.durationOffset;
+    let cross = this.audio.currentTime >= boundary;
+    if (
+      !cross &&
+      this.current?.manifest.done &&
+      !this.audio.paused &&
+      !this.audio.seeking &&
+      this.audio.currentTime < boundary &&
+      performance.now() - this.observedPlayheadAt > BOUNDARY_STALL_MS
+    ) {
+      this.audio.currentTime = boundary;
+      cross = true;
+    }
+    if (!cross) return;
     if (this.current) this.unsubscribeEntry(this.current);
     this.current = this.next;
     this.next = null;
@@ -797,7 +857,7 @@ export class MsePlayer {
     }
   }
 
-  /** Fetch `entry`'s chunk at `chunkIndex`, record its `X-Quality`, report throughput, and push to the append queue. */
+  /** Fetch `entry`'s chunk at `chunkIndex`, record its `X-Quality`, and push to the append queue. Transfer reports go directly from `fetchRange` to `options.onTransfer`. */
   private async fetchChunk(entry: TrackEntry, chunkIndex: number): Promise<void> {
     const chunk = entry.manifest.chunks[chunkIndex];
     if (!chunk || entry.durationOffset === null) return;
@@ -812,15 +872,11 @@ export class MsePlayer {
         chunk.byteStart,
         chunk.byteEnd,
         ctrl.signal,
-        this.options.onProgress,
+        this.options.onTransfer,
       );
       if (!res || this.disposed || ctrl.signal.aborted) return;
       if (res.quality) {
         this.qualityByStart.set(Math.round(absStart), res.quality);
-      }
-      const contentSeconds = chunk.endSeconds - localStart;
-      if (res.transferMs !== null && contentSeconds > 0) {
-        this.options.onThroughput?.(res.data.byteLength, res.transferMs, contentSeconds);
       }
       this.appendQueue.push({
         trackId: entry.id,
@@ -834,14 +890,14 @@ export class MsePlayer {
     }
   }
 
-  /** Issue a HTTP `Range` request and stream the response. Returns the body bytes, the `X-Quality` header, and the first-byte → last-byte transfer time (TTFB excluded so the ABR controller sees line speed, not encode-wait). Also pulses `onProgress` while the body streams. */
+  /** Issue a HTTP `Range` request and stream the response. Returns the body bytes and the `X-Quality` header. When `onTransfer` is supplied (chunk fetches only — init segments skip it), fires periodic mid-flight rate samples once `TRANSFER_MIN_MS` of body has been read (so TCP slow-start doesn't distort the first reading), then a final sample with `chunkFinished = true`. */
   private async fetchRange(
     url: string,
     byteStart: number,
     byteEnd: number,
     signal: AbortSignal,
-    onProgress?: (bytes: number, elapsedMs: number) => void,
-  ): Promise<{ data: Uint8Array; quality: string | null; transferMs: number | null } | null> {
+    onTransfer?: (bitsPerSecond: number, chunkFinished: boolean) => void,
+  ): Promise<{ data: Uint8Array; quality: string | null } | null> {
     try {
       const res = await fetch(url, {
         signal,
@@ -853,7 +909,7 @@ export class MsePlayer {
       // the request's TTFB, which on this route is dominated by encode-wait, not the network.
       const reader = res.body?.getReader();
       if (!reader) {
-        return { data: new Uint8Array(await res.arrayBuffer()), quality, transferMs: null };
+        return { data: new Uint8Array(await res.arrayBuffer()), quality };
       }
       const parts: Uint8Array[] = [];
       let total = 0;
@@ -865,17 +921,20 @@ export class MsePlayer {
         if (firstByteAt === 0) firstByteAt = performance.now();
         parts.push(value);
         total += value.byteLength;
-        if (onProgress) {
+        if (onTransfer) {
           const elapsed = performance.now() - firstByteAt;
-          if (elapsed - lastReportAt >= PROGRESS_INTERVAL_MS) {
+          if (elapsed >= TRANSFER_MIN_MS && elapsed - lastReportAt >= PROGRESS_INTERVAL_MS) {
             lastReportAt = elapsed;
-            onProgress(total, elapsed);
+            onTransfer(bitsPerSecond(total, elapsed), false);
           }
         }
       }
-      const transferMs = firstByteAt === 0 ? null : performance.now() - firstByteAt;
+      if (onTransfer && firstByteAt !== 0) {
+        const transferMs = performance.now() - firstByteAt;
+        if (transferMs > 0) onTransfer(bitsPerSecond(total, transferMs), true);
+      }
       const data = parts.length === 1 ? parts[0]! : concatChunks(parts, total);
-      return { data, quality, transferMs };
+      return { data, quality };
     } catch {
       return null;
     }

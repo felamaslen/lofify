@@ -118,8 +118,6 @@ const DOWN_FACTOR = 1.3;
 const BUFFER_HIGH_SECONDS = 20;
 /** Minimum gap between tier switches. */
 const SWITCH_COOLDOWN_MS = 5000;
-/** Ignore in-flight download progress until this much body has transferred, so TCP slow-start doesn't trigger a spurious drop. */
-const INFLIGHT_MIN_MS = 500;
 
 const GRAPHQL_URL = import.meta.env.VITE_GRAPHQL_URL ?? '/graphql';
 
@@ -158,15 +156,15 @@ function loadStoredMode(): QualityMode {
     : 'ADAPTIVE';
 }
 
-/** The tier Adaptive starts a track at: where the last session left off (cold start `LOW`). Table-free — only the chosen tier is remembered, so there's no bandwidth-to-tier mapping to maintain. */
+/** The tier Adaptive starts a track at: where the last session left off (cold start `MEDIUM`). Table-free — only the chosen tier is remembered, so there's no bandwidth-to-tier mapping to maintain. */
 function loadStoredAdaptiveTier(): Quality {
   const onLadder = (v: string | null): v is Quality =>
     v !== null && (ADAPTIVE_LADDER as readonly string[]).includes(v);
-  if (typeof window === 'undefined') return 'LOW';
+  if (typeof window === 'undefined') return 'MEDIUM';
   const stored = window.localStorage.getItem(ADAPTIVE_TIER_STORAGE_KEY);
   if (onLadder(stored)) return stored;
   const legacy = window.localStorage.getItem(LEGACY_QUALITY_STORAGE_KEY);
-  return onLadder(legacy) ? legacy : 'LOW';
+  return onLadder(legacy) ? legacy : 'MEDIUM';
 }
 
 function initialActiveTier(): Quality {
@@ -212,11 +210,6 @@ function writePlaybackToUrl(trackId: string | null, seconds: number): void {
     url.searchParams.delete(URL_TIME_PARAM);
   }
   window.history.replaceState(window.history.state, '', url);
-}
-
-/** Bytes/second as rounded kbps, for the adaptive log lines. */
-function toKbps(bytesPerSecond: number): number {
-  return Math.round((bytesPerSecond * 8) / 1000);
 }
 
 /** Seconds of contiguous buffer ahead of the playhead, or 0 if the playhead isn't inside a buffered range. */
@@ -375,6 +368,7 @@ class Player {
     // handles both.
     // TODO: make MsePlayer support cross-codec splicing, and remove this
     this.on('ended', () => {
+      console.log('ended called');
       this.set({ isPlaying: false });
       void this.step('next');
     });
@@ -550,9 +544,9 @@ class Player {
   private mseOptions(): CreatePlayerOptions {
     return {
       onQuality: (q) => this.set({ playingQuality: q as Quality | null }),
-      onThroughput: (bytes, transferMs) => this.onThroughput(bytes, transferMs),
-      onProgress: (bytes, elapsedMs) => this.onProgress(bytes, elapsedMs),
+      onTransfer: (bps, chunkFinished) => this.onTransfer(bps, chunkFinished),
       onTrackChange: (trackId) => this.handleTrackChange(trackId),
+      onReadyChange: () => this.set({ readySeconds: this.mse?.currentTrackReadySeconds() ?? 0 }),
     };
   }
 
@@ -672,64 +666,51 @@ class Player {
     }
   }
 
-  /**
-   * Upscale on a just-finished chunk fetch's observed speed (`bytes / transferMs`, TTFB already excluded). Climbing is the on-completion concern: it wants a full, confident sample and buffer headroom, and can't sensibly happen mid-download (that would abort a perfectly good fetch on a partial reading). With a healthy buffer it jumps straight to the highest tier the speed covers with `UP_FACTOR` headroom. Downscaling is owned entirely by `onProgress`, which reacts during the transfer rather than after it. Gated by a cooldown so it can't flap, and logged for diagnosing churn.
-   */
-  private onThroughput(bytes: number, transferMs: number): void {
+  /** Unified ABR signal from mse. `chunkFinished = true` is a confident, post-completion sample: try to upscale if the buffer is healthy and there's headroom. `chunkFinished = false` is a mid-flight sample: try to downscale if the rate already can't sustain the current tier (and let `changeFormat` cancel the doomed fetch). Gated by a cooldown so it can't flap. */
+  private onTransfer(bitsPerSecond: number, chunkFinished: boolean): void {
     if (this.snapshot.qualityMode !== 'ADAPTIVE') return;
-    const now = performance.now();
-    if (now - this.lastSwitchAt < SWITCH_COOLDOWN_MS) return;
+    if (performance.now() - this.lastSwitchAt < SWITCH_COOLDOWN_MS) return;
     const idx = ADAPTIVE_LADDER.indexOf(this.snapshot.requestedTier);
-    if (idx < 0 || this.tierBytesPerSecond(idx) === null) return;
-    const ahead = bufferedAheadSeconds(this.audio);
-    if (ahead <= BUFFER_HIGH_SECONDS) return;
-    const observed = (bytes * 1000) / Math.max(transferMs, 1); // bytes/s on the just-finished fetch
-    // Healthy buffer and spare bandwidth: climb straight to the highest tier with headroom.
-    let up = idx;
-    while (up + 1 < ADAPTIVE_LADDER.length && this.rateFits(observed, up + 1, UP_FACTOR)) up++;
-    if (up === idx) return;
-    const thresholdKbps = toKbps(this.tierBytesPerSecond(up)! * UP_FACTOR);
-    this.switchTier(
-      'upscale',
-      up,
-      idx,
-      `speed ${toKbps(observed)} kbps ≥ ${UP_FACTOR}× = ${thresholdKbps} kbps (buffer ${ahead.toFixed(1)}s)`,
-    );
+    if (idx < 0 || this.tierBitsPerSecond(idx) === null) return;
+    if (chunkFinished) {
+      const ahead = bufferedAheadSeconds(this.audio);
+      if (ahead <= BUFFER_HIGH_SECONDS) return;
+      let up = idx;
+      while (up + 1 < ADAPTIVE_LADDER.length && this.rateFits(bitsPerSecond, up + 1, UP_FACTOR))
+        up++;
+      if (up === idx) return;
+      const thresholdKbps = Math.round((this.tierBitsPerSecond(up)! * UP_FACTOR) / 1000);
+      this.switchTier(
+        'upscale',
+        up,
+        idx,
+        `speed ${Math.round(bitsPerSecond / 1000)} kbps ≥ ${UP_FACTOR}× = ${thresholdKbps} kbps (buffer ${ahead.toFixed(1)}s)`,
+      );
+    } else {
+      if (idx <= 0) return;
+      if (this.rateFits(bitsPerSecond, idx, DOWN_FACTOR)) return;
+      const nextIdx = this.sustainableFloor(bitsPerSecond, idx);
+      const thresholdKbps = Math.round((this.tierBitsPerSecond(idx)! * DOWN_FACTOR) / 1000);
+      this.switchTier(
+        'downscale',
+        nextIdx,
+        idx,
+        `in-flight speed ${Math.round(bitsPerSecond / 1000)} kbps < ${DOWN_FACTOR}× = ${thresholdKbps} kbps`,
+      );
+    }
   }
 
-  /**
-   * The downscale path: react to a still-in-flight chunk download. If the speed observed on the open body already can't sustain the current tier, drop straight to the highest tier it can — and abort the doomed fetch (`changeFormat` cancels it) — rather than waiting for it to finish and the buffer to drain. A completion-only signal is too late: by then a collapsed link has already emptied the buffer, and the finished rate is just the final value of what we're sampling here anyway.
-   */
-  private onProgress(bytes: number, elapsedMs: number): void {
-    if (this.snapshot.qualityMode !== 'ADAPTIVE') return;
-    if (elapsedMs < INFLIGHT_MIN_MS) return;
-    const now = performance.now();
-    if (now - this.lastSwitchAt < SWITCH_COOLDOWN_MS) return;
-    const idx = ADAPTIVE_LADDER.indexOf(this.snapshot.requestedTier);
-    if (idx <= 0 || this.tierBytesPerSecond(idx) === null) return;
-    const rate = (bytes * 1000) / elapsedMs; // bytes/s on the open body
-    if (this.rateFits(rate, idx, DOWN_FACTOR)) return; // current tier still sustainable on the live signal
-    const nextIdx = this.sustainableFloor(rate, idx);
-    const thresholdKbps = toKbps(this.tierBytesPerSecond(idx)! * DOWN_FACTOR);
-    this.switchTier(
-      'downscale',
-      nextIdx,
-      idx,
-      `in-flight speed ${toKbps(rate)} kbps < ${DOWN_FACTOR}× = ${thresholdKbps} kbps`,
-    );
-  }
-
-  /** bytes/s the ladder tier at `i` consumes, from its advertised kbps (kbps × 1000 / 8), or `null` if the delivery didn't carry one. */
-  private tierBytesPerSecond(i: number): number | null {
+  /** Advertised bits/s for the ladder tier at `i`, or `null` if the delivery didn't carry one. */
+  private tierBitsPerSecond(i: number): number | null {
     const kbps = this.snapshot.delivery?.tiers.find(
       (t) => t.quality === ADAPTIVE_LADDER[i],
     )?.bitrateKbps;
-    return kbps == null ? null : (kbps * 1000) / 8;
+    return kbps == null ? null : kbps * 1000;
   }
 
-  /** Whether an observed `rate` (bytes/s) covers the ladder tier at `i` with `factor` headroom. */
+  /** Whether an observed `rate` (bits/s) covers the ladder tier at `i` with `factor` headroom. */
   private rateFits(rate: number, i: number, factor: number): boolean {
-    const b = this.tierBytesPerSecond(i);
+    const b = this.tierBitsPerSecond(i);
     return b !== null && rate >= b * factor;
   }
 
@@ -749,8 +730,8 @@ class Player {
   ): void {
     this.lastSwitchAt = performance.now();
     const label = (i: number): string => {
-      const b = this.tierBytesPerSecond(i);
-      return `${ADAPTIVE_LADDER[i]} [${b === null ? '?' : `${toKbps(b)} kbps`}]`;
+      const b = this.tierBitsPerSecond(i);
+      return `${ADAPTIVE_LADDER[i]} [${b === null ? '?' : `${Math.round(b / 1000)} kbps`}]`;
     };
     console.info(`[abr] [${kind}] ${label(fromIdx)} → ${label(nextIdx)} — ${reason}`);
     void this.changeFormat(ADAPTIVE_LADDER[nextIdx]!, this.snapshot.lossyPreference);
