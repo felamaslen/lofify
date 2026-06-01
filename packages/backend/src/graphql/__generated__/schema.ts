@@ -7,6 +7,7 @@ import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, Gra
 import { libraryScan as queryLibraryScanResolver, libraryScanCancel as mutationLibraryScanCancelResolver, libraryScanStart as mutationLibraryScanStartResolver, libraryScanSubscription as subscriptionLibraryScanResolver } from "./../library-scan.js";
 import { ping as queryPingResolver, noop as mutationNoopResolver } from "./../root.js";
 import { delivery as trackDeliveryResolver, path as trackPathResolver, url as trackUrlResolver } from "./../track.js";
+import { search as querySearchResolver } from "./../search.js";
 import { track as queryTrackResolver, tracks as queryTracksResolver } from "./../track-queries.js";
 import { trackUpdate as mutationTrackUpdateResolver } from "./../track-mutations.js";
 import { trackManifestSubscription as subscriptionTrackManifestResolver } from "./../track-manifest.js";
@@ -43,6 +44,105 @@ export function getSchema(): GraphQLSchema {
                 scannedTotal: {
                     description: "Files successfully parsed and upserted so far.",
                     name: "scannedTotal",
+                    type: new GraphQLNonNull(GraphQLInt)
+                }
+            };
+        }
+    });
+    const ArtistType: GraphQLObjectType = new GraphQLObjectType({
+        name: "Artist",
+        description: "A distinct artist in the library.",
+        fields() {
+            return {
+                name: {
+                    description: "The artist's name, suitable to pass back as `Query.tracks(filterArtistIn:)`.",
+                    name: "name",
+                    type: new GraphQLNonNull(GraphQLString)
+                }
+            };
+        }
+    });
+    const AlbumType: GraphQLObjectType = new GraphQLObjectType({
+        name: "Album",
+        description: "A distinct album in the library.",
+        fields() {
+            return {
+                artists: {
+                    description: "Every artist credited on a track of this album.",
+                    name: "artists",
+                    type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(ArtistType)))
+                },
+                name: {
+                    description: "The album's title, suitable to pass back as `Query.tracks(filterAlbumIn:)`.",
+                    name: "name",
+                    type: new GraphQLNonNull(GraphQLString)
+                }
+            };
+        }
+    });
+    const AlbumEdgeType: GraphQLObjectType = new GraphQLObjectType({
+        name: "AlbumEdge",
+        description: "An edge in an `AlbumConnection`.",
+        fields() {
+            return {
+                cursor: {
+                    description: "Opaque cursor for this edge; equal to the album's title.",
+                    name: "cursor",
+                    type: new GraphQLNonNull(GraphQLString)
+                },
+                node: {
+                    name: "node",
+                    type: new GraphQLNonNull(AlbumType)
+                }
+            };
+        }
+    });
+    const AlbumConnectionType: GraphQLObjectType = new GraphQLObjectType({
+        name: "AlbumConnection",
+        description: "Albums matching a search.",
+        fields() {
+            return {
+                edges: {
+                    name: "edges",
+                    type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(AlbumEdgeType)))
+                },
+                totalCount: {
+                    description: "Total distinct albums matching the search, ignoring the result cap.",
+                    name: "totalCount",
+                    type: new GraphQLNonNull(GraphQLInt)
+                }
+            };
+        }
+    });
+    const ArtistEdgeType: GraphQLObjectType = new GraphQLObjectType({
+        name: "ArtistEdge",
+        description: "An edge in an `ArtistConnection`.",
+        fields() {
+            return {
+                cursor: {
+                    description: "Opaque cursor for this edge; equal to the artist's name.",
+                    name: "cursor",
+                    type: new GraphQLNonNull(GraphQLString)
+                },
+                node: {
+                    name: "node",
+                    type: new GraphQLNonNull(ArtistType)
+                }
+            };
+        }
+    });
+    const ArtistConnectionType: GraphQLObjectType = new GraphQLObjectType({
+        name: "ArtistConnection",
+        description: "Artists matching a search.",
+        fields() {
+            return {
+                edges: {
+                    name: "edges",
+                    type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(ArtistEdgeType)))
+                },
+                totalCount: {
+                    description: "Total distinct artists matching the search, ignoring the result cap.",
+                    name: "totalCount",
                     type: new GraphQLNonNull(GraphQLInt)
                 }
             };
@@ -306,9 +406,32 @@ export function getSchema(): GraphQLSchema {
                     type: new GraphQLNonNull(PageInfoType)
                 },
                 totalCount: {
-                    description: "Total number of tracks in the library, ignoring pagination arguments.",
+                    description: "Total number of tracks matching the active filters, ignoring pagination arguments.",
                     name: "totalCount",
                     type: new GraphQLNonNull(GraphQLInt)
+                }
+            };
+        }
+    });
+    const SearchType: GraphQLObjectType = new GraphQLObjectType({
+        name: "Search",
+        description: "Results of a library search, grouped by the kind of thing matched. Each group is resolved independently, so a client may select only the kinds it intends to render.",
+        fields() {
+            return {
+                albums: {
+                    description: "Distinct albums whose title matches the query, each carrying its credited artists.",
+                    name: "albums",
+                    type: new GraphQLNonNull(AlbumConnectionType)
+                },
+                artists: {
+                    description: "Distinct artists whose name matches the query.",
+                    name: "artists",
+                    type: new GraphQLNonNull(ArtistConnectionType)
+                },
+                tracks: {
+                    description: "Tracks whose title matches the query, in library order.",
+                    name: "tracks",
+                    type: new GraphQLNonNull(TrackConnectionType)
                 }
             };
         }
@@ -331,6 +454,19 @@ export function getSchema(): GraphQLSchema {
                     type: GraphQLString,
                     resolve() {
                         return queryPingResolver();
+                    }
+                },
+                search: {
+                    description: "Search the library for artists, albums and tracks whose name matches `query` as a case-insensitive prefix. Returns `null` for a blank query.",
+                    name: "search",
+                    type: SearchType,
+                    args: {
+                        query: {
+                            type: new GraphQLNonNull(GraphQLString)
+                        }
+                    },
+                    resolve(_source, args) {
+                        return querySearchResolver(args.query);
                     }
                 },
                 track: {
@@ -357,6 +493,14 @@ export function getSchema(): GraphQLSchema {
                         before: {
                             type: GraphQLString
                         },
+                        filterAlbumIn: {
+                            description: "Restrict the result to tracks whose effective album is one of these names. An empty or omitted list applies no filter.",
+                            type: new GraphQLList(new GraphQLNonNull(GraphQLString))
+                        },
+                        filterArtistIn: {
+                            description: "Restrict the result to tracks whose effective artist is one of these names. Pass the names returned by `Query.search` (not synonyms); an empty or omitted list applies no filter.",
+                            type: new GraphQLList(new GraphQLNonNull(GraphQLString))
+                        },
                         first: {
                             type: GraphQLInt
                         },
@@ -365,7 +509,7 @@ export function getSchema(): GraphQLSchema {
                         }
                     },
                     resolve(_source, args) {
-                        return queryTracksResolver(args.first, args.last, args.after, args.before);
+                        return queryTracksResolver(args.first, args.last, args.after, args.before, args.filterArtistIn, args.filterAlbumIn);
                     }
                 }
             };
@@ -580,6 +724,6 @@ export function getSchema(): GraphQLSchema {
         query: QueryType,
         mutation: MutationType,
         subscription: SubscriptionType,
-        types: [QualityType, TrackFormatType, DeliveryTierType, DurationType, LibraryScanType, MutationType, PageInfoType, QueryType, SubscriptionType, TrackType, TrackConnectionType, TrackDeliveryType, TrackEdgeType, TrackManifestType, TrackManifestChunkType, TrackManifestInitType, VoidType]
+        types: [QualityType, TrackFormatType, AlbumType, AlbumConnectionType, AlbumEdgeType, ArtistType, ArtistConnectionType, ArtistEdgeType, DeliveryTierType, DurationType, LibraryScanType, MutationType, PageInfoType, QueryType, SearchType, SubscriptionType, TrackType, TrackConnectionType, TrackDeliveryType, TrackEdgeType, TrackManifestType, TrackManifestChunkType, TrackManifestInitType, VoidType]
     });
 }

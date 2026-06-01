@@ -1,4 +1,4 @@
-import { sql } from 'drizzle-orm';
+import { inArray, type SQL, sql } from 'drizzle-orm';
 import type { ID, Int } from 'grats';
 
 import { db } from '../db/client.js';
@@ -15,7 +15,7 @@ export type TrackConnection = {
   edges: TrackEdge[];
   /** @gqlField */
   pageInfo: PageInfo;
-  /** Total number of tracks in the library, ignoring pagination arguments. @gqlField */
+  /** Total number of tracks matching the active filters, ignoring pagination arguments. @gqlField */
   totalCount: Int;
 };
 
@@ -56,6 +56,25 @@ function clampLimit(value: Int | null | undefined): number | null {
   return Math.min(MAX_PAGE_SIZE, Math.floor(value));
 }
 
+/** Combine the optional artist/album filters into a single `WHERE` fragment, matching the effective (override-aware) tag against each non-empty list. Null when no filter is active. */
+function buildFilterClause(
+  filterArtistIn: string[] | null | undefined,
+  filterAlbumIn: string[] | null | undefined,
+): SQL | null {
+  const clauses: SQL[] = [];
+  if (filterArtistIn && filterArtistIn.length > 0) {
+    clauses.push(
+      inArray(sql`coalesce(${tracksTable.artistOverride}, ${tracksTable.artist})`, filterArtistIn),
+    );
+  }
+  if (filterAlbumIn && filterAlbumIn.length > 0) {
+    clauses.push(
+      inArray(sql`coalesce(${tracksTable.albumOverride}, ${tracksTable.album})`, filterAlbumIn),
+    );
+  }
+  return clauses.length > 0 ? sql.join(clauses, sql` and `) : null;
+}
+
 /**
  * Look up a single track by id. Returns `null` when no track with that id exists.
  *
@@ -81,6 +100,10 @@ export async function tracks(
   last?: Int | null,
   after?: string | null,
   before?: string | null,
+  /** Restrict the result to tracks whose effective artist is one of these names. Pass the names returned by `Query.search` (not synonyms); an empty or omitted list applies no filter. */
+  filterArtistIn?: string[] | null,
+  /** Restrict the result to tracks whose effective album is one of these names. An empty or omitted list applies no filter. */
+  filterAlbumIn?: string[] | null,
 ): Promise<TrackConnection | null> {
   if (first != null && last != null) {
     throw new Error('Pass either `first` or `last`, not both.');
@@ -103,11 +126,14 @@ export async function tracks(
   const sortKey = sql`(coalesce(${tracksTable.artistOverride}, ${tracksTable.artist}, ''), coalesce(${tracksTable.albumOverride}, ${tracksTable.album}, ''), coalesce(${tracksTable.discNumberOverride}, ${tracksTable.discNumber}, 0), coalesce(${tracksTable.trackNumberOverride}, ${tracksTable.trackNumber}, 0), ${tracksTable.file}, ${tracksTable.id})`;
   const cursorSortKey = sql`(select coalesce(c."artistOverride", c.artist, ''), coalesce(c."albumOverride", c.album, ''), coalesce(c."discNumberOverride", c."discNumber", 0), coalesce(c."trackNumberOverride", c."trackNumber", 0), c.file, c.id from "Tracks" c where c.id = ${cursorId})`;
 
-  const where = cursorId
+  const filterClause = buildFilterClause(filterArtistIn, filterAlbumIn);
+  const cursorWhere = cursorId
     ? isBackward
       ? sql`${sortKey} < ${cursorSortKey}`
       : sql`${sortKey} > ${cursorSortKey}`
     : undefined;
+  const conditions = [cursorWhere, filterClause].filter((c): c is SQL => c != null);
+  const where = conditions.length > 0 ? sql.join(conditions, sql` and `) : sql`true`;
 
   const direction = isBackward ? sql`desc` : sql`asc`;
   const orderBy = sql`coalesce(${tracksTable.artistOverride}, ${tracksTable.artist}, '') ${direction}, coalesce(${tracksTable.albumOverride}, ${tracksTable.album}, '') ${direction}, coalesce(${tracksTable.discNumberOverride}, ${tracksTable.discNumber}, 0) ${direction}, coalesce(${tracksTable.trackNumberOverride}, ${tracksTable.trackNumber}, 0) ${direction}, ${tracksTable.file} ${direction}, ${tracksTable.id} ${direction}`;
@@ -115,7 +141,7 @@ export async function tracks(
   const rows = await db
     .select()
     .from(tracksTable)
-    .where(where ?? sql`true`)
+    .where(where)
     .orderBy(orderBy)
     .limit(limit + 1);
 
@@ -128,7 +154,10 @@ export async function tracks(
     cursor: row.id,
   }));
 
-  const totalRow = await db.select({ count: sql<number>`count(*)::int` }).from(tracksTable);
+  const totalRow = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(tracksTable)
+    .where(filterClause ?? sql`true`);
   const totalCount = totalRow[0]?.count ?? 0;
 
   return {

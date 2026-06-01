@@ -85,6 +85,20 @@ columns, so overrides survive rescans. Every read (`Query.track`,
 `Query.tracks`, including the pagination sort) returns the effective
 value, `coalesce(override, scanned)`.
 
+## Search
+
+`Query.search(query)` matches `query` as a case-insensitive prefix
+(start of string) against the effective artist, album, and title, and
+returns three relay-style connections: `artists`, `albums`, and
+`tracks`. Each group is resolved independently and capped (no
+pagination — it backs a top-N dropdown). A blank query returns `null`.
+An `Album` carries every artist credited across its tracks (`artists`),
+so a multi-artist album isn't collapsed to one.
+
+`Query.tracks` accepts `filterArtistIn` / `filterAlbumIn`: lists of
+effective artist/album names that restrict the page and `totalCount`.
+Feed them the `name` values returned by `search`.
+
 ## Endpoints
 
 - `GET /healthz` — liveness probe; returns `{ "status": "ok" }`.
