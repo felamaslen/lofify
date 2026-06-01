@@ -1,14 +1,15 @@
-import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useWindowVirtualizer } from '@tanstack/react-virtual';
 import { readFragment } from 'gql.tada';
 import { type MouseEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { useIsMobile } from '../hooks/use-is-mobile.ts';
-import { graphql } from '../lib/gql.ts';
+import { graphql, type ResultOf } from '../lib/gql.ts';
 import { gqlRequest } from '../lib/gql-request.ts';
 import { cn } from '../lib/utils.ts';
 import { useLibraryFilter } from '../state/library-filter.tsx';
 import { TrackByIdDocument, trackFormatFor, usePlayer } from '../state/player.tsx';
+import { LetterScrubber } from './letter-scrubber.tsx';
 import { type EditableTrack, TagEditDialog } from './tag-edit-dialog.tsx';
 import {
   ContextMenu,
@@ -35,6 +36,11 @@ const TrackListRowDocument = graphql(`
   }
 `);
 
+/**
+ * Cursor-paginated track list. Kept for the player's next/previous resolution, which walks the
+ * library relative to the current track. The list view itself loads by index (see
+ * `TracksWindowDocument`) so it can jump anywhere without paging through the gap.
+ */
 export const TracksDocument = graphql(
   `
     query Tracks(
@@ -73,6 +79,48 @@ export const TracksDocument = graphql(
   [TrackListRowDocument],
 );
 
+/** A window of the list addressed by absolute index, so the scrubber can jump to any offset. */
+const TracksWindowDocument = graphql(
+  `
+    query TracksWindow(
+      $offset: Int!
+      $first: Int!
+      $filterArtistIn: [String!]
+      $filterAlbumIn: [String!]
+    ) {
+      tracks(
+        offset: $offset
+        first: $first
+        filterArtistIn: $filterArtistIn
+        filterAlbumIn: $filterAlbumIn
+      ) {
+        totalCount
+        edges {
+          cursor
+          node {
+            id
+            ...TrackListRow
+          }
+        }
+      }
+    }
+  `,
+  [TrackListRowDocument],
+);
+
+const ArtistIndexDocument = graphql(`
+  query ArtistIndex($filterArtistIn: [String!], $filterAlbumIn: [String!]) {
+    artistIndex(filterArtistIn: $filterArtistIn, filterAlbumIn: $filterAlbumIn) {
+      label
+      offset
+    }
+  }
+`);
+
+type WindowEdge = NonNullable<
+  NonNullable<ResultOf<typeof TracksWindowDocument>['tracks']>['edges']
+>[number];
+
 const PAGE_SIZE = 100;
 const ROW_HEIGHT = 36;
 // Mobile rows stack title over artist, so they need room for two lines.
@@ -92,36 +140,25 @@ export function TrackList() {
   const filterArtistIn = artist ? [artist] : null;
   const filterAlbumIn = album ? [album] : null;
 
-  const query = useInfiniteQuery({
-    queryKey: ['tracks', artist, album],
-    initialPageParam: null as string | null,
-    queryFn: ({ pageParam, signal }) =>
+  // A cheap, stable source of the total — independent of which windows are loaded — so the
+  // virtualizer's row count (and thus the scrollbar range) never collapses while paging.
+  const countQuery = useQuery({
+    queryKey: ['tracks-count', artist, album],
+    queryFn: ({ signal }) =>
       gqlRequest(
-        TracksDocument,
-        {
-          first: PAGE_SIZE,
-          last: null,
-          after: pageParam,
-          before: null,
-          filterArtistIn,
-          filterAlbumIn,
-        },
+        TracksWindowDocument,
+        { offset: 0, first: 0, filterArtistIn, filterAlbumIn },
         signal,
       ),
-    getNextPageParam: (last) =>
-      last.tracks?.pageInfo.hasNextPage ? (last.tracks.pageInfo.endCursor ?? null) : undefined,
   });
+  const totalCount = countQuery.data?.tracks?.totalCount ?? 0;
 
-  const edges = useMemo(
-    () => query.data?.pages.flatMap((page) => page.tracks?.edges ?? []) ?? [],
-    [query.data],
-  );
-
-  // The server reports the full match count up front, so the scrollbar can span
-  // the whole library from the first page — rows past what's loaded render as
-  // placeholders until paging fills them in.
-  const totalCount = query.data?.pages[0]?.tracks?.totalCount ?? 0;
-  const rowCount = Math.max(edges.length, totalCount);
+  const indexQuery = useQuery({
+    queryKey: ['artist-index', artist, album],
+    queryFn: ({ signal }) =>
+      gqlRequest(ArtistIndexDocument, { filterArtistIn, filterAlbumIn }, signal),
+  });
+  const buckets = useMemo(() => indexQuery.data?.artistIndex ?? [], [indexQuery.data]);
 
   const spacerRef = useRef<HTMLDivElement | null>(null);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -130,11 +167,66 @@ export function TrackList() {
   const anchorRef = useRef<number | null>(null);
   const [editing, setEditing] = useState(false);
 
+  // The page itself scrolls (body scroll), so the virtualizer tracks the window. `scrollMargin` is
+  // how far the row container sits below the document top (the sticky app + column headers), so
+  // virtual offsets map onto page scroll.
+  const [scrollMargin, setScrollMargin] = useState(0);
+  useLayoutEffect(() => {
+    const measure = () => setScrollMargin(spacerRef.current?.offsetTop ?? 0);
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, [totalCount, isMobile, artist, album]);
+
+  const virtualizer = useWindowVirtualizer({
+    count: totalCount,
+    estimateSize: () => rowHeight,
+    overscan: 12,
+    scrollMargin,
+  });
+
+  useEffect(() => {
+    virtualizer.measure();
+  }, [virtualizer, rowHeight]);
+
+  const items = virtualizer.getVirtualItems();
+  const topIndex = items[0]?.index ?? 0;
+
+  // Which index-pages cover the visible range; fetched on demand so a jump loads only its window.
+  const firstPage = Math.floor((items[0]?.index ?? 0) / PAGE_SIZE);
+  const lastPage = Math.floor((items.at(-1)?.index ?? 0) / PAGE_SIZE);
+  const pageIndexes: number[] = [];
+  for (let p = firstPage; p <= lastPage; p++) pageIndexes.push(p);
+
+  const windowResults = useQueries({
+    queries: pageIndexes.map((p) => ({
+      queryKey: ['tracks-window', artist, album, p],
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        gqlRequest(
+          TracksWindowDocument,
+          { offset: p * PAGE_SIZE, first: PAGE_SIZE, filterArtistIn, filterAlbumIn },
+          signal,
+        ),
+      staleTime: 30_000,
+    })),
+  });
+
+  const rowsByIndex = new Map<number, WindowEdge>();
+  pageIndexes.forEach((p, i) => {
+    const edges = windowResults[i]?.data?.tracks?.edges ?? [];
+    edges.forEach((edge, j) => rowsByIndex.set(p * PAGE_SIZE + j, edge));
+  });
+
   const selectRow = (e: MouseEvent, index: number, id: string): void => {
     if (e.shiftKey && anchorRef.current !== null) {
       const from = Math.min(anchorRef.current, index);
       const to = Math.max(anchorRef.current, index);
-      setSelected(new Set(edges.slice(from, to + 1).map((edge) => edge.node.id)));
+      const ids: string[] = [];
+      for (let i = from; i <= to; i++) {
+        const edge = rowsByIndex.get(i);
+        if (edge) ids.push(edge.node.id);
+      }
+      setSelected(new Set(ids));
       // The browser extends a text selection from the prior click's caret on
       // shift-click; drop it so range-selecting rows doesn't highlight text.
       window.getSelection()?.removeAllRanges();
@@ -154,24 +246,24 @@ export function TrackList() {
     anchorRef.current = index;
   };
 
-  const selectedTracks = useMemo<EditableTrack[]>(
-    () =>
-      edges
-        .filter((edge) => selected.has(edge.node.id))
-        .map((edge) => {
-          const t = readFragment(TrackListRowDocument, edge.node);
-          return {
-            id: edge.node.id,
-            title: t.title,
-            artist: t.artist,
-            album: t.album,
-            trackNumber: t.trackNumber,
-            discNumber: t.discNumber,
-            year: t.year,
-          };
-        }),
-    [edges, selected],
-  );
+  const selectedTracks = useMemo<EditableTrack[]>(() => {
+    const out: EditableTrack[] = [];
+    for (const edge of rowsByIndex.values()) {
+      if (!selected.has(edge.node.id)) continue;
+      const t = readFragment(TrackListRowDocument, edge.node);
+      out.push({
+        id: edge.node.id,
+        title: t.title,
+        artist: t.artist,
+        album: t.album,
+        trackNumber: t.trackNumber,
+        discNumber: t.discNumber,
+        year: t.year,
+      });
+    }
+    return out;
+    // rowsByIndex is rebuilt every render; depend on the loaded windows + selection instead.
+  }, [windowResults, selected]);
 
   const onRowEnter = (id: string): void => {
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
@@ -195,49 +287,30 @@ export function TrackList() {
     }
   };
 
-  // The page itself scrolls (body scroll), so the virtualizer tracks the window.
-  // `scrollMargin` is how far the row container sits below the document top (the
-  // sticky app + column headers), so virtual offsets map onto page scroll.
-  const [scrollMargin, setScrollMargin] = useState(0);
-  const hasRows = edges.length > 0;
-  useLayoutEffect(() => {
-    const measure = () => setScrollMargin(spacerRef.current?.offsetTop ?? 0);
-    measure();
-    window.addEventListener('resize', measure);
-    return () => window.removeEventListener('resize', measure);
-  }, [hasRows, isMobile, artist, album]);
+  // The bucket the list is scrolled to: the last one starting at or before the top row.
+  const activeLabel = buckets.reduce<string | null>(
+    (acc, b) => (b.offset <= topIndex ? b.label : acc),
+    null,
+  );
+  // scrollMargin equals the sticky chrome height, so scrolling to `offset * rowHeight` lands the
+  // target row just below the header rather than under it.
+  const jumpToOffset = (offset: number) => window.scrollTo({ top: offset * rowHeight });
 
-  const virtualizer = useWindowVirtualizer({
-    count: rowCount,
-    estimateSize: () => rowHeight,
-    overscan: 12,
-    scrollMargin,
-  });
+  // When the scrubber is shown, reserve a right lane on the header and rows so neither the column
+  // labels nor the source badge slide under the letters.
+  const showScrubber = buckets.length > 1;
 
-  useEffect(() => {
-    virtualizer.measure();
-  }, [virtualizer, rowHeight]);
-
-  const items = virtualizer.getVirtualItems();
-  const lastIndex = items.at(-1)?.index ?? 0;
-
-  useEffect(() => {
-    if (!query.hasNextPage || query.isFetchingNextPage) return;
-    if (lastIndex < edges.length - PAGE_SIZE / 2) return;
-    void query.fetchNextPage();
-  }, [query, lastIndex, edges.length]);
-
-  if (query.isError) {
+  if (countQuery.isError) {
     return (
       <div className="flex-1 p-6 text-sm text-destructive-foreground">
-        Failed to load: {(query.error as Error).message}
+        Failed to load: {(countQuery.error as Error).message}
       </div>
     );
   }
-  if (edges.length === 0 && query.isLoading) {
+  if (totalCount === 0 && countQuery.isLoading) {
     return <div className="flex-1 p-6 text-sm text-muted-foreground">Loading…</div>;
   }
-  if (edges.length === 0) {
+  if (totalCount === 0) {
     return (
       <div className="flex-1 p-6 text-sm text-muted-foreground">
         {artist || album ? 'No tracks match this filter.' : 'No tracks yet. Run a library scan.'}
@@ -252,6 +325,7 @@ export function TrackList() {
         className={cn(
           COLS,
           'sticky top-10 z-20 border-b border-border bg-background py-2 text-[11px] uppercase tracking-wider text-muted-foreground max-sm:hidden',
+          showScrubber && 'pr-8',
         )}
       >
         <span>#</span>
@@ -271,9 +345,9 @@ export function TrackList() {
             style={{ height: virtualizer.getTotalSize() }}
           >
             {items.map((virtualRow) => {
-              const edge = edges[virtualRow.index];
+              const edge = rowsByIndex.get(virtualRow.index);
               if (!edge) {
-                // A row within the library's range that paging hasn't reached yet.
+                // A row within the library's range whose window hasn't loaded yet.
                 return (
                   <div
                     key={virtualRow.key}
@@ -329,6 +403,7 @@ export function TrackList() {
                     t.isLossless && 'shadow-[inset_3px_0_0_0] shadow-amber-400',
                     isSelected && 'bg-accent/60',
                     active && 'bg-primary/15 text-primary-foreground',
+                    showScrubber && 'pr-8',
                   )}
                   style={{
                     position: 'absolute',
@@ -390,6 +465,14 @@ export function TrackList() {
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
+      {showScrubber && (
+        <LetterScrubber
+          buckets={buckets}
+          activeLabel={activeLabel}
+          top={scrollMargin}
+          onJump={jumpToOffset}
+        />
+      )}
       {selectedTracks.length > 0 && (
         <TagEditDialog tracks={selectedTracks} open={editing} onOpenChange={setEditing} />
       )}

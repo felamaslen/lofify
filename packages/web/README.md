@@ -141,6 +141,21 @@ filter is mirrored into the URL (`?artist=` / `?album=`, alongside the
 player's `track`/`t` params) so a refresh or shared link restores it,
 and shows as a chip beside the search box; click it to clear.
 
+## Track list scrolling
+
+The list is window-virtualised (the page scrolls, not an inner box) and
+loaded by **index**, not cursor: it fetches only the index-pages covering
+the visible range via `tracks(offset:)`, so jumping anywhere loads just
+that window instead of paging through the gap. `tracks` still reports
+`totalCount`, which sizes the scrollbar to the whole library up front;
+unloaded rows render as placeholders until their window arrives.
+
+An A–Z **letter scrubber** is pinned to the right edge (`LetterScrubber`).
+It reads `Query.artistIndex` for each first-letter bucket's starting
+index: the active letter updates as you scroll, and tapping or dragging
+(mouse or touch) jumps to that letter's offset. Letters with no tracks
+are dimmed and snap to the next populated bucket.
+
 ## Tag editing
 
 Rows in the track list are selectable: click to select one, cmd/ctrl-click

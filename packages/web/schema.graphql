@@ -78,6 +78,18 @@ type ArtistEdge {
   node: Artist!
 }
 
+"""Where a first-letter bucket begins in the `tracks` ordering."""
+type ArtistInitial {
+  """
+  Upper-case first letter of the effective artist, or `#` for anything non-alphabetic (digits, symbols, non-Latin scripts, untagged).
+  """
+  label: String!
+  """
+  Zero-based index of the bucket's first track within the full `tracks` order, suitable as the `offset` to jump there.
+  """
+  offset: Int!
+}
+
 """
 An alternative name for an artist, used to surface that artist in search.
 """
@@ -176,6 +188,10 @@ type PageInfo {
 
 type Query {
   """
+  The first-letter buckets present in the library, in `tracks` order, each with the index where it starts. Powers an A–Z scrubber: map a scroll position to its bucket, or jump to a letter by feeding its `offset` to `Query.tracks`. Honours the same `filterArtistIn`/`filterAlbumIn` as `tracks`.
+  """
+  artistIndex(filterAlbumIn: [String!], filterArtistIn: [String!]): [ArtistInitial!]
+  """
   The current library scan, if one is in progress or recently completed within the server's grace window. Null when no scan has run recently.
   """
   libraryScan: LibraryScan
@@ -191,6 +207,8 @@ type Query {
   track(id: ID!): Track
   """
   List the library in Relay-cursor pagination order: by `artist`, `album`, `discNumber`, `trackNumber`, then `id` for stability. Supply exactly one of `first`/`last` and at most one of `after`/`before`.
+  
+  Pass `offset` instead to fetch an arbitrary window (`first` rows from that zero-based index) in the same order — used for index-addressed scrolling (e.g. the letter scrubber jumping anywhere without paging through the gaps). When `offset` is set, the cursor arguments are ignored.
   """
   tracks(
     after: String
@@ -205,6 +223,10 @@ type Query {
     filterArtistIn: [String!]
     first: Int
     last: Int
+    """
+    Zero-based index of the first row to return, in the library sort order. When set, returns `first` rows from here and ignores `after`/`before`/`last`.
+    """
+    offset: Int
   ): TrackConnection
 }
 
