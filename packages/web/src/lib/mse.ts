@@ -563,7 +563,7 @@ export class MsePlayer {
     }
   }
 
-  /** Detect the playhead crossing into `next`. Shift slots, fire `onTrackChange`, reset preload flags. Bridges the gap that opens when `current`'s actual playable end falls short of `next.durationOffset` (codec padding, encoder overhead, frame-boundary rounding) by waiting until `audio.currentTime` has been stuck for `BOUNDARY_STALL_MS` of wall-clock time — a position check alone can't distinguish playing-through from stalled-at-end. */
+  /** Detect the playhead crossing into `next`. Shift slots, fire `onTrackChange`, reset preload flags. Bridges the gap that opens when `current`'s actual playable end falls short of `next.durationOffset` (codec padding, encoder overhead, frame-boundary rounding) when `audio.currentTime` is *both* stuck for `BOUNDARY_STALL_MS` of wall-clock time *and* close enough to `current`'s encoded end that there's no more content for it to play. The encoded-end check is essential: without it, a mid-track buffering stall (slow network, chunk fetch lagging) would look the same as an end-of-track stall and skip the rest of the song. */
   private updateCurrentTrack(): void {
     if (!this.next || this.next.durationOffset === null) return;
     const boundary = this.next.durationOffset;
@@ -576,8 +576,14 @@ export class MsePlayer {
       this.audio.currentTime < boundary &&
       performance.now() - this.observedPlayheadAt > BOUNDARY_STALL_MS
     ) {
-      this.audio.currentTime = boundary;
-      cross = true;
+      const tail = trackEncodedEnd(this.current);
+      // Only bridge when there's effectively no current-track content left to play. The 2s window
+      // covers browser-rounded `currentTime` (Firefox privacy rounding tops out around 1s) without
+      // false-positiving a mid-track buffering stall — at 120/200 the gap is 80s, well outside.
+      if (tail !== null && tail - this.audio.currentTime < 2) {
+        this.audio.currentTime = boundary;
+        cross = true;
+      }
     }
     if (!cross) return;
     if (this.current) this.unsubscribeEntry(this.current);
