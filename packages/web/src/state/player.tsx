@@ -611,6 +611,10 @@ class Player {
     const queued = this.buildQueuedTrack(next, totalSeconds);
     const startAt = this.mse.currentPosition();
     const wasPlaying = !this.audio.paused;
+    if (next.delivery.mimeType !== track.delivery.mimeType) {
+      this.mse.dispose();
+      this.mse = null;
+    }
     // Pre-seed the snapshot to the post-init resting state. Otherwise the `emptied` event that
     // fires during `init`'s audio.src reassignment lands on the still-pointing-to-the-old mse and
     // bleeds old `readySeconds` / `bufferedRanges` into the new track's bar (the "next track in
