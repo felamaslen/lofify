@@ -180,8 +180,8 @@ export class MsePlayer {
    * Single entry point for the caller. Decision matrix:
    *
    * 1. No existing instance → build a fresh `MediaSource` and install `track`. Throws if the browser can't decode `track.contentType` (or supports no MSE at all).
-   * 2. Same id as `existing.current` → live tier switch: drop in-flight fetches and queued appends for the track, point at the new url/quality, re-open its manifest subscription, clear the `next` slot (its url was at the old tier). No seek.
-   * 3. Different id → wipe-and-replace: cancel pending, clear append queues across all buffers, remove buffered audio across all buffers, close subscriptions, install new `current`, seek to `startAt`. A new codec just routes appends to a new (lazily-created) `SourceBuffer` inside the same `MediaSource`; no rebuild.
+   * 2. Same id *and* same `contentType` as `existing.current` → live tier switch (bitrate change within one codec): drop in-flight fetches and queued appends for the track, point at the new url/quality, re-open its manifest subscription, clear the `next` slot (its url was at the old tier). No seek; the existing buffer keeps playing while reconcile's upgrade loop re-fetches it at the new tier.
+   * 3. Anything else (different id, or same id but different codec) → wipe-and-replace: cancel pending, clear the append queue, remove buffered audio, close subscriptions, install new `current`, seek to `startAt`. Codec swaps need the wipe — stale-codec bytes in the buffer can't be decoded under the new parser config, and overlapping new-codec appends would race with old-codec audio that's still playing out.
    *
    * `trackNext` is stored and invoked by mse when the current track approaches its end. The caller refreshes it on every `init` call so it can capture the latest tier/preference state.
    *
@@ -200,7 +200,7 @@ export class MsePlayer {
   ): Promise<MsePlayer> {
     if (existing && !existing.disposed) {
       existing.trackNext = trackNext;
-      if (existing.current?.id === track.id) {
+      if (existing.current?.id === track.id && existing.current.contentType === track.contentType) {
         existing.liveSwap(track);
       } else {
         existing.replaceCurrent(track, startAt);
