@@ -528,10 +528,14 @@ export class MsePlayer {
       }
     }
     if (total <= this.mediaSourceDurationCap) return;
-    this.mediaSourceDurationCap = total;
     if (this.mediaSource.readyState !== 'open' || this.sourceBuffer.updating) return;
+    // Only stamp the cap once the setter actually accepts the value. Updating the cap before the
+    // set lets a no-op call (e.g. during `replaceCurrent`'s pending `tryRemove`) lock us out of
+    // ever extending duration — every subsequent call sees `total <= cap` and short-circuits,
+    // leaving `mediaSource.duration` stuck at whatever appendBuffer's auto-extension reaches.
     try {
       this.mediaSource.duration = total;
+      this.mediaSourceDurationCap = total;
     } catch {
       // Browser refused (e.g. mid-update) — non-fatal; a later tick retries.
     }
@@ -545,6 +549,10 @@ export class MsePlayer {
   private tick(): void {
     this.trackPlayheadStability();
     this.reconcile();
+    // Retry on every tick — the initial call from `installCurrent` (or a manifest emission) can
+    // bail when `sourceBuffer.updating` is true, and `updateend` then re-enters `tick` here with
+    // updating false so the duration setter finally takes.
+    this.extendMediaSourceDuration();
     this.updateCurrentTrack();
     this.maybeInvokeTrackNext();
     this.tryEndOfStream();
