@@ -14,8 +14,6 @@ export type LossyPreference = 'OPUS' | 'MP3';
 export type Capabilities = {
   /** Whether `MediaSource` exists at all. When false, playback is impossible and the UI should block. */
   mse: boolean;
-  /** Whether the page is running as an installed PWA (display-mode standalone, or iOS `navigator.standalone`). Gates features that depend on gapless cross-track buffering — Original mode can pick any codec per track, which a single SourceBuffer can't span, so it's hidden in standalone where backgrounded JS throttling makes the `ended`-driven track change unreliable. */
-  standalone: boolean;
   /** Preference-ordered lossless MIME types playable via MSE (`audio/mp4; codecs="flac"` when supported, else empty). Sent as `TrackFormat.losslessFormats`. */
   losslessFormats: string[];
   /** Whether FLAC-in-MP4 decodes — i.e. lossless sources can be delivered losslessly. Drives the Max-quality tooltip. */
@@ -30,19 +28,10 @@ export type Capabilities = {
   lossyFormats(preference: LossyPreference): string[];
 };
 
-function detectStandalone(): boolean {
-  if (typeof window === 'undefined') return false;
-  if (window.matchMedia?.('(display-mode: standalone)').matches) return true;
-  // iOS Safari predates display-mode and exposes a non-standard boolean.
-  return (window.navigator as { standalone?: boolean }).standalone === true;
-}
-
 function detect(): Capabilities {
-  const standalone = detectStandalone();
   if (typeof MediaSource === 'undefined') {
     return {
       mse: false,
-      standalone,
       losslessFormats: [],
       flacInMp4: false,
       opusSupported: false,
@@ -57,7 +46,6 @@ function detect(): Capabilities {
   const flac = sup(MP4_FLAC) ? [MP4_FLAC] : [];
   return {
     mse: true,
-    standalone,
     losslessFormats: flac,
     flacInMp4: flac.length > 0,
     opusSupported: opus.length > 0,
