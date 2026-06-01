@@ -146,8 +146,6 @@ export function resolvePlaybackUrl(url: string): string {
 
 function loadStoredMode(): QualityMode {
   if (typeof window === 'undefined') return 'ADAPTIVE';
-  // Force Adaptive in a PWA: gapless cross-track buffering needs a single codec, which only Adaptive guarantees. See QualityPicker / lib/mse.ts for the rationale.
-  if (capabilities.standalone) return 'ADAPTIVE';
   const stored = window.localStorage.getItem(MODE_STORAGE_KEY);
   if (stored === 'ADAPTIVE' || stored === 'ORIGINAL') return stored;
   // Migrate the pre-adaptive single-tier setting: `MAX` becomes Original, any lower tier Adaptive.
@@ -358,20 +356,6 @@ class Player {
     this.on('seeked', onBuffered);
     this.on('loadedmetadata', onBuffered);
     this.on('emptied', onBuffered);
-    // `ended` only fires after `MediaSource.endOfStream()` — which the mse player calls when the
-    // queue is closed. Same-codec cross-track boundaries happen *without* `ended` (the next track's
-    // bytes splice onto the buffer in the same `MediaSource`); they're handled by `onTrackChange`.
-    // `endQueue` runs in two cases: no successor exists (end of library) or the next track has a
-    // different codec (can't splice — needs a fresh `MsePlayer`). For the codec-mismatch case we
-    // need to advance into the new codec; `step('next')` does that by reloading. For the end-of-
-    // library case `step('next')` is a no-op (the query returns no successor), so the same call
-    // handles both.
-    // TODO: make MsePlayer support cross-codec splicing, and remove this
-    this.on('ended', () => {
-      console.log('ended called');
-      this.set({ isPlaying: false });
-      void this.step('next');
-    });
   }
 
   /** Read the buffered ranges for the current track in its local timeline, for the progress bar. */
@@ -484,7 +468,6 @@ class Player {
 
   /** Switch between Adaptive and Original, re-targeting the playing track (a live swap or, across a codec boundary, a reload at the current position). */
   setQualityMode(mode: QualityMode): void {
-    if (mode === 'ORIGINAL' && capabilities.standalone) return;
     this.set({ qualityMode: mode });
     if (typeof window !== 'undefined') window.localStorage.setItem(MODE_STORAGE_KEY, mode);
     const tier = mode === 'ORIGINAL' ? 'MAX' : loadStoredAdaptiveTier();

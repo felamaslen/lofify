@@ -8,12 +8,6 @@ const CHOICES: { value: QualityMode; label: string }[] = [
   { value: 'ORIGINAL', label: 'Original' },
 ];
 
-// In a PWA we only buffer Adaptive: a single SourceBuffer is locked to one codec, and Original is
-// per-track (lossless FLAC, MP3 copy, etc.), so consecutive tracks can need different decoders.
-// Without the codec guarantee we can't pre-stitch the next track into the current buffer, which is
-// what keeps playback going when the OS throttles JS in the background. See TODO in lib/mse.ts.
-const STANDALONE_CHOICES = CHOICES.filter((c) => c.value !== 'ORIGINAL');
-
 const ADAPTIVE_TOOLTIP =
   'Automatically adjusts the bitrate to your connection speed, switching on the fly without interrupting playback.';
 const ORIGINAL_TOOLTIP_FLAC_OK =
@@ -27,7 +21,6 @@ export function QualityPicker() {
     ? ORIGINAL_TOOLTIP_FLAC_OK
     : ORIGINAL_TOOLTIP_NO_FLAC;
   const tooltipFor = (v: QualityMode) => (v === 'ADAPTIVE' ? ADAPTIVE_TOOLTIP : originalTooltip);
-  const choices = capabilities.standalone ? STANDALONE_CHOICES : CHOICES;
   return (
     <TooltipProvider delayDuration={150}>
       <Select value={qualityMode} onValueChange={(v) => setQualityMode(v as QualityMode)}>
@@ -35,7 +28,7 @@ export function QualityPicker() {
           <SelectValue placeholder="Quality" />
         </SelectTrigger>
         <SelectContent>
-          {choices.map((c) => (
+          {CHOICES.map((c) => (
             <Tooltip key={c.value}>
               <TooltipTrigger asChild>
                 <SelectItem value={c.value}>{c.label}</SelectItem>

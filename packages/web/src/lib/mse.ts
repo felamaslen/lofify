@@ -1,17 +1,17 @@
 /**
- * Manifest-driven MSE playback for a single audio element. The player owns one `MediaSource` and one codec-locked `SourceBuffer`, plus two slots — `current` (the track playing now) and `next` (its successor, fetched ahead so its bytes splice onto the buffer for gapless playback). Bytes for the two slots are concatenated end-to-end into the same buffer; the audio element never stalls at a boundary, which removes the dependency on the `ended` event that a backgrounded PWA dispatches slowly.
+ * Manifest-driven MSE playback for a single audio element. The player owns one `MediaSource` with one `SourceBuffer`, plus two slots — `current` (the track playing now) and `next` (its successor, fetched ahead so its bytes splice onto the buffer for gapless playback). Bytes for the two slots are concatenated end-to-end into the same buffer; the audio element transitions across the boundary without stalling — and without depending on the `ended` event that a backgrounded PWA dispatches slowly.
  *
- * Each `TrackEntry` carries a `durationOffset`: where its t=0 lives in concatenated-stream time. `current` always sits at offset 0 (after a manual play / codec change) or wherever the playhead has advanced to within its encoded range; `next.durationOffset` resolves to `current`'s encoded tail once `current`'s manifest reports `done`. Until then `next` is enqueued but its bytes aren't appended.
+ * Cross-codec transitions work via `SourceBuffer.changeType(contentType)`: when a track's bytes need to be parsed with a different codec config than the buffer is currently set up for, the player calls `changeType` first, then re-appends the track's cached init segment, then the media. (Browsers typically cap audio at one SourceBuffer per MediaSource, so multi-buffer wasn't workable.)
+ *
+ * Each `TrackEntry` carries a `durationOffset`: where its t=0 lives in concatenated-stream time. `current` always sits at offset 0 or wherever the playhead has advanced to within its encoded range; `next.durationOffset` resolves to `current`'s nominal end once `current`'s manifest reports `done`. Until then `next` is enqueued but its bytes aren't appended.
  *
  * The buffer is reconciled against one source of truth — `sourceBuffer.buffered` — on every relevant event (timeupdate, seeking, append/remove completion, manifest growth). `reconcile()` walks `current` then `next` inside the keep/fetch window. Nothing is tracked in a side `loaded` set, so there's no derived state that can drift out of sync with the actual buffer.
  *
  * Two container-conditional behaviours, applied per track:
- *   - **Init segment.** fmp4 (opus/flac) ships an init range that must be appended once per track to configure the SourceBuffer's parser; mp3 has no init. Appending a track's init re-initialises parsing inside the same SourceBuffer — permitted by the byte-stream specs so long as codec config remains compatible (Adaptive guarantees this). When a media fragment for one track is appended after another track's init has reconfigured the parser, the target track's cached init bytes are re-appended first.
- *   - **`timestampOffset`.** mp3 frames have no timestamps — each chunk starts at PTS 0 — so the player sets `sourceBuffer.timestampOffset = trackOffset + chunkStartSeconds` before each append. fmp4 fragments carry `tfdt` (absolute decode time) starting at 0 per track, so the player sets `timestampOffset = trackOffset` once per track and MSE places the rest.
+ *   - **Init segment.** fmp4 (opus/flac) ships an init range that must be appended to configure the SourceBuffer's parser for that track's stream; mp3 has no init. Appending an init segment re-initialises parsing inside the same SourceBuffer. When the buffer's parser is configured for a different track (or codec) than the next media item, the target track's cached init bytes are re-appended first.
+ *   - **`timestampOffset`.** mp3 frames have no timestamps — each chunk starts at PTS 0 — so the player sets `sourceBuffer.timestampOffset = trackOffset + chunkStartSeconds` before each append. fmp4 fragments carry `tfdt` (absolute decode time) starting at 0 per track, so the player sets `timestampOffset = trackOffset` once per track and MSE places the rest. Whether per-chunk or per-track is decided from the parser's current contentType.
  *
- * The class is codec-pinned at construction (the `SourceBuffer` cannot have its `contentType` changed in place), so a codec change is handled by `MsePlayer.init` disposing the current instance and building a fresh one. Within a codec, bitrate switches via the live-switch branch of `init` keep the same `MediaSource` and re-fetch the already-buffered region at the new tier on lowest priority.
- *
- * Preload of the successor is mse-driven: the caller passes a `trackNext` thunk to `init`, and mse invokes it when the playhead is within `NEXT_TRACK_PRELOAD_SECONDS` of `current`'s end. If it returns `null` (end of library) or a track whose codec doesn't match (mse can't gapless-splice), `MediaSource.endOfStream()` fires after `current`'s tail and the caller's `ended` handler can step.
+ * Preload of the successor is mse-driven: the caller passes a `trackNext` thunk to `init`, and mse invokes it when the playhead is within `NEXT_TRACK_PRELOAD_SECONDS` of `current`'s end. If it returns `null` (end of library) or a codec the browser can't decode at all, `MediaSource.endOfStream()` fires after `current`'s tail and the caller's `ended` handler can step.
  *
  * `ManifestSnapshot` and `ManifestChunk` are derived from the `TrackManifest` subscription document in `state/player.tsx`, so the player consumes the exact GraphQL response shape with no in-between conversion.
  */
@@ -111,6 +111,8 @@ const EMPTY_MANIFEST: ManifestSnapshot = {
 type TrackEntry = {
   id: string;
   url: string;
+  /** Mime of this track's bytes — routes appends to the matching SourceBuffer in `MsePlayer.buffers`. */
+  contentType: string;
   quality: string;
   totalSeconds: number;
   manifest: ManifestSnapshot;
@@ -147,6 +149,18 @@ function pendingKey(trackId: string, chunkIndex: number): PendingKey {
   return `${trackId}:${chunkIndex}`;
 }
 
+/** Snapshot of one `SourceBuffer`'s buffered ranges, with the noisy `TimeRanges`/detached-buffer cases swallowed to `[]`. */
+function bufferedRanges(sb: SourceBuffer): Range[] {
+  try {
+    const b = sb.buffered;
+    const out: Range[] = [];
+    for (let i = 0; i < b.length; i++) out.push({ start: b.start(i), end: b.end(i) });
+    return out;
+  } catch {
+    return [];
+  }
+}
+
 function parsePendingKey(key: PendingKey): { trackId: string; chunkIndex: number } | null {
   const sep = key.lastIndexOf(':');
   if (sep < 0) return null;
@@ -157,17 +171,17 @@ function parsePendingKey(key: PendingKey): { trackId: string; chunkIndex: number
 }
 
 /**
- * Owns the single `<audio>` element's media pipeline: one `MediaSource`, one codec-locked `SourceBuffer`, and two slots (`current`, `next`) whose bytes it stitches end-to-end for gapless playback. Its job is **byte-level orchestration** — fetching range-encoded chunks, appending them in the right order with the right `timestampOffset`, re-appending an entry's cached init when the parser is configured for a different track, reconciling against `sourceBuffer.buffered`, and invoking the caller's `trackNext` thunk when the preload window opens.
+ * Owns the single `<audio>` element's media pipeline: one `MediaSource`, one `SourceBuffer`, and two slots (`current`, `next`) whose bytes it stitches end-to-end for gapless playback. Its job is **byte-level orchestration** — fetching range-encoded chunks, appending them in the right order with the right `timestampOffset`, re-appending an entry's cached init when the parser is configured for a different track (or codec — see `changeType`), reconciling against `sourceBuffer.buffered`, and invoking the caller's `trackNext` thunk when the preload window opens.
  *
- * It does **not** know about GraphQL, React, library order, or the user's tier/preference settings. The caller hands each track a `subscribeManifest` factory and (at `init`) a `trackNext` thunk; mse drives both lifecycles. All "play this track at this position" requests go through `MsePlayer.init`, which decides internally whether to reuse the instance (live tier switch when ids match, replace-current when ids differ), or dispose and rebuild for a codec change.
+ * It does **not** know about GraphQL, React, library order, or the user's tier/preference settings. The caller hands each track a `subscribeManifest` factory and (at `init`) a `trackNext` thunk; mse drives both lifecycles. All "play this track at this position" requests go through `MsePlayer.init`, which decides internally between a live tier switch (same id) and a wipe-and-replace (different id). A different codec is handled by `SourceBuffer.changeType` in the same buffer; no rebuild.
  */
 export class MsePlayer {
   /**
    * Single entry point for the caller. Decision matrix:
    *
-   * 2. Same codec, same id as `existing.current` → live tier switch: drop in-flight fetches and queued appends for the track, point at the new url/quality, re-open its manifest subscription, clear the `next` slot (its url was at the old tier). No seek.
-   * 3. Same codec, different id → wipe-and-replace: cancel pending, clear append queue, remove buffered audio, close subscriptions, install new `current`, seek to `startAt`.
-   * 4. Different codec → dispose `existing`, then case (1).
+   * 1. No existing instance → build a fresh `MediaSource` and install `track`. Throws if the browser can't decode `track.contentType` (or supports no MSE at all).
+   * 2. Same id as `existing.current` → live tier switch: drop in-flight fetches and queued appends for the track, point at the new url/quality, re-open its manifest subscription, clear the `next` slot (its url was at the old tier). No seek.
+   * 3. Different id → wipe-and-replace: cancel pending, clear append queues across all buffers, remove buffered audio across all buffers, close subscriptions, install new `current`, seek to `startAt`. A new codec just routes appends to a new (lazily-created) `SourceBuffer` inside the same `MediaSource`; no rebuild.
    *
    * `trackNext` is stored and invoked by mse when the current track approaches its end. The caller refreshes it on every `init` call so it can capture the latest tier/preference state.
    *
@@ -184,7 +198,7 @@ export class MsePlayer {
     trackNext: () => Promise<QueuedTrack | null>,
     options: CreatePlayerOptions = {},
   ): Promise<MsePlayer> {
-    if (existing && !existing.disposed && existing.contentType === track.contentType) {
+    if (existing && !existing.disposed) {
       existing.trackNext = trackNext;
       if (existing.current?.id === track.id) {
         existing.liveSwap(track);
@@ -193,7 +207,6 @@ export class MsePlayer {
       }
       return existing;
     }
-    existing?.dispose();
     if (typeof MediaSource === 'undefined') {
       throw new Error(
         'This browser does not support Media Source Extensions; playback is unavailable.',
@@ -208,22 +221,13 @@ export class MsePlayer {
     await new Promise<void>((resolve) => {
       mediaSource.addEventListener('sourceopen', () => resolve(), { once: true });
     });
-    // TODO: Support gapless playback in Original mode. Original picks the best representation per
-    // track (lossless FLAC, MP3/Vorbis copy, Opus fallback), so consecutive tracks can land in
-    // different codecs and a single SourceBuffer — locked to `contentType` here — can't span them.
-    // The fix is one SourceBuffer per codec we might encounter (the subset of
-    // `audio/mp4; codecs="flac"`, `audio/mpeg`, `audio/webm; codecs="vorbis"`, `audio/mp4; codecs="opus"`
-    // the browser supports), routing each track's appends to the matching buffer. Adaptive stays on
-    // one codec for a session, so it works with the single-buffer design.
     const sourceBuffer = mediaSource.addSourceBuffer(track.contentType);
-    const setOffsetPerChunk = track.contentType.startsWith('audio/mpeg');
     const player = new MsePlayer(
       audio,
       mediaSource,
       sourceBuffer,
       blobUrl,
       track.contentType,
-      setOffsetPerChunk,
       trackNext,
       options,
     );
@@ -263,23 +267,26 @@ export class MsePlayer {
   private upgradedStarts = new Set<number>();
   /** Highest value pushed to `MediaSource.duration`. Extend-only; the setter rejects shrinks below the buffered tail. */
   private mediaSourceDurationCap = 0;
-  /** Track whose init configured the parser most recently. A media append for any other track must re-append that track's init first. */
+  /** Track whose init most recently configured the parser. A media append for any other track must re-append that track's init first. Cleared whenever `changeType` resets the parser. */
   private lastInitAppendedFor: string | null = null;
+  /** Mime the SourceBuffer's parser is currently configured for. Updated on `changeType`. */
+  private parserContentType: string;
+  /** True when the parser's contentType uses per-chunk timestampOffsets (mp3). False for fmp4 (tfdt-bearing). Re-derived after `changeType`. */
+  private setTimestampOffsetPerChunk: boolean;
 
   private constructor(
     private audio: HTMLAudioElement,
     private mediaSource: MediaSource,
     private sourceBuffer: SourceBuffer,
     private blobUrl: string,
-    /** Mime the SourceBuffer is locked to. A codec change goes through `MsePlayer.init` to rebuild. */
-    public readonly contentType: string,
-    /** True for mp3 (per-chunk PTS=0): set `timestampOffset` before every append. False for fmp4 (tfdt): set once per track. */
-    private setTimestampOffsetPerChunk: boolean,
+    /** Mime the SourceBuffer was originally constructed for. The parser's current contentType may differ (via `changeType`); see `parserContentType`. */
+    initialContentType: string,
     /** Resolver for the next track. Re-invoked after every boundary cross. Replaced on every `init` call. */
     private trackNext: () => Promise<QueuedTrack | null>,
-    /** Stored so the rebuild path of `init` can carry callbacks into the new instance. */
     private options: CreatePlayerOptions,
   ) {
+    this.parserContentType = initialContentType;
+    this.setTimestampOffsetPerChunk = initialContentType.startsWith('audio/mpeg');
     sourceBuffer.addEventListener('updateend', this.onTick);
     audio.addEventListener('timeupdate', this.onTick);
     audio.addEventListener('seeking', this.onTick);
@@ -352,7 +359,7 @@ export class MsePlayer {
     this.audio.currentTime = entry.durationOffset + clamped;
   }
 
-  /** Tear the player down: abort in-flight fetches, close every manifest subscription, detach audio-element listeners, end the underlying `MediaSource`, and revoke its blob URL. */
+  /** Tear the player down: abort in-flight fetches, close every manifest subscription, detach audio-element + SourceBuffer listeners, and revoke the blob URL. */
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
@@ -372,17 +379,13 @@ export class MsePlayer {
     } catch {
       // SourceBuffer may already be detached from the MediaSource.
     }
-    // We deliberately don't call `endOfStream()` here. For the codec-rebuild path in `MsePlayer.init`,
-    // the caller reassigns `audio.src` to a new MediaSource immediately afterwards — the old source
-    // detaches and is GC'd. Calling `endOfStream()` first clamps the old source's `duration` to its
-    // buffered tail, which can race with the src reassignment and let `ended` fire on the old
-    // source against the audio element, triggering the caller's `ended` handler and skipping a
-    // track. For final orchestrator teardown, the audio element is being thrown away too, so the
-    // signal is unnecessary.
+    // We deliberately don't call `endOfStream()` here. The MediaSource detaches when the audio
+    // element is thrown away or its src is reassigned; calling endOfStream first clamps duration
+    // to the buffered tail and can race the detach into a spurious `ended` event.
     URL.revokeObjectURL(this.blobUrl);
   }
 
-  /** Seat `track` as the current slot (offset 0), clear `next`, subscribe its manifest, and fire `onTrackChange`. Assumes the SourceBuffer is empty or the caller has just wiped it. */
+  /** Seat `track` as the current slot (offset 0), clear `next`, subscribe its manifest, and fire `onTrackChange`. */
   private installCurrent(track: QueuedTrack): void {
     const entry = this.makeEntry(track, 0);
     this.current = entry;
@@ -395,10 +398,8 @@ export class MsePlayer {
     this.tick();
   }
 
-  /** Wipe-and-reload path of `init`: same codec, different id. Cancels pending, clears the buffer and quality-tracking state, installs the new current, and seeks the audio element. */
+  /** Wipe-and-reload path of `init`: different id (any codec). Cancels pending, clears the append queue, removes buffered audio, installs the new current, and seeks. The next `drainAppendQueue` call will `changeType` if the new track's codec differs from what the parser is set up for. */
   private replaceCurrent(track: QueuedTrack, startAt: number): void {
-    // Tear down everything that referenced the old slots and the existing buffer; the new track
-    // restarts from 0 in concatenated time.
     this.cancelAllPending();
     this.appendQueue = [];
     if (this.current) this.unsubscribeEntry(this.current);
@@ -409,20 +410,15 @@ export class MsePlayer {
     this.reportedQuality = null;
     this.lastUncoveredFetch = null;
     this.mediaSourceDurationCap = 0;
-    // Parser config persists across `remove()`, but a fresh current at offset 0 will overlap the
-    // previous track's region — the SourceBuffer.remove below clears it; the next append carries
-    // the right init via `lastInitAppendedFor` matching against the new entry's id.
+    this.lastInitAppendedFor = null;
     const ranges = this.bufferedRanges();
     if (ranges.length > 0) this.tryRemove(0, Number.POSITIVE_INFINITY);
     this.installCurrent(track);
     this.audio.currentTime = startAt;
   }
 
-  /** Live-tier branch of `init`: same codec, same id. Repoints `current` at the new URL/quality/manifest source without seeking; the existing buffer plays out while reconcile's upgrade loop re-fetches chunks at the new tier. Drops `next` (its URL was at the old tier). */
+  /** Live-tier branch of `init`: same id (same codec — bitrate switches keep the codec). Repoints `current` at the new URL/quality/manifest source without seeking; the existing buffer plays out while reconcile's upgrade loop re-fetches chunks at the new tier. Drops `next` (its URL was at the old tier). */
   private liveSwap(track: QueuedTrack): void {
-    // Same id and same codec: same `current`, new URL/quality/manifest source. The audio keeps
-    // playing — we don't seek and don't touch the buffered audio. Drop the `next` slot because its
-    // URL is at the old tier; mse re-invokes `trackNext` once the new tier settles.
     const entry = this.current!;
     this.cancelPendingForTrack(entry.id);
     this.appendQueue = this.appendQueue.filter((it) => it.trackId !== entry.id);
@@ -447,6 +443,7 @@ export class MsePlayer {
     return {
       id: track.id,
       url: track.url,
+      contentType: track.contentType,
       quality: track.quality,
       totalSeconds: track.totalSeconds,
       manifest: EMPTY_MANIFEST,
@@ -621,9 +618,10 @@ export class MsePlayer {
       this.tick();
       return;
     }
-    if (result.contentType !== this.contentType) {
-      // mse can't gapless-splice across codecs. Let `current` play out; `MediaSource.endOfStream()`
-      // fires on its tail and the caller's `ended` → `step('next')` chain reloads at the new codec.
+    if (!MediaSource.isTypeSupported(result.contentType)) {
+      // Browser can't decode the successor's codec at all. Let `current` play out; `MediaSource
+      // .endOfStream()` fires on its tail and the caller's `ended` → `step('next')` chain may
+      // surface the unsupported-codec error to the user via the standard load path.
       this.nextEnded = true;
       this.tick();
       return;
@@ -642,14 +640,7 @@ export class MsePlayer {
   }
 
   private bufferedRanges(): Range[] {
-    try {
-      const b = this.sourceBuffer.buffered;
-      const out: Range[] = [];
-      for (let i = 0; i < b.length; i++) out.push({ start: b.start(i), end: b.end(i) });
-      return out;
-    } catch {
-      return [];
-    }
+    return bufferedRanges(this.sourceBuffer);
   }
 
   /** Report the quality of the chunk under the playhead when it changes. Keeps the last value while the playhead sits over a not-yet-fetched region, rather than flickering to `null`. */
@@ -703,14 +694,12 @@ export class MsePlayer {
         return;
       }
       if (key && key === this.lastUncoveredFetch && ranges.length > 0) {
-        // Already fetched and appended yet still doesn't cover — snap onto the buffered data
-        // rather than wiping and refetching forever.
         const target = ranges.find((r) => r.end > t) ?? ranges[0]!;
         this.audio.currentTime = target.start;
         return;
       }
-      // Wipe — but leave `appendedInit` and `lastInitAppendedFor` alone (the SourceBuffer parser
-      // config survives `remove()`; only an init append for a different track resets it).
+      // Wipe. Parser config survives `remove()`, so `appendedInit` and `lastInitAppendedFor`
+      // stay intact (a `changeType` is the only thing that resets the parser).
       this.cancelAllPending();
       this.appendQueue = [];
       if (ranges.length > 0) {
@@ -834,7 +823,6 @@ export class MsePlayer {
     const init = entry.manifest.init;
     if (!init || entry.durationOffset === null) return;
     if (entry.initBytes) {
-      // Cached from a prior fetch; re-queue without a network round-trip.
       this.appendQueue.unshift({
         trackId: entry.id,
         chunkIndex: -1,
@@ -863,7 +851,7 @@ export class MsePlayer {
     }
   }
 
-  /** Fetch `entry`'s chunk at `chunkIndex`, record its `X-Quality`, and push to the append queue. Transfer reports go directly from `fetchRange` to `options.onTransfer`. */
+  /** Fetch `entry`'s chunk at `chunkIndex`, record its `X-Quality`, and push to the append queue. */
   private async fetchChunk(entry: TrackEntry, chunkIndex: number): Promise<void> {
     const chunk = entry.manifest.chunks[chunkIndex];
     if (!chunk || entry.durationOffset === null) return;
@@ -946,12 +934,11 @@ export class MsePlayer {
     }
   }
 
-  /** Pick the next eligible item from the append queue and hand it to the SourceBuffer. Eligibility: an init item, or a media item whose track's init has already landed. Before appending media, re-appends the target track's cached init if the parser was configured for a different track. */
+  /** Pick the next eligible item from the append queue and hand it to the SourceBuffer. Eligibility: an init item, or a media item whose track's init has already landed. Before appending, switches the parser's codec via `SourceBuffer.changeType` if the item's track contentType differs from the parser's current config; re-appends the target track's cached init if the parser was configured for a different track. */
   private drainAppendQueue(): void {
     if (!this.isLive() || this.sourceBuffer.updating) return;
     if (this.appendQueue.length === 0) return;
 
-    // Pick: an init item is always eligible; a media item only when its entry's init has landed.
     let pickIdx = -1;
     for (let i = 0; i < this.appendQueue.length; i++) {
       const item = this.appendQueue[i]!;
@@ -971,9 +958,23 @@ export class MsePlayer {
     const candidate = this.appendQueue[pickIdx]!;
     const entry = this.entryById(candidate.trackId)!;
 
-    // For a media fragment, the parser must be configured with this track's init. If we last
-    // appended a different track's init, re-append this track's first (cached, no fetch) and let
-    // the next tick pick the media fragment back up. The media item stays in the queue.
+    // Codec switch: if the parser's currently configured for a different contentType, reconfigure
+    // it. `changeType` resets the parser, so we also invalidate `lastInitAppendedFor` — the init
+    // will be re-appended below. Recompute `setTimestampOffsetPerChunk` for the new container.
+    if (this.parserContentType !== entry.contentType) {
+      try {
+        this.sourceBuffer.changeType(entry.contentType);
+      } catch (err) {
+        // The browser refused (e.g. NotSupportedError). Treat like a quota exhaustion — the
+        // mediasource is permanently mis-configured for this codec; bail rather than loop.
+        if ((err as DOMException).name !== 'QuotaExceededError') return;
+        return;
+      }
+      this.parserContentType = entry.contentType;
+      this.setTimestampOffsetPerChunk = entry.contentType.startsWith('audio/mpeg');
+      this.lastInitAppendedFor = null;
+    }
+
     if (
       candidate.chunkIndex >= 0 &&
       entry.manifest.init &&
@@ -1024,8 +1025,6 @@ export class MsePlayer {
 
   /** Fire `MediaSource.endOfStream()` once `nextEnded` is set and `current`'s tail is buffered. Gated on `readyState === 'open'` so we don't re-invoke after the source has already ended (a seek-back can leave the source in `'ended'`). */
   private tryEndOfStream(): void {
-    // Gate on 'open' (not isLive() which also accepts 'ended') so we don't re-invoke endOfStream()
-    // every timeupdate once the source has already ended.
     if (!this.nextEnded || this.disposed || this.mediaSource.readyState !== 'open') return;
     if (this.sourceBuffer.updating || this.appendQueue.length > 0) return;
     if (!this.current) return;
