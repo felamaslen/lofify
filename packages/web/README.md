@@ -152,6 +152,12 @@ blank field unchanged. Saving issues one `trackUpdate` mutation per selected
 track and refetches the list. Clearing a field on a single track reverts it
 to the tag scanned from the file.
 
+When every selected track shares one artist, the dialog also lists that
+artist's search **synonyms** with inline add/rename/remove. These apply
+immediately via `artistSynonym{Create,Update,Delete}` (independently of the
+tag form's Save); the section is hidden when the selection spans more than
+one artist.
+
 ## Env
 
 | Variable                  | Purpose                                       |

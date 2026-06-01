@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 import { graphql } from '../lib/gql.ts';
 import { gqlRequest } from '../lib/gql-request.ts';
+import { ArtistSynonymsEditor } from './artist-synonyms-editor.tsx';
 import { Button } from './ui/button.tsx';
 import {
   Dialog,
@@ -85,6 +86,12 @@ export function TagEditDialog({
   const queryClient = useQueryClient();
   const multi = tracks.length > 1;
   const fields = multi ? MULTI_FIELDS : SINGLE_FIELDS;
+
+  // Synonyms are keyed by artist, so only offer the editor when every selected
+  // track shares one non-empty artist.
+  const firstArtist = tracks[0]?.artist ?? null;
+  const sharedArtist =
+    firstArtist && tracks.every((t) => t.artist === firstArtist) ? firstArtist : null;
 
   const [values, setValues] = useState<Record<string, string>>({});
   const [touched, setTouched] = useState<Set<Field>>(new Set());
@@ -178,6 +185,7 @@ export function TagEditDialog({
               />
             </label>
           ))}
+          {sharedArtist && <ArtistSynonymsEditor artist={sharedArtist} trackId={tracks[0]!.id} />}
           {error && <p className="text-sm text-destructive-foreground">{error}</p>}
           <DialogFooter>
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
