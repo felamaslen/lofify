@@ -190,7 +190,17 @@ export function TrackList() {
   }, [virtualizer, rowHeight]);
 
   const items = virtualizer.getVirtualItems();
-  const topIndex = items[0]?.index ?? 0;
+
+  // The row index under the top of the list, derived from page scroll. Because the row container
+  // starts exactly `scrollMargin` (the sticky-chrome height) down the document, that offset cancels
+  // and the index is simply `scrollY / rowHeight`. Drives the scrubber's active letter.
+  const [topIndex, setTopIndex] = useState(0);
+  useEffect(() => {
+    const onScroll = () => setTopIndex(Math.max(0, Math.floor(window.scrollY / rowHeight)));
+    onScroll();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, [rowHeight]);
 
   // Which index-pages cover the visible range; fetched on demand so a jump loads only its window.
   const firstPage = Math.floor((items[0]?.index ?? 0) / PAGE_SIZE);
