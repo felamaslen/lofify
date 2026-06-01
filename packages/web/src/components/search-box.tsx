@@ -157,7 +157,7 @@ export function SearchBox() {
   };
 
   return (
-    <div ref={containerRef} className="relative w-64 max-sm:w-40">
+    <div ref={containerRef} className="relative w-64 max-sm:min-w-0 max-sm:flex-1">
       <Input
         type="search"
         value={input}
@@ -166,7 +166,7 @@ export function SearchBox() {
         aria-expanded={showDropdown}
         aria-controls={listboxId}
         aria-autocomplete="list"
-        className="h-7 text-sm"
+        className="h-7 text-sm max-sm:h-10 max-sm:text-base"
         onChange={(e) => {
           setInput(e.target.value);
           setOpen(true);
@@ -178,10 +178,10 @@ export function SearchBox() {
         <div
           id={listboxId}
           role="listbox"
-          className="absolute left-0 right-0 top-full z-50 mt-1 max-h-96 overflow-y-auto rounded-md border border-border bg-background shadow-lg"
+          className="absolute left-0 right-0 top-full z-50 mt-1 max-h-96 overflow-y-auto rounded-md border border-border bg-background shadow-lg max-sm:max-h-[60vh]"
         >
           {items.length === 0 ? (
-            <p className="px-3 py-2 text-sm text-muted-foreground">
+            <p className="px-3 py-2 text-sm text-muted-foreground max-sm:py-3 max-sm:text-base">
               {isFetching ? 'Searching…' : 'No results'}
             </p>
           ) : (
@@ -230,7 +230,7 @@ function Groups({
               onMouseEnter={() => onHover(index)}
               onClick={() => onChoose(item)}
               className={cn(
-                'flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-sm',
+                'flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-sm max-sm:py-2.5 max-sm:text-base',
                 index === active && 'bg-accent/60',
               )}
             >
