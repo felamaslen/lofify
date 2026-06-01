@@ -117,6 +117,12 @@ export function TrackList() {
     [query.data],
   );
 
+  // The server reports the full match count up front, so the scrollbar can span
+  // the whole library from the first page — rows past what's loaded render as
+  // placeholders until paging fills them in.
+  const totalCount = query.data?.pages[0]?.tracks?.totalCount ?? 0;
+  const rowCount = Math.max(edges.length, totalCount);
+
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -190,7 +196,7 @@ export function TrackList() {
   };
 
   const virtualizer = useVirtualizer({
-    count: edges.length,
+    count: rowCount,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => rowHeight,
     overscan: 12,
@@ -257,7 +263,25 @@ export function TrackList() {
             >
               {items.map((virtualRow) => {
                 const edge = edges[virtualRow.index];
-                if (!edge) return null;
+                if (!edge) {
+                  // A row within the library's range that paging hasn't reached yet.
+                  return (
+                    <div
+                      key={virtualRow.key}
+                      role="row"
+                      aria-hidden
+                      className={cn(COLS, 'text-sm')}
+                      style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        width: '100%',
+                        height: virtualRow.size,
+                        transform: `translateY(${virtualRow.start}px)`,
+                      }}
+                    />
+                  );
+                }
                 const t = readFragment(TrackListRowDocument, edge.node);
                 const active = current?.id === edge.node.id;
                 const isSelected = selected.has(edge.node.id);
