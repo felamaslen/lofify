@@ -254,6 +254,8 @@ class Player {
   private lastSwitchAt = 0;
   /** Latest-wins guard for `changeFormat`'s async fetch. */
   private changeToken = 0;
+  /** Latest-wins guard for manual `play()`: rapid clicks between tracks would otherwise let an earlier `fetchTrack` resolve and trigger a load that the user has already moved on from. */
+  private playToken = 0;
   /** Pending debounced URL playhead write; cleared/flushed on pause and teardown. */
   private urlWriteTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly detachers: Array<() => void> = [];
@@ -429,14 +431,18 @@ class Player {
     writePlaybackToUrl(this.snapshot.current?.id ?? null, this.mse?.currentPosition() ?? 0);
   }
 
-  /** Load the track with id `id`, fetched at the current tier/preference, and start it from the top. */
+  /** Load the track with id `id`, fetched at the current tier/preference, and start it from the top. Disposes the existing `MsePlayer` so the new track gets a fresh `MediaSource` — rapid clicks between tracks would otherwise leave stale state (cached `initBytes`, in-flight fetch race, etc.) interleaving across the reused instance. The `playToken` check after the fetch drops earlier clicks that resolved before the user's most recent one. */
   async play(id: string): Promise<void> {
+    const token = ++this.playToken;
     const track = await this.fetchTrack(
       id,
       this.snapshot.requestedTier,
       this.snapshot.lossyPreference,
     );
-    if (track) await this.loadTrack(track);
+    if (token !== this.playToken || !track) return;
+    this.mse?.dispose();
+    this.mse = null;
+    await this.loadTrack(track);
   }
 
   /** Toggle play/pause for the loaded track. No-op when nothing is loaded. */
