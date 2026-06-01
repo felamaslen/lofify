@@ -78,6 +78,18 @@ type ArtistEdge {
   node: Artist!
 }
 
+"""
+An alternative name for an artist, used to surface that artist in search.
+"""
+type ArtistSynonym {
+  """
+  The canonical artist, as it appears on tracks and is passed to `Query.tracks(filterArtistIn:)`.
+  """
+  artist: String!
+  """The alternative name that matches the artist in search."""
+  synonym: String!
+}
+
 """The expected bitrate of one adaptive quality tier for a track."""
 type DeliveryTier {
   """Nominal transcode bitrate in kbps."""
@@ -114,6 +126,18 @@ type LibraryScan {
 }
 
 type Mutation {
+  """
+  Register `synonym` as an alternative name for `artist`. Throws when either is blank or the pair already exists.
+  """
+  artistSynonymCreate(artist: String!, synonym: String!): ArtistSynonym!
+  """
+  Remove the synonym `synonym` from `artist`. No-op when the pair doesn't exist.
+  """
+  artistSynonymDelete(artist: String!, synonym: String!): Void!
+  """
+  Rename the synonym `synonym` of `artist` to `newSynonym`. Throws when `newSynonym` is blank, the original pair is unknown, or the renamed pair already exists.
+  """
+  artistSynonymUpdate(artist: String!, newSynonym: String!, synonym: String!): ArtistSynonym!
   """
   Requests cancellation of the named in-progress scan. No-op when the scan is unknown or already completed.
   """
@@ -192,7 +216,9 @@ type Search {
   Distinct albums whose title matches the query, each carrying its credited artists.
   """
   albums: AlbumConnection!
-  """Distinct artists whose name matches the query."""
+  """
+  Distinct artists whose name — or one of their registered synonyms — matches the query. A synonym match contributes its canonical artist, so the result is always a real artist name (never a synonym), suitable for `filterArtistIn`.
+  """
   artists: ArtistConnection!
   """Tracks whose title matches the query, in library order."""
   tracks: TrackConnection!
@@ -224,6 +250,10 @@ type Subscription {
 type Track {
   album: String
   artist: String
+  """
+  Alternative names registered for this track's effective artist, alphabetically. Empty when the track has no artist or none are registered.
+  """
+  artistSynonyms: [String!]!
   """
   Delivery plan for this track at the given `format`. See `TrackDelivery`. Defaults to the same baseline as `url`.
   """

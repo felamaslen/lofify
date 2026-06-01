@@ -2,7 +2,10 @@ import { inArray, sql } from 'drizzle-orm';
 import type { Int } from 'grats';
 
 import { db } from '../db/client.js';
-import { tracks as tracksTable } from '../db/schema/index.js';
+import {
+  artistSynonyms as artistSynonymsTable,
+  tracks as tracksTable,
+} from '../db/schema/index.js';
 import { toGqlTrack } from './track.js';
 import type { TrackConnection, TrackEdge } from './track-queries.js';
 
@@ -98,22 +101,25 @@ export type AlbumConnection = {
 export class Search {
   constructor(private readonly pattern: string) {}
 
-  /** Distinct artists whose name matches the query. @gqlField */
+  /** Distinct artists whose name — or one of their registered synonyms — matches the query. A synonym match contributes its canonical artist, so the result is always a real artist name (never a synonym), suitable for `filterArtistIn`. @gqlField */
   async artists(): Promise<ArtistConnection> {
-    const match = sql`${artistName} ilike ${this.pattern} escape '\\'`;
-    const rows = await db
-      .selectDistinct({ name: artistName })
-      .from(tracksTable)
-      .where(match)
-      .orderBy(artistName)
-      .limit(SEARCH_LIMIT);
-    const totalRow = await db
-      .select({ count: sql<number>`count(distinct ${artistName})::int` })
-      .from(tracksTable)
-      .where(match);
+    const directMatch = sql`${artistName} ilike ${this.pattern} escape '\\'`;
+    const synonymMatch = sql`${artistSynonymsTable.synonym} ilike ${this.pattern} escape '\\'`;
+    // `union` dedupes, so an artist matched both directly and via a synonym appears once.
+    const matches = sql`
+      select distinct ${artistName} as name from ${tracksTable} where ${directMatch}
+      union
+      select distinct ${artistSynonymsTable.artist} as name from ${artistSynonymsTable} where ${synonymMatch}
+    `;
+    const page = await db.execute<{ name: string }>(
+      sql`${matches} order by name limit ${SEARCH_LIMIT}`,
+    );
+    const total = await db.execute<{ count: number }>(
+      sql`select count(*)::int as count from (${matches}) as u`,
+    );
     return {
-      edges: rows.map((r) => ({ node: { name: r.name as string }, cursor: r.name as string })),
-      totalCount: totalRow[0]?.count ?? 0,
+      edges: page.rows.map((r) => ({ node: { name: r.name }, cursor: r.name })),
+      totalCount: total.rows[0]?.count ?? 0,
     };
   }
 

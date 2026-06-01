@@ -6,6 +6,7 @@
 import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, GraphQLInt, specifiedDirectives, GraphQLObjectType, GraphQLString, GraphQLID, GraphQLBoolean, GraphQLList, GraphQLEnumType, GraphQLInputObjectType, GraphQLFloat } from "graphql";
 import { libraryScan as queryLibraryScanResolver, libraryScanCancel as mutationLibraryScanCancelResolver, libraryScanStart as mutationLibraryScanStartResolver, libraryScanSubscription as subscriptionLibraryScanResolver } from "./../library-scan.js";
 import { ping as queryPingResolver, noop as mutationNoopResolver } from "./../root.js";
+import { artistSynonyms as trackArtistSynonymsResolver, artistSynonymCreate as mutationArtistSynonymCreateResolver, artistSynonymDelete as mutationArtistSynonymDeleteResolver, artistSynonymUpdate as mutationArtistSynonymUpdateResolver } from "./../artist-synonyms.js";
 import { delivery as trackDeliveryResolver, path as trackPathResolver, url as trackUrlResolver } from "./../track.js";
 import { search as querySearchResolver } from "./../search.js";
 import { track as queryTrackResolver, tracks as queryTracksResolver } from "./../track-queries.js";
@@ -271,6 +272,14 @@ export function getSchema(): GraphQLSchema {
                     name: "artist",
                     type: GraphQLString
                 },
+                artistSynonyms: {
+                    description: "Alternative names registered for this track's effective artist, alphabetically. Empty when the track has no artist or none are registered.",
+                    name: "artistSynonyms",
+                    type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(GraphQLString))),
+                    resolve(source) {
+                        return trackArtistSynonymsResolver(source);
+                    }
+                },
                 delivery: {
                     description: "Delivery plan for this track at the given `format`. See `TrackDelivery`. Defaults to the same baseline as `url`.",
                     name: "delivery",
@@ -424,7 +433,7 @@ export function getSchema(): GraphQLSchema {
                     type: new GraphQLNonNull(AlbumConnectionType)
                 },
                 artists: {
-                    description: "Distinct artists whose name matches the query.",
+                    description: "Distinct artists whose name \u2014 or one of their registered synonyms \u2014 matches the query. A synonym match contributes its canonical artist, so the result is always a real artist name (never a synonym), suitable for `filterArtistIn`.",
                     name: "artists",
                     type: new GraphQLNonNull(ArtistConnectionType)
                 },
@@ -515,6 +524,24 @@ export function getSchema(): GraphQLSchema {
             };
         }
     });
+    const ArtistSynonymType: GraphQLObjectType = new GraphQLObjectType({
+        name: "ArtistSynonym",
+        description: "An alternative name for an artist, used to surface that artist in search.",
+        fields() {
+            return {
+                artist: {
+                    description: "The canonical artist, as it appears on tracks and is passed to `Query.tracks(filterArtistIn:)`.",
+                    name: "artist",
+                    type: new GraphQLNonNull(GraphQLString)
+                },
+                synonym: {
+                    description: "The alternative name that matches the artist in search.",
+                    name: "synonym",
+                    type: new GraphQLNonNull(GraphQLString)
+                }
+            };
+        }
+    });
     const VoidType: GraphQLObjectType = new GraphQLObjectType({
         name: "Void",
         description: "Empty payload returned by mutations that have nothing meaningful to report.",
@@ -531,6 +558,57 @@ export function getSchema(): GraphQLSchema {
         name: "Mutation",
         fields() {
             return {
+                artistSynonymCreate: {
+                    description: "Register `synonym` as an alternative name for `artist`. Throws when either is blank or the pair already exists.",
+                    name: "artistSynonymCreate",
+                    type: new GraphQLNonNull(ArtistSynonymType),
+                    args: {
+                        artist: {
+                            type: new GraphQLNonNull(GraphQLString)
+                        },
+                        synonym: {
+                            type: new GraphQLNonNull(GraphQLString)
+                        }
+                    },
+                    resolve(_source, args) {
+                        return mutationArtistSynonymCreateResolver(args.artist, args.synonym);
+                    }
+                },
+                artistSynonymDelete: {
+                    description: "Remove the synonym `synonym` from `artist`. No-op when the pair doesn't exist.",
+                    name: "artistSynonymDelete",
+                    type: new GraphQLNonNull(VoidType),
+                    args: {
+                        artist: {
+                            type: new GraphQLNonNull(GraphQLString)
+                        },
+                        synonym: {
+                            type: new GraphQLNonNull(GraphQLString)
+                        }
+                    },
+                    resolve(_source, args) {
+                        return mutationArtistSynonymDeleteResolver(args.artist, args.synonym);
+                    }
+                },
+                artistSynonymUpdate: {
+                    description: "Rename the synonym `synonym` of `artist` to `newSynonym`. Throws when `newSynonym` is blank, the original pair is unknown, or the renamed pair already exists.",
+                    name: "artistSynonymUpdate",
+                    type: new GraphQLNonNull(ArtistSynonymType),
+                    args: {
+                        artist: {
+                            type: new GraphQLNonNull(GraphQLString)
+                        },
+                        newSynonym: {
+                            type: new GraphQLNonNull(GraphQLString)
+                        },
+                        synonym: {
+                            type: new GraphQLNonNull(GraphQLString)
+                        }
+                    },
+                    resolve(_source, args) {
+                        return mutationArtistSynonymUpdateResolver(args.artist, args.synonym, args.newSynonym);
+                    }
+                },
                 libraryScanCancel: {
                     description: "Requests cancellation of the named in-progress scan. No-op when the scan is unknown or already completed.",
                     name: "libraryScanCancel",
@@ -724,6 +802,6 @@ export function getSchema(): GraphQLSchema {
         query: QueryType,
         mutation: MutationType,
         subscription: SubscriptionType,
-        types: [QualityType, TrackFormatType, AlbumType, AlbumConnectionType, AlbumEdgeType, ArtistType, ArtistConnectionType, ArtistEdgeType, DeliveryTierType, DurationType, LibraryScanType, MutationType, PageInfoType, QueryType, SearchType, SubscriptionType, TrackType, TrackConnectionType, TrackDeliveryType, TrackEdgeType, TrackManifestType, TrackManifestChunkType, TrackManifestInitType, VoidType]
+        types: [QualityType, TrackFormatType, AlbumType, AlbumConnectionType, AlbumEdgeType, ArtistType, ArtistConnectionType, ArtistEdgeType, ArtistSynonymType, DeliveryTierType, DurationType, LibraryScanType, MutationType, PageInfoType, QueryType, SearchType, SubscriptionType, TrackType, TrackConnectionType, TrackDeliveryType, TrackEdgeType, TrackManifestType, TrackManifestChunkType, TrackManifestInitType, VoidType]
     });
 }
