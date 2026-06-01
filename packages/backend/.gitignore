@@ -1,2 +1,3 @@
-src/db/__generated__/
+src/db/__generated__/*
+!src/db/__generated__/schema.sql
 dist/
