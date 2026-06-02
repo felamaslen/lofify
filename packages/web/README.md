@@ -129,12 +129,19 @@ A waveform button (`AudioLines`) sits in the playback bar's transport row,
 just after previous / play-pause / next. Toggling it swaps the track list
 for a full-bleed **aurora visualiser** of the playing track
 (`components/visualiser.tsx`): a soft glowing blob, drawn on a `<canvas>`
-each animation frame, that breathes with the bass, has its rim deformed
-into organic lobes by the spectrum (mirrored left/right), shifts hue with
-the music's tonal balance (bass-heavy → warm, bright → cool), and fires an
-expanding ring on each detected bass onset. The active state lives in
-`state/visualiser.tsx` (`VisualiserProvider` / `useVisualiser`) and is
-ephemeral — a view mode, not a saved preference.
+each animation frame, built from **composable, simultaneously-visible
+layers** so different music looks different and layered music looks
+layered. Eight log-spaced frequency bands each drive their own low-order angular
+harmonic of the rim, so it stays rounded while coexisting timbres swell it
+together. The fill is a simple two-stop radial gradient — a `from` colour at
+the core to a `to` colour at the rim — taken from a palette that the overall
+timbre (brightness) **rotates**, so different tracks land on very different
+colour schemes. On top of that: it punches with each bass kick; spectral
+flatness (noisy vs tonal) roughens the edge only for noisy material; spectral
+flux (how fast the spectrum moves) sets the swirl speed; treble energy flings
+additive sparks off the rim; and a detected bass onset fires an expanding
+ring. The active state lives in `state/visualiser.tsx` (`VisualiserProvider`
+/ `useVisualiser`) and is ephemeral — a view mode, not a saved preference.
 
 The spectrum comes from a Web Audio `AnalyserNode` (`lib/audio-analyser.ts`),
 created lazily the first time the visualiser is opened. Crucially it taps a
