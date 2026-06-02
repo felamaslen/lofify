@@ -169,15 +169,21 @@ function sameDate(a: Date, b: Date): boolean {
   return a.toISOString().slice(0, 10) === b.toISOString().slice(0, 10);
 }
 
+/** Resolve a text override against its scanned tag: an empty-string override means the user explicitly blanked the field (effective value `null`), a null override falls back to the scanned tag. */
+function applyOverride(override: string | null, scanned: string | null): string | null {
+  if (override === '') return null;
+  return override ?? scanned;
+}
+
 export function toGqlTrack(row: DbTrack): Track {
   return {
     id: row.id,
-    title: row.titleOverride ?? row.title,
+    title: applyOverride(row.titleOverride, row.title),
     trackNumber: row.trackNumberOverride ?? row.trackNumber,
     discNumber: row.discNumberOverride ?? row.discNumber,
-    artist: row.artistOverride ?? row.artist,
-    album: row.albumOverride ?? row.album,
-    year: row.yearOverride ?? row.year,
+    artist: applyOverride(row.artistOverride, row.artist),
+    album: applyOverride(row.albumOverride, row.album),
+    year: applyOverride(row.yearOverride, row.year),
     format: deriveFormat(row.format, row.codec),
     sourceFormat: abbreviateCodec(row.codec),
     codecProfile: row.codecProfile,

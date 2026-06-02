@@ -733,7 +733,7 @@ export function getSchema(): GraphQLSchema {
                     }
                 },
                 trackUpdate: {
-                    description: "Override one or more tags on a single track. Each supplied tag is stored as an override that takes precedence over the value read from the file on disk and survives rescans \u2014 the scanner never touches it.\n\nOmit an argument to leave its current override untouched; pass an explicit `null` to clear the override and fall back to the scanned tag.\n\nThrows when no track with the given id exists.",
+                    description: "Override one or more tags on a single track. Each supplied tag is stored as an override that takes precedence over the value read from the file on disk and survives rescans \u2014 the scanner never touches it.\n\nOmit an argument to leave its current override untouched; pass an explicit `null` to clear the override and fall back to the scanned tag; pass an empty string to blank the field outright.\n\nThrows when no track with the given id exists.",
                     name: "trackUpdate",
                     type: new GraphQLNonNull(TrackType),
                     args: {

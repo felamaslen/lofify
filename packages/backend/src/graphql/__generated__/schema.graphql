@@ -165,7 +165,7 @@ type Mutation {
   """
   Override one or more tags on a single track. Each supplied tag is stored as an override that takes precedence over the value read from the file on disk and survives rescans — the scanner never touches it.
   
-  Omit an argument to leave its current override untouched; pass an explicit `null` to clear the override and fall back to the scanned tag.
+  Omit an argument to leave its current override untouched; pass an explicit `null` to clear the override and fall back to the scanned tag; pass an empty string to blank the field outright.
   
   Throws when no track with the given id exists.
   """
