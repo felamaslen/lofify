@@ -125,14 +125,16 @@ export function TagEditDialog({
     setSaving(true);
     setError(null);
     try {
-      // Only fields the user touched are sent. A touched-but-empty field clears
-      // the override (reverting to the scanned tag); an untouched field is omitted.
+      // Only fields the user touched are sent; an untouched field is omitted.
+      // Clearing a text field stores an empty override that blanks the value;
+      // numeric columns can't hold a blank, so a cleared number falls back to
+      // the scanned tag.
       const changes: Record<string, string | number | null> = {};
       for (const { key, numeric } of fields) {
         if (multi ? !touched.has(key) : values[key] === initial[key]) continue;
         const raw = values[key]?.trim() ?? '';
         if (raw === '') {
-          changes[key] = null;
+          changes[key] = numeric ? null : '';
         } else if (numeric) {
           const n = Number.parseInt(raw, 10);
           if (Number.isNaN(n)) continue;
@@ -146,7 +148,13 @@ export function TagEditDialog({
         await Promise.all(
           tracks.map((t) => gqlRequest(TrackUpdateDocument, { id: t.id, ...changes })),
         );
-        await queryClient.invalidateQueries({ queryKey: ['tracks'] });
+        // The list reads from these keys; editing artist/album can also shift the
+        // counts and the letter index, so refresh all three.
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['tracks-window'] }),
+          queryClient.invalidateQueries({ queryKey: ['tracks-count'] }),
+          queryClient.invalidateQueries({ queryKey: ['artist-index'] }),
+        ]);
       }
       onOpenChange(false);
     } catch (err) {
@@ -164,7 +172,7 @@ export function TagEditDialog({
           <DialogDescription>
             {multi
               ? `Editing ${tracks.length} tracks. Blank fields are left unchanged.`
-              : 'Clearing a field reverts it to the tag read from the file.'}
+              : 'Clearing a field blanks it; numbers fall back to the tag read from the file.'}
           </DialogDescription>
         </DialogHeader>
         <form
