@@ -1,6 +1,12 @@
 import { Quality } from '../graphql/playback-format.js';
 import type { EncodeFormat } from './encoder.js';
-import { ResolveError, type ResolveSource, resolveTarget } from './resolve.js';
+import {
+  isMultiLossy,
+  isPassthrough,
+  ResolveError,
+  type ResolveSource,
+  resolveTarget,
+} from './resolve.js';
 
 const FLAC = 'audio/mp4; codecs="flac"';
 const OPUS_MP4 = 'audio/mp4; codecs="opus"';
@@ -100,4 +106,39 @@ test('unproducible MIME types are ignored', () => {
     lossyFormats: ['audio/aac', 'audio/ogg; codecs="vorbis"', OPUS_MP4],
   });
   expect(fmt(t)).toBe('mp4/opus');
+});
+
+const multiLossy = (source: ResolveSource, req: Parameters<typeof resolveTarget>[1]): boolean => {
+  const t = resolveTarget(source, req);
+  return isMultiLossy(source, t, isPassthrough(t, source.sourceCodec));
+};
+
+test('lossy source transcoded to a lossy output is multi-lossy', () => {
+  expect(multiLossy(lossy('vorbis'), { quality: Quality.MEDIUM, lossyFormats: [OPUS_MP4] })).toBe(
+    true,
+  );
+});
+
+test('a verbatim lossy copy (passthrough) is not multi-lossy', () => {
+  expect(multiLossy(lossy('mp3'), { quality: Quality.MAX, lossyFormats: [MP3] })).toBe(false);
+});
+
+test('a lossless source is never multi-lossy', () => {
+  expect(
+    multiLossy(lossless('flac'), {
+      quality: Quality.MAX,
+      losslessFormats: [FLAC],
+      lossyFormats: [OPUS_MP4],
+    }),
+  ).toBe(false);
+});
+
+test('a lossy source re-encoded to lossless FLAC is not multi-lossy', () => {
+  expect(
+    isMultiLossy(
+      lossy('mp3'),
+      { format: { container: 'mp4', codec: 'flac' }, quality: Quality.MAX },
+      false,
+    ),
+  ).toBe(false);
 });

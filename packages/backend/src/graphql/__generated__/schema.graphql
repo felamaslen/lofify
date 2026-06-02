@@ -366,6 +366,10 @@ type TrackDelivery {
   """
   description: String!
   """
+  Whether a lossy source is being re-encoded to a lossy output, stacking a second generation of compression loss. False for lossless sources, lossless output, or a verbatim copy.
+  """
+  isMultiLossy: Boolean!
+  """
   Whether the source is delivered without re-encoding (a container-only copy).
   """
   isPassthrough: Boolean!

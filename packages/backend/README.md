@@ -228,11 +228,13 @@ mid-stream. If everything is within the grace window we stay over
 budget rather than evict something in use.
 
 `Track.delivery(format)` returns the resolved `{ url, mimeType,
-isPassthrough, description, tiers }` in one field, so a client gets the
-SourceBuffer MIME type and a tooltip-ready description without a probe
-request. `tiers` lists the expected bitrate of each adaptive tier (MIN–HIGH)
-for the resolved lossy codec, so the adaptive controller can size the
-connection against the ladder and jump straight to the best-fitting tier.
+isPassthrough, isMultiLossy, description, tiers }` in one field, so a client
+gets the SourceBuffer MIME type and a tooltip-ready description without a
+probe request. `isMultiLossy` is true when a lossy source is re-encoded to a
+lossy output (not a verbatim copy) — a second generation of compression loss
+the client can flag. `tiers` lists the expected bitrate of each adaptive tier
+(MIN–HIGH) for the resolved lossy codec, so the adaptive controller can size
+the connection against the ladder and jump straight to the best-fitting tier.
 
 ### Manifest subscription
 

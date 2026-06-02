@@ -215,6 +215,11 @@ export function getSchema(): GraphQLSchema {
                     name: "description",
                     type: new GraphQLNonNull(GraphQLString)
                 },
+                isMultiLossy: {
+                    description: "Whether a lossy source is being re-encoded to a lossy output, stacking a second generation of compression loss. False for lossless sources, lossless output, or a verbatim copy.",
+                    name: "isMultiLossy",
+                    type: new GraphQLNonNull(GraphQLBoolean)
+                },
                 isPassthrough: {
                     description: "Whether the source is delivered without re-encoding (a container-only copy).",
                     name: "isPassthrough",
