@@ -30,6 +30,7 @@ export const TrackByIdDocument = graphql(
           url
           mimeType
           isPassthrough
+          isMultiLossy
           description
           tiers {
             quality

@@ -6,6 +6,7 @@ import { type Track as DbTrack, tracks as tracksTable } from '../db/schema/index
 import {
   contentTypeFor,
   deliveryDescription,
+  isMultiLossy,
   isPassthrough,
   resolveTarget,
   tierBitratesKbps,
@@ -101,6 +102,8 @@ export type TrackDelivery = {
   mimeType: string;
   /** Whether the source is delivered without re-encoding (a container-only copy). @gqlField */
   isPassthrough: boolean;
+  /** Whether a lossy source is being re-encoded to a lossy output, stacking a second generation of compression loss. False for lossless sources, lossless output, or a verbatim copy. @gqlField */
+  isMultiLossy: boolean;
   /** Short human-readable summary of the delivery, e.g. "Original Vorbis, copied without re-encoding" or "Transcoded to Opus at 256 kbps". @gqlField */
   description: string;
   /** Expected bitrate of each adaptive quality tier (MIN–HIGH) for this track, given the lossy codec the ladder transcodes to, so the client can size each tier against measured bandwidth and jump straight to the highest it can sustain. @gqlField */
@@ -124,15 +127,14 @@ export type DeliveryTier = {
  *
  * @gqlField */
 export function delivery(track: Track, format?: TrackFormat | null): TrackDelivery {
-  const target = resolveTarget(
-    { isLossless: track.isLossless, sourceCodec: track.sourceFormat },
-    format ?? DEFAULT_FORMAT,
-  );
+  const source = { isLossless: track.isLossless, sourceCodec: track.sourceFormat };
+  const target = resolveTarget(source, format ?? DEFAULT_FORMAT);
   const passthrough = isPassthrough(target, track.sourceFormat);
   return {
     url: signPlaybackUrl(track.id, target),
     mimeType: contentTypeFor(target),
     isPassthrough: passthrough,
+    isMultiLossy: isMultiLossy(source, target, passthrough),
     description: deliveryDescription(target, passthrough),
     tiers: tierBitratesKbps(format ?? DEFAULT_FORMAT),
   };

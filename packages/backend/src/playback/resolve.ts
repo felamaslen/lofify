@@ -109,6 +109,19 @@ export function isPassthrough(target: EncodeTarget, sourceCodec: string): boolea
   return target.quality === Quality.MAX && target.format.codec === sourceCodec.toLowerCase();
 }
 
+/** Output codecs that carry lossy compression. FLAC is the only lossless format the server emits, so everything else it produces is lossy. */
+const LOSSY_OUTPUT_CODECS = new Set<EncodeFormat['codec']>(['opus', 'vorbis', 'mp3']);
+
+/** Whether the delivery stacks a second generation of lossy compression: a lossy source re-encoded to a lossy output. A lossless source, a lossless (FLAC) output, or a verbatim passthrough copy each add no further loss, so all are false. */
+export function isMultiLossy(
+  source: ResolveSource,
+  target: EncodeTarget,
+  passthrough: boolean,
+): boolean {
+  if (source.isLossless || passthrough) return false;
+  return LOSSY_OUTPUT_CODECS.has(target.format.codec);
+}
+
 const CODEC_LABEL: Record<EncodeFormat['codec'], string> = {
   opus: 'Opus',
   flac: 'FLAC',

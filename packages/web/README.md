@@ -30,11 +30,26 @@ pnpm gql:generate      # rewrites src/graphql-env.d.ts
 Set `SCHEMA_URL` to point at a non-default backend (defaults to
 `http://localhost:4000/graphql/schema.graphql`).
 
+## Appearance
+
+The colour scheme is a three-way toggle in Settings — `System`, `Light`,
+`Dark` (icon buttons) — defaulting to `System`, which follows the
+browser's `prefers-color-scheme` and re-resolves live when the OS
+preference flips. The choice is held in `state/theme.tsx`
+(`ThemeProvider` / `useTheme`) and persisted in `localStorage`
+(`lofify.app.theme`). It toggles a `dark` class on `<html>` (Tailwind's
+`darkMode: 'class'`); `styles.css` defines the light palette on `:root`
+and the dark overrides under `.dark`, both as HSL CSS variables. An inline
+script in `index.html` applies the class before first paint to avoid a
+flash of the wrong theme, and the `theme-color` meta tag is kept in sync
+with the active background.
+
 ## Playback
 
 Playback is MSE-only. A gear button in the playback bar's right section
-opens a settings dialog holding the library rescan, quality and preferred
-format controls:
+opens a settings dialog holding the appearance, library rescan, quality
+and preferred format controls (the latter two are pill toggles —
+`ToggleGroup`):
 
 - **Quality** — two modes. `Adaptive` transcodes to a lossy tier whose
   bitrate is chosen automatically from the measured connection speed,
@@ -80,21 +95,24 @@ format controls:
     sensibly abort a healthy in-flight download to go up.
 
 - **Codec** — a _preference_ used only when the server has to transcode
-  (Adaptive, or a lossy source in Original with no matching copy): `Prefer
-Opus` or `Prefer MP3`. In Original, sources are copied without re-encoding
-  where possible; in Adaptive everything is transcoded to this codec.
+  (Adaptive, or a lossy source in Original with no matching copy): `Opus`
+  or `MP3`. In Original, sources are copied without re-encoding where
+  possible; in Adaptive everything is transcoded to this codec.
 
 `capabilities.ts` probes `MediaSource.isTypeSupported` once per page load
 and exposes the supported formats as the preference-ordered
 `losslessFormats` / `lossyFormats` MIME lists. The player sends these
 plus the requested tier as the `TrackFormat`, and reads `Track.delivery` back —
-`{ url, mimeType, isPassthrough, description, tiers }` — so it learns the
-SourceBuffer MIME type and a tooltip-ready summary in one query, then
-streams chunk byte ranges via the `trackManifest` subscription (see the
+`{ url, mimeType, isPassthrough, isMultiLossy, description, tiers }` — so it
+learns the SourceBuffer MIME type and a tooltip-ready summary in one query,
+then streams chunk byte ranges via the `trackManifest` subscription (see the
 backend README). The format badge by the track title shows the resolved
 codec, distinguishing a copy (no re-encode) from a transcode, with
-`description` as its tooltip. MSE failures or unreachable endpoints raise
-a toast.
+`description` revealed by a `Hint` (hover tooltip on pointer devices, tap
+popover on touchscreens). When `delivery.isMultiLossy` is set — a lossy
+source re-encoded to a lossy output — an amber warning triangle sits to its
+left, flagging the extra generation of compression loss. MSE failures or
+unreachable endpoints raise a toast.
 
 Each playback range response carries an `X-Quality` header naming the
 tier its bytes were encoded at. The player records it per fetched chunk

@@ -1,53 +1,46 @@
 import type { LossyPreference } from '../lib/capabilities.ts';
 import { usePlayer } from '../state/player.tsx';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select.tsx';
+import { ToggleGroup, ToggleGroupItem } from './ui/toggle-group.tsx';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip.tsx';
 
 const CHOICES: { value: LossyPreference; label: string; unsupportedReason: string }[] = [
-  {
-    value: 'OPUS',
-    label: 'Prefer Opus',
-    unsupportedReason: 'Your browser cannot play Opus via MSE.',
-  },
-  {
-    value: 'MP3',
-    label: 'Prefer MP3',
-    unsupportedReason: 'Your browser cannot play MP3 via MSE.',
-  },
+  { value: 'OPUS', label: 'Opus', unsupportedReason: 'Your browser cannot play Opus via MSE.' },
+  { value: 'MP3', label: 'MP3', unsupportedReason: 'Your browser cannot play MP3 via MSE.' },
 ];
 
 export function FormatPicker() {
   const { lossyPreference, setLossyPreference, lossyPreferenceAvailability } = usePlayer();
   return (
     <TooltipProvider delayDuration={150}>
-      <Select
+      <ToggleGroup
+        type="single"
         value={lossyPreference}
-        onValueChange={(v) => setLossyPreference(v as LossyPreference)}
+        onValueChange={(v) => v && setLossyPreference(v as LossyPreference)}
+        aria-label="Preferred format"
       >
-        <SelectTrigger className="w-[130px]">
-          <SelectValue placeholder="Codec" />
-        </SelectTrigger>
-        <SelectContent>
-          {CHOICES.map((c) => {
-            const disabled = !lossyPreferenceAvailability[c.value];
-            const item = (
-              <SelectItem key={c.value} value={c.value} disabled={disabled}>
+        {CHOICES.map((c) => {
+          const disabled = !lossyPreferenceAvailability[c.value];
+          if (!disabled)
+            return (
+              <ToggleGroupItem key={c.value} value={c.value}>
                 {c.label}
-              </SelectItem>
+              </ToggleGroupItem>
             );
-            return disabled ? (
-              <Tooltip key={c.value}>
-                <TooltipTrigger asChild>
-                  <div>{item}</div>
-                </TooltipTrigger>
-                <TooltipContent side="left">{c.unsupportedReason}</TooltipContent>
-              </Tooltip>
-            ) : (
-              item
-            );
-          })}
-        </SelectContent>
-      </Select>
+          return (
+            <Tooltip key={c.value}>
+              <TooltipTrigger asChild>
+                {/* A disabled item receives no pointer events, so wrap it to keep the hover target alive. */}
+                <span className="inline-flex">
+                  <ToggleGroupItem value={c.value} disabled>
+                    {c.label}
+                  </ToggleGroupItem>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="top">{c.unsupportedReason}</TooltipContent>
+            </Tooltip>
+          );
+        })}
+      </ToggleGroup>
     </TooltipProvider>
   );
 }
