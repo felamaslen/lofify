@@ -1,9 +1,12 @@
 import { readFragment } from 'gql.tada';
-import { Pause, Play, SkipBack, SkipForward } from 'lucide-react';
+import { AudioLines, Pause, Play, SkipBack, SkipForward } from 'lucide-react';
 import { type MouseEvent, useMemo, useRef, useState } from 'react';
 
+import { getAnalyser, isVisualiserSupported } from '../lib/audio-analyser.ts';
 import { graphql } from '../lib/gql.ts';
+import { useCoarsePointer } from '../lib/use-coarse-pointer.ts';
 import { usePlayer } from '../state/player.tsx';
+import { useVisualiser } from '../state/visualiser.tsx';
 import { PlaybackFormatBadge } from './playback-format-badge.tsx';
 import { SettingsDialog } from './settings-dialog.tsx';
 import { Button } from './ui/button.tsx';
@@ -40,6 +43,17 @@ export function PlaybackBar() {
     previous,
     seek,
   } = usePlayer();
+  const { active: visualiserActive, toggle: toggleVisualiser } = useVisualiser();
+  // Touch devices are excluded (the small screen is for the list, not a
+  // visualiser) and so are browsers without `captureStream` (Safari).
+  const showVisualiser = !useCoarsePointer() && isVisualiserSupported();
+
+  const onToggleVisualiser = () => {
+    // Prime + resume the AudioContext inside the click gesture so the browser
+    // permits the resume; the visualiser's own mount call is then idempotent.
+    if (!visualiserActive) getAnalyser();
+    toggleVisualiser();
+  };
 
   const meta = current ? readFragment(PlaybackBarDocument, current) : null;
   const total = meta?.duration.seconds ?? 0;
@@ -97,6 +111,18 @@ export function PlaybackBar() {
           <Button variant="ghost" size="icon" onClick={next} disabled={!current} aria-label="Next">
             <SkipForward />
           </Button>
+          {showVisualiser && (
+            <Button
+              variant={visualiserActive ? 'secondary' : 'ghost'}
+              size="icon"
+              onClick={onToggleVisualiser}
+              disabled={!current}
+              aria-label="Visualiser"
+              aria-pressed={visualiserActive}
+            >
+              <AudioLines />
+            </Button>
+          )}
         </div>
 
         <div className="flex w-full items-center gap-2 text-[11px] tabular-nums text-muted-foreground max-sm:col-span-2 max-sm:row-start-3 max-sm:grid max-sm:grid-cols-2 max-sm:items-end max-sm:gap-x-2 max-sm:gap-y-1">
