@@ -313,6 +313,11 @@ export function getSchema(): GraphQLSchema {
                     name: "channels",
                     type: GraphQLInt
                 },
+                codecProfile: {
+                    description: "Codec quality option of the source, e.g. `\"CBR\"`/`\"VBR\"` for MP3 or `\"LC\"`/`\"HE-AAC\"` for AAC. Null when the codec reports none.",
+                    name: "codecProfile",
+                    type: GraphQLString
+                },
                 delivery: {
                     description: "Delivery plan for this track at the given `format`. See `TrackDelivery`. Defaults to the same baseline as `url`.",
                     name: "delivery",
@@ -388,9 +393,9 @@ export function getSchema(): GraphQLSchema {
                     type: GraphQLInt
                 },
                 updatedAt: {
-                    description: "When this track was last modified, ISO-8601.",
+                    description: "When this track was last modified, ISO-8601, or null when that falls on the same date as `scannedAt` (i.e. it has not changed since the scan).",
                     name: "updatedAt",
-                    type: new GraphQLNonNull(GraphQLString)
+                    type: GraphQLString
                 },
                 url: {
                     description: "Signed URL the client should `GET` (with `Range:` headers) to stream this track. The resolver picks the concrete container + codec from `format` (see `TrackFormat`) and bakes it into the URL, so a single URL is reusable for the lifetime of a playback session and the stateless `/play` route needs no capability data.\n\nDefaults to a MAX request supporting only flac-in-mp4 and opus-in-mp4 \u2014 the universally safe baseline.",

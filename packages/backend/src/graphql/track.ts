@@ -42,6 +42,8 @@ export type Track = {
   format: string;
   /** Source codec of the file on disk, lower-cased, e.g. `"flac"`, `"alac"`, `"mp3"`, `"opus"`. @gqlField */
   sourceFormat: string;
+  /** Codec quality option of the source, e.g. `"CBR"`/`"VBR"` for MP3 or `"LC"`/`"HE-AAC"` for AAC. Null when the codec reports none. @gqlField */
+  codecProfile: string | null;
   /** Whether the source file is a lossless format (flac, alac, wav, etc.). @gqlField */
   isLossless: boolean;
   /** Nominal source bitrate in kbps, or null for variable-bitrate sources that report none. @gqlField */
@@ -54,8 +56,8 @@ export type Track = {
   channels: Int | null;
   /** When the scanner last read this file from disk, ISO-8601. @gqlField */
   scannedAt: string;
-  /** When this track was last modified, ISO-8601. @gqlField */
-  updatedAt: string;
+  /** When this track was last modified, ISO-8601, or null when that falls on the same date as `scannedAt` (i.e. it has not changed since the scan). @gqlField */
+  updatedAt: string | null;
   /** @gqlField */
   duration: Duration;
   /** Absolute path to the source file on disk. Internal — never exposed to clients. */
@@ -162,6 +164,11 @@ export async function duplicates(track: Track): Promise<Track[]> {
   return rows.map(toGqlTrack);
 }
 
+/** Whether two timestamps fall on the same calendar date (UTC). */
+function sameDate(a: Date, b: Date): boolean {
+  return a.toISOString().slice(0, 10) === b.toISOString().slice(0, 10);
+}
+
 export function toGqlTrack(row: DbTrack): Track {
   return {
     id: row.id,
@@ -173,13 +180,14 @@ export function toGqlTrack(row: DbTrack): Track {
     year: row.yearOverride ?? row.year,
     format: deriveFormat(row.format, row.codec),
     sourceFormat: abbreviateCodec(row.codec),
+    codecProfile: row.codecProfile,
     isLossless: row.isLossless,
     bitrateKbps: row.bitRate != null ? Math.round(row.bitRate / 1000) : null,
     sampleRate: row.sampleRate,
     bitDepth: row.bitDepth,
     channels: row.channels,
     scannedAt: row.scannedAt.toISOString(),
-    updatedAt: row.updatedAt.toISOString(),
+    updatedAt: sameDate(row.updatedAt, row.scannedAt) ? null : row.updatedAt.toISOString(),
     duration: new Duration(row.durationSeconds),
     file: row.file,
     sourceMtime: row.sourceMtime,
