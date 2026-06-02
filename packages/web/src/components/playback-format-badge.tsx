@@ -1,8 +1,8 @@
-import { Copy, Gem, Wifi, WifiHigh, WifiLow, WifiZero } from 'lucide-react';
+import { AlertTriangle, Copy, Gem, Wifi, WifiHigh, WifiLow, WifiZero } from 'lucide-react';
 import type { ComponentType, SVGProps } from 'react';
 
 import { type Delivery, type Quality, usePlayer } from '../state/player.tsx';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip.tsx';
+import { Hint } from './ui/hint.tsx';
 
 type IconComponent = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -46,6 +46,9 @@ const TONE_CLASS: Record<BadgeShape['tone'], string> = {
   muted: 'text-muted-foreground',
 };
 
+const MULTI_LOSSY_WARNING =
+  'Lossy source re-encoded to a lossy format — a second round of compression on top of the original, so quality is reduced further.';
+
 export function PlaybackFormatBadge() {
   const { current, requestedTier, playingQuality, delivery } = usePlayer();
   if (!current || !delivery) return null;
@@ -55,19 +58,28 @@ export function PlaybackFormatBadge() {
   const lagging = playingQuality !== null && playingQuality !== requestedTier;
   const { Icon, label, tone, tooltip } = badgeFor(effective, delivery);
   return (
-    <TooltipProvider delayDuration={150}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <span
-            className={`inline-flex shrink-0 items-center gap-1 text-[10px] font-semibold uppercase leading-none tracking-wide ${TONE_CLASS[tone]} ${lagging ? 'opacity-50' : ''}`}
-            aria-label={tooltip}
+    <span className="inline-flex shrink-0 items-center gap-1.5">
+      {delivery.isMultiLossy && (
+        <Hint content={MULTI_LOSSY_WARNING}>
+          <button
+            type="button"
+            aria-label={MULTI_LOSSY_WARNING}
+            className="inline-flex text-amber-500"
           >
-            <Icon className="size-3" aria-hidden />
-            <span>{label}</span>
-          </span>
-        </TooltipTrigger>
-        <TooltipContent side="top">{tooltip}</TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+            <AlertTriangle className="size-3.5" aria-hidden />
+          </button>
+        </Hint>
+      )}
+      <Hint content={tooltip}>
+        <button
+          type="button"
+          aria-label={tooltip}
+          className={`inline-flex shrink-0 items-center gap-1 text-[10px] font-semibold uppercase leading-none tracking-wide ${TONE_CLASS[tone]} ${lagging ? 'opacity-50' : ''}`}
+        >
+          <Icon className="size-3" aria-hidden />
+          <span>{label}</span>
+        </button>
+      </Hint>
+    </span>
   );
 }

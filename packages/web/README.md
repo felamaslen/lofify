@@ -103,13 +103,16 @@ and preferred format controls (the latter two are pill toggles —
 and exposes the supported formats as the preference-ordered
 `losslessFormats` / `lossyFormats` MIME lists. The player sends these
 plus the requested tier as the `TrackFormat`, and reads `Track.delivery` back —
-`{ url, mimeType, isPassthrough, description, tiers }` — so it learns the
-SourceBuffer MIME type and a tooltip-ready summary in one query, then
-streams chunk byte ranges via the `trackManifest` subscription (see the
+`{ url, mimeType, isPassthrough, isMultiLossy, description, tiers }` — so it
+learns the SourceBuffer MIME type and a tooltip-ready summary in one query,
+then streams chunk byte ranges via the `trackManifest` subscription (see the
 backend README). The format badge by the track title shows the resolved
 codec, distinguishing a copy (no re-encode) from a transcode, with
-`description` as its tooltip. MSE failures or unreachable endpoints raise
-a toast.
+`description` revealed by a `Hint` (hover tooltip on pointer devices, tap
+popover on touchscreens). When `delivery.isMultiLossy` is set — a lossy
+source re-encoded to a lossy output — an amber warning triangle sits to its
+left, flagging the extra generation of compression loss. MSE failures or
+unreachable endpoints raise a toast.
 
 Each playback range response carries an `X-Quality` header naming the
 tier its bytes were encoded at. The player records it per fetched chunk
