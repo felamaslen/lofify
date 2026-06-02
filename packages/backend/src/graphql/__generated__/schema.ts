@@ -661,11 +661,16 @@ export function getSchema(): GraphQLSchema {
                     }
                 },
                 libraryScanStart: {
-                    description: "Triggers a full scan of the configured library. Returns immediately with `filesTotal: null`; the file walk and parsing run in the background. Observe progress via `Subscription.libraryScan`.",
+                    description: "Triggers a full scan of the configured library. Returns immediately with `filesTotal: null`; the file walk and parsing run in the background. Observe progress via `Subscription.libraryScan`.\n\nPass `force: true` to re-parse every file even when its content is unchanged, rather than skipping files whose mtime matches the stored row. Slower, but the way to backfill metadata captured by a newer scanner.",
                     name: "libraryScanStart",
                     type: new GraphQLNonNull(LibraryScanType),
-                    resolve() {
-                        return mutationLibraryScanStartResolver();
+                    args: {
+                        force: {
+                            type: GraphQLBoolean
+                        }
+                    },
+                    resolve(_source, args) {
+                        return mutationLibraryScanStartResolver(args);
                     }
                 },
                 noop: {
