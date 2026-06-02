@@ -1,6 +1,8 @@
+import { and, asc, eq, ne } from 'drizzle-orm';
 import type { ID, Int } from 'grats';
 
-import type { Track as DbTrack } from '../db/schema/index.js';
+import { db } from '../db/client.js';
+import { type Track as DbTrack, tracks as tracksTable } from '../db/schema/index.js';
 import {
   contentTypeFor,
   deliveryDescription,
@@ -40,14 +42,30 @@ export type Track = {
   format: string;
   /** Source codec of the file on disk, lower-cased, e.g. `"flac"`, `"alac"`, `"mp3"`, `"opus"`. @gqlField */
   sourceFormat: string;
+  /** Codec quality option of the source, e.g. `"CBR"`/`"VBR"` for MP3 or `"LC"`/`"HE-AAC"` for AAC. Null when the codec reports none. @gqlField */
+  codecProfile: string | null;
   /** Whether the source file is a lossless format (flac, alac, wav, etc.). @gqlField */
   isLossless: boolean;
+  /** Nominal source bitrate in kbps, or null for variable-bitrate sources that report none. @gqlField */
+  bitrateKbps: Int | null;
+  /** Source sample rate in Hz. @gqlField */
+  sampleRate: Int;
+  /** Source bit depth in bits per sample, or null for lossy sources that have none. @gqlField */
+  bitDepth: Int | null;
+  /** Source channel count (e.g. 2 for stereo), or null when unknown. @gqlField */
+  channels: Int | null;
+  /** When the scanner last read this file from disk, ISO-8601. @gqlField */
+  scannedAt: string;
+  /** When this track was last modified, ISO-8601, or null when that falls on the same date as `scannedAt` (i.e. it has not changed since the scan). @gqlField */
+  updatedAt: string | null;
   /** @gqlField */
   duration: Duration;
   /** Absolute path to the source file on disk. Internal — never exposed to clients. */
   file: string;
   /** mtime of the source file when last scanned. Internal — used by `url()` to derive the cache key. */
   sourceMtime: Date;
+  /** Id of the canonical track of this row's duplicate group, or null when it has no duplicate. Internal — resolves `duplicates`. */
+  dedupGroupId: string | null;
 };
 
 const DEFAULT_FORMAT: TrackFormat = {
@@ -129,20 +147,56 @@ export function path(track: Track): string {
   return track.file;
 }
 
+/**
+ * Other copies of this recording in the library — tracks sharing the same effective title, artist and album — best-quality first. Empty when this track has no duplicate.
+ *
+ * @gqlField
+ */
+export async function duplicates(track: Track): Promise<Track[]> {
+  if (track.dedupGroupId == null) return [];
+  const rows = await db
+    .select()
+    .from(tracksTable)
+    .where(
+      and(eq(tracksTable.trackIdDeduplicated, track.dedupGroupId), ne(tracksTable.id, track.id)),
+    )
+    .orderBy(asc(tracksTable.priority));
+  return rows.map(toGqlTrack);
+}
+
+/** Whether two timestamps fall on the same calendar date (UTC). */
+function sameDate(a: Date, b: Date): boolean {
+  return a.toISOString().slice(0, 10) === b.toISOString().slice(0, 10);
+}
+
+/** Resolve a text override against its scanned tag: an empty-string override means the user explicitly blanked the field (effective value `null`), a null override falls back to the scanned tag. */
+function applyOverride(override: string | null, scanned: string | null): string | null {
+  if (override === '') return null;
+  return override ?? scanned;
+}
+
 export function toGqlTrack(row: DbTrack): Track {
   return {
     id: row.id,
-    title: row.titleOverride ?? row.title,
+    title: applyOverride(row.titleOverride, row.title),
     trackNumber: row.trackNumberOverride ?? row.trackNumber,
     discNumber: row.discNumberOverride ?? row.discNumber,
-    artist: row.artistOverride ?? row.artist,
-    album: row.albumOverride ?? row.album,
-    year: row.yearOverride ?? row.year,
+    artist: applyOverride(row.artistOverride, row.artist),
+    album: applyOverride(row.albumOverride, row.album),
+    year: applyOverride(row.yearOverride, row.year),
     format: deriveFormat(row.format, row.codec),
     sourceFormat: abbreviateCodec(row.codec),
+    codecProfile: row.codecProfile,
     isLossless: row.isLossless,
+    bitrateKbps: row.bitRate != null ? Math.round(row.bitRate / 1000) : null,
+    sampleRate: row.sampleRate,
+    bitDepth: row.bitDepth,
+    channels: row.channels,
+    scannedAt: row.scannedAt.toISOString(),
+    updatedAt: sameDate(row.updatedAt, row.scannedAt) ? null : row.updatedAt.toISOString(),
     duration: new Duration(row.durationSeconds),
     file: row.file,
     sourceMtime: row.sourceMtime,
+    dedupGroupId: row.trackIdDeduplicated,
   };
 }

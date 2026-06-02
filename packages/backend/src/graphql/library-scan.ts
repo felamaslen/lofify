@@ -55,10 +55,12 @@ export function libraryScan(): LibraryScan | null {
 /**
  * Triggers a full scan of the configured library. Returns immediately with `filesTotal: null`; the file walk and parsing run in the background. Observe progress via `Subscription.libraryScan`.
  *
+ * Pass `force: true` to re-parse every file even when its content is unchanged, rather than skipping files whose mtime matches the stored row. Slower, but the way to backfill metadata captured by a newer scanner.
+ *
  * @gqlMutationField
  */
-export function libraryScanStart(): LibraryScan {
-  return new LibraryScan(scanLibrary(libraryPaths));
+export function libraryScanStart(args: { force?: boolean | null }): LibraryScan {
+  return new LibraryScan(scanLibrary(libraryPaths, { force: args.force ?? false }));
 }
 
 /**

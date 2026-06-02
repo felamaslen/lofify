@@ -9,8 +9,10 @@ import { gqlRequest } from '../lib/gql-request.ts';
 import { cn } from '../lib/utils.ts';
 import { useLibraryFilter } from '../state/library-filter.tsx';
 import { TrackByIdDocument, trackFormatFor, usePlayer } from '../state/player.tsx';
+import { useShowDuplicates } from '../state/show-duplicates.tsx';
 import { LetterScrubber } from './letter-scrubber.tsx';
 import { type EditableTrack, TagEditDialog } from './tag-edit-dialog.tsx';
+import { TrackInfoButton, TrackInfoDocument } from './track-info-popover.tsx';
 import {
   ContextMenu,
   ContextMenuContent,
@@ -27,7 +29,6 @@ const TrackListRowDocument = graphql(`
     artist
     album
     year
-    sourceFormat
     isLossless
     duration {
       seconds
@@ -50,6 +51,7 @@ export const TracksDocument = graphql(
       $before: String
       $filterArtistIn: [String!]
       $filterAlbumIn: [String!]
+      $includeDuplicates: Boolean
     ) {
       tracks(
         first: $first
@@ -58,6 +60,7 @@ export const TracksDocument = graphql(
         before: $before
         filterArtistIn: $filterArtistIn
         filterAlbumIn: $filterAlbumIn
+        includeDuplicates: $includeDuplicates
       ) {
         totalCount
         pageInfo {
@@ -87,12 +90,14 @@ const TracksWindowDocument = graphql(
       $first: Int!
       $filterArtistIn: [String!]
       $filterAlbumIn: [String!]
+      $includeDuplicates: Boolean
     ) {
       tracks(
         offset: $offset
         first: $first
         filterArtistIn: $filterArtistIn
         filterAlbumIn: $filterAlbumIn
+        includeDuplicates: $includeDuplicates
       ) {
         totalCount
         edges {
@@ -100,17 +105,26 @@ const TracksWindowDocument = graphql(
           node {
             id
             ...TrackListRow
+            ...TrackInfo
           }
         }
       }
     }
   `,
-  [TrackListRowDocument],
+  [TrackListRowDocument, TrackInfoDocument],
 );
 
 const ArtistIndexDocument = graphql(`
-  query ArtistIndex($filterArtistIn: [String!], $filterAlbumIn: [String!]) {
-    artistIndex(filterArtistIn: $filterArtistIn, filterAlbumIn: $filterAlbumIn) {
+  query ArtistIndex(
+    $filterArtistIn: [String!]
+    $filterAlbumIn: [String!]
+    $includeDuplicates: Boolean
+  ) {
+    artistIndex(
+      filterArtistIn: $filterArtistIn
+      filterAlbumIn: $filterAlbumIn
+      includeDuplicates: $includeDuplicates
+    ) {
       label
       offset
     }
@@ -137,26 +151,31 @@ export function TrackList() {
   const rowHeight = isMobile ? ROW_HEIGHT_MOBILE : ROW_HEIGHT;
 
   const { artist, album } = useLibraryFilter();
+  const { showDuplicates } = useShowDuplicates();
   const filterArtistIn = artist ? [artist] : null;
   const filterAlbumIn = album ? [album] : null;
 
   // A cheap, stable source of the total — independent of which windows are loaded — so the
   // virtualizer's row count (and thus the scrollbar range) never collapses while paging.
   const countQuery = useQuery({
-    queryKey: ['tracks-count', artist, album],
+    queryKey: ['tracks-count', artist, album, showDuplicates],
     queryFn: ({ signal }) =>
       gqlRequest(
         TracksWindowDocument,
-        { offset: 0, first: 0, filterArtistIn, filterAlbumIn },
+        { offset: 0, first: 0, filterArtistIn, filterAlbumIn, includeDuplicates: showDuplicates },
         signal,
       ),
   });
   const totalCount = countQuery.data?.tracks?.totalCount ?? 0;
 
   const indexQuery = useQuery({
-    queryKey: ['artist-index', artist, album],
+    queryKey: ['artist-index', artist, album, showDuplicates],
     queryFn: ({ signal }) =>
-      gqlRequest(ArtistIndexDocument, { filterArtistIn, filterAlbumIn }, signal),
+      gqlRequest(
+        ArtistIndexDocument,
+        { filterArtistIn, filterAlbumIn, includeDuplicates: showDuplicates },
+        signal,
+      ),
   });
   const buckets = useMemo(() => indexQuery.data?.artistIndex ?? [], [indexQuery.data]);
 
@@ -210,11 +229,17 @@ export function TrackList() {
 
   const windowResults = useQueries({
     queries: pageIndexes.map((p) => ({
-      queryKey: ['tracks-window', artist, album, p],
+      queryKey: ['tracks-window', artist, album, showDuplicates, p],
       queryFn: ({ signal }: { signal: AbortSignal }) =>
         gqlRequest(
           TracksWindowDocument,
-          { offset: p * PAGE_SIZE, first: PAGE_SIZE, filterArtistIn, filterAlbumIn },
+          {
+            offset: p * PAGE_SIZE,
+            first: PAGE_SIZE,
+            filterArtistIn,
+            filterAlbumIn,
+            includeDuplicates: showDuplicates,
+          },
           signal,
         ),
       staleTime: 30_000,
@@ -345,7 +370,7 @@ export function TrackList() {
         <span>Artist</span>
         <span>Album</span>
         <span>Year</span>
-        <span className="text-right">Source</span>
+        <span aria-hidden />
       </div>
       <ContextMenu>
         <ContextMenuTrigger asChild>
@@ -410,9 +435,9 @@ export function TrackList() {
                   className={cn(
                     COLS,
                     'cursor-pointer text-sm hover:bg-accent/40',
-                    t.isLossless && 'shadow-[inset_3px_0_0_0] shadow-amber-400',
+                    !t.isLossless && !active && 'text-muted-foreground',
                     isSelected && 'bg-accent/60',
-                    active && 'bg-primary/15 text-primary-foreground',
+                    active && 'shadow-[inset_4px_0_0_0] shadow-primary text-primary',
                     showScrubber && 'pr-8',
                   )}
                   style={{
@@ -454,15 +479,8 @@ export function TrackList() {
                   <span className="text-muted-foreground tabular-nums max-sm:hidden">
                     {t.year ?? ''}
                   </span>
-                  <span className="flex justify-end max-sm:col-start-3 max-sm:row-start-1 max-sm:self-baseline">
-                    <span
-                      className={cn(
-                        'text-[10px] uppercase tracking-wide',
-                        t.isLossless ? 'text-primary/80' : 'text-muted-foreground/70',
-                      )}
-                    >
-                      {t.sourceFormat}
-                    </span>
+                  <span className="flex justify-end max-sm:col-start-3 max-sm:row-start-1 max-sm:self-center">
+                    <TrackInfoButton track={edge.node} />
                   </span>
                 </div>
               );

@@ -3,12 +3,12 @@
  * Do not manually edit. Regenerate by running `npx grats`.
  */
 
-import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, GraphQLInt, specifiedDirectives, GraphQLObjectType, GraphQLList, GraphQLString, GraphQLID, GraphQLBoolean, GraphQLEnumType, GraphQLInputObjectType, GraphQLFloat } from "graphql";
+import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, GraphQLInt, specifiedDirectives, GraphQLObjectType, GraphQLList, GraphQLString, GraphQLBoolean, GraphQLID, GraphQLEnumType, GraphQLInputObjectType, GraphQLFloat } from "graphql";
 import { artistIndex as queryArtistIndexResolver, track as queryTrackResolver, tracks as queryTracksResolver } from "./../track-queries.js";
 import { libraryScan as queryLibraryScanResolver, libraryScanCancel as mutationLibraryScanCancelResolver, libraryScanStart as mutationLibraryScanStartResolver, libraryScanSubscription as subscriptionLibraryScanResolver } from "./../library-scan.js";
 import { ping as queryPingResolver, noop as mutationNoopResolver } from "./../root.js";
 import { artistSynonyms as trackArtistSynonymsResolver, artistSynonymCreate as mutationArtistSynonymCreateResolver, artistSynonymDelete as mutationArtistSynonymDeleteResolver, artistSynonymUpdate as mutationArtistSynonymUpdateResolver } from "./../artist-synonyms.js";
-import { delivery as trackDeliveryResolver, path as trackPathResolver, url as trackUrlResolver } from "./../track.js";
+import { delivery as trackDeliveryResolver, duplicates as trackDuplicatesResolver, path as trackPathResolver, url as trackUrlResolver } from "./../track.js";
 import { search as querySearchResolver } from "./../search.js";
 import { trackUpdate as mutationTrackUpdateResolver } from "./../track-mutations.js";
 import { trackManifestSubscription as subscriptionTrackManifestResolver } from "./../track-manifest.js";
@@ -298,6 +298,26 @@ export function getSchema(): GraphQLSchema {
                         return trackArtistSynonymsResolver(source);
                     }
                 },
+                bitDepth: {
+                    description: "Source bit depth in bits per sample, or null for lossy sources that have none.",
+                    name: "bitDepth",
+                    type: GraphQLInt
+                },
+                bitrateKbps: {
+                    description: "Nominal source bitrate in kbps, or null for variable-bitrate sources that report none.",
+                    name: "bitrateKbps",
+                    type: GraphQLInt
+                },
+                channels: {
+                    description: "Source channel count (e.g. 2 for stereo), or null when unknown.",
+                    name: "channels",
+                    type: GraphQLInt
+                },
+                codecProfile: {
+                    description: "Codec quality option of the source, e.g. `\"CBR\"`/`\"VBR\"` for MP3 or `\"LC\"`/`\"HE-AAC\"` for AAC. Null when the codec reports none.",
+                    name: "codecProfile",
+                    type: GraphQLString
+                },
                 delivery: {
                     description: "Delivery plan for this track at the given `format`. See `TrackDelivery`. Defaults to the same baseline as `url`.",
                     name: "delivery",
@@ -314,6 +334,14 @@ export function getSchema(): GraphQLSchema {
                 discNumber: {
                     name: "discNumber",
                     type: GraphQLInt
+                },
+                duplicates: {
+                    description: "Other copies of this recording in the library \u2014 tracks sharing the same effective title, artist and album \u2014 best-quality first. Empty when this track has no duplicate.",
+                    name: "duplicates",
+                    type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(TrackType))),
+                    resolve(source) {
+                        return trackDuplicatesResolver(source);
+                    }
                 },
                 duration: {
                     name: "duration",
@@ -341,6 +369,16 @@ export function getSchema(): GraphQLSchema {
                         return trackPathResolver(source);
                     }
                 },
+                sampleRate: {
+                    description: "Source sample rate in Hz.",
+                    name: "sampleRate",
+                    type: new GraphQLNonNull(GraphQLInt)
+                },
+                scannedAt: {
+                    description: "When the scanner last read this file from disk, ISO-8601.",
+                    name: "scannedAt",
+                    type: new GraphQLNonNull(GraphQLString)
+                },
                 sourceFormat: {
                     description: "Source codec of the file on disk, lower-cased, e.g. `\"flac\"`, `\"alac\"`, `\"mp3\"`, `\"opus\"`.",
                     name: "sourceFormat",
@@ -353,6 +391,11 @@ export function getSchema(): GraphQLSchema {
                 trackNumber: {
                     name: "trackNumber",
                     type: GraphQLInt
+                },
+                updatedAt: {
+                    description: "When this track was last modified, ISO-8601, or null when that falls on the same date as `scannedAt` (i.e. it has not changed since the scan).",
+                    name: "updatedAt",
+                    type: GraphQLString
                 },
                 url: {
                     description: "Signed URL the client should `GET` (with `Range:` headers) to stream this track. The resolver picks the concrete container + codec from `format` (see `TrackFormat`) and bakes it into the URL, so a single URL is reusable for the lifetime of a playback session and the stateless `/play` route needs no capability data.\n\nDefaults to a MAX request supporting only flac-in-mp4 and opus-in-mp4 \u2014 the universally safe baseline.",
@@ -477,10 +520,14 @@ export function getSchema(): GraphQLSchema {
                         },
                         filterArtistIn: {
                             type: new GraphQLList(new GraphQLNonNull(GraphQLString))
+                        },
+                        includeDuplicates: {
+                            description: "Include every duplicate copy of a recording. By default only the canonical copy of each duplicate group is counted, matching `Query.tracks`.",
+                            type: GraphQLBoolean
                         }
                     },
                     resolve(_source, args) {
-                        return queryArtistIndexResolver(args.filterArtistIn, args.filterAlbumIn);
+                        return queryArtistIndexResolver(args.filterArtistIn, args.filterAlbumIn, args.includeDuplicates);
                     }
                 },
                 libraryScan: {
@@ -547,6 +594,10 @@ export function getSchema(): GraphQLSchema {
                         first: {
                             type: GraphQLInt
                         },
+                        includeDuplicates: {
+                            description: "Include every duplicate copy of a recording. By default only the canonical (highest-quality) copy of each duplicate group is returned.",
+                            type: GraphQLBoolean
+                        },
                         last: {
                             type: GraphQLInt
                         },
@@ -556,7 +607,7 @@ export function getSchema(): GraphQLSchema {
                         }
                     },
                     resolve(_source, args) {
-                        return queryTracksResolver(args.first, args.last, args.after, args.before, args.filterArtistIn, args.filterAlbumIn, args.offset);
+                        return queryTracksResolver(args.first, args.last, args.after, args.before, args.filterArtistIn, args.filterAlbumIn, args.offset, args.includeDuplicates);
                     }
                 }
             };
@@ -661,11 +712,16 @@ export function getSchema(): GraphQLSchema {
                     }
                 },
                 libraryScanStart: {
-                    description: "Triggers a full scan of the configured library. Returns immediately with `filesTotal: null`; the file walk and parsing run in the background. Observe progress via `Subscription.libraryScan`.",
+                    description: "Triggers a full scan of the configured library. Returns immediately with `filesTotal: null`; the file walk and parsing run in the background. Observe progress via `Subscription.libraryScan`.\n\nPass `force: true` to re-parse every file even when its content is unchanged, rather than skipping files whose mtime matches the stored row. Slower, but the way to backfill metadata captured by a newer scanner.",
                     name: "libraryScanStart",
                     type: new GraphQLNonNull(LibraryScanType),
-                    resolve() {
-                        return mutationLibraryScanStartResolver();
+                    args: {
+                        force: {
+                            type: GraphQLBoolean
+                        }
+                    },
+                    resolve(_source, args) {
+                        return mutationLibraryScanStartResolver(args);
                     }
                 },
                 noop: {
@@ -677,7 +733,7 @@ export function getSchema(): GraphQLSchema {
                     }
                 },
                 trackUpdate: {
-                    description: "Override one or more tags on a single track. Each supplied tag is stored as an override that takes precedence over the value read from the file on disk and survives rescans \u2014 the scanner never touches it.\n\nOmit an argument to leave its current override untouched; pass an explicit `null` to clear the override and fall back to the scanned tag.\n\nThrows when no track with the given id exists.",
+                    description: "Override one or more tags on a single track. Each supplied tag is stored as an override that takes precedence over the value read from the file on disk and survives rescans \u2014 the scanner never touches it.\n\nOmit an argument to leave its current override untouched; pass an explicit `null` to clear the override and fall back to the scanned tag; pass an empty string to blank the field outright.\n\nThrows when no track with the given id exists.",
                     name: "trackUpdate",
                     type: new GraphQLNonNull(TrackType),
                     args: {

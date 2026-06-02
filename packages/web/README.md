@@ -156,6 +156,21 @@ index: the active letter updates as you scroll, and tapping or dragging
 (mouse or touch) jumps to that letter's offset. Letters with no tracks
 are dimmed and snap to the next populated bucket.
 
+## Duplicates
+
+By default the list shows only the canonical (highest-quality) copy of
+each duplicated recording; the **Show duplicate tracks** tickbox in
+Settings reveals the rest. The preference lives in `localStorage`
+(`useShowDuplicates`) and is passed as `includeDuplicates` to every list
+query and the player's next/previous walk, so playback skips hidden
+copies too.
+
+The trailing column is an **info** button (replacing the old source
+badge) opening a popover (`TrackInfoButton`) with the source codec and
+quality (bitrate or sample rate / bit depth, channels, codec profile),
+the list of duplicate sources, and when the track was scanned and last
+updated.
+
 ## Tag editing
 
 Rows in the track list are selectable: click to select one, cmd/ctrl-click

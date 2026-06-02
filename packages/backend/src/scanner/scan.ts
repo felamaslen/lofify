@@ -7,6 +7,7 @@ import fg, { type Entry } from 'fast-glob';
 
 import { db } from '../db/client.js';
 import { tracks } from '../db/schema/index.js';
+import { dedupKeyOf, deleteTrackAndRecompute, recomputeKeysInTx } from '../dedup/recompute.js';
 import { env } from '../env.js';
 import { logger } from '../logger.js';
 import { AUDIO_EXTENSIONS } from './audio-extensions.js';
@@ -28,18 +29,33 @@ export async function upsertTrack(file: string): Promise<void> {
   }
   const parsed = await parseTrack(file);
   const now = new Date();
-  await db
-    .insert(tracks)
-    .values({ ...parsed, scannedAt: now, updatedAt: now })
-    .onConflictDoUpdate({
-      target: tracks.file,
-      set: { ...parsed, scannedAt: now, updatedAt: now },
-    });
+  const keyCols = {
+    title: tracks.title,
+    titleOverride: tracks.titleOverride,
+    artist: tracks.artist,
+    artistOverride: tracks.artistOverride,
+    album: tracks.album,
+    albumOverride: tracks.albumOverride,
+  };
+  await db.transaction(async (tx) => {
+    const before = await tx.select(keyCols).from(tracks).where(eq(tracks.file, file)).limit(1);
+    const [after] = await tx
+      .insert(tracks)
+      .values({ ...parsed, scannedAt: now, updatedAt: now })
+      .onConflictDoUpdate({
+        target: tracks.file,
+        set: { ...parsed, scannedAt: now, updatedAt: now },
+      })
+      .returning(keyCols);
+    const oldKey = before[0] ? dedupKeyOf(before[0]) : null;
+    const newKey = after ? dedupKeyOf(after) : null;
+    await recomputeKeysInTx(tx, [oldKey, newKey]);
+  });
 }
 
-/** Remove the `Tracks` row matching the given absolute path, if any. */
+/** Remove the `Tracks` row matching the given absolute path, if any, and re-rank its former duplicate group. */
 export async function deleteTrackByFile(file: string): Promise<void> {
-  await db.delete(tracks).where(eq(tracks.file, file));
+  await deleteTrackAndRecompute(file);
 }
 
 const tracer = trace.getTracer('lofify.scanner');
@@ -52,8 +68,9 @@ const PRIORITY_CHANGED = 0;
 /** Number of discovered files classified per DB lookup. Bounds the `WHERE file IN (...)` size and the producer's working memory rather than preloading the whole library. */
 const CLASSIFY_BATCH_SIZE = 100;
 
-/** Kick off a full library scan across `roots`. Returns the initial scan state synchronously with `filesTotal: null`. Discovery (fast-glob streaming), classification and parsing/upserts run concurrently in the background. Each discovered file is classified in batches against `Tracks`: brand-new files are queued at high priority, files whose mtime changed at low priority, and unchanged files are skipped entirely. `filesTotal` is populated when the walk finishes; subscribers are notified on each milestone. */
-export function scanLibrary(roots: string[]): ScanState {
+/** Kick off a full library scan across `roots`. Returns the initial scan state synchronously with `filesTotal: null`. Discovery (fast-glob streaming), classification and parsing/upserts run concurrently in the background. Each discovered file is classified in batches against `Tracks`: brand-new files are queued at high priority, files whose mtime changed at low priority, and unchanged files are skipped entirely. Pass `force` to re-parse every known file regardless of mtime — used to backfill columns added since the rows were last written. `filesTotal` is populated when the walk finishes; subscribers are notified on each milestone. */
+export function scanLibrary(roots: string[], opts: { force?: boolean } = {}): ScanState {
+  const force = opts.force ?? false;
   const state = createScan();
   const span = tracer.startSpan('scanner.scanLibrary', {
     attributes: { 'scanner.id': state.id, 'scanner.roots': roots.join(',') },
@@ -90,7 +107,7 @@ export function scanLibrary(roots: string[]): ScanState {
       const knownMs = known.get(entry.path);
       if (knownMs === undefined) {
         queue.push(entry.path, PRIORITY_NEW);
-      } else if (Math.floor(entry.stats!.mtimeMs) !== knownMs) {
+      } else if (force || Math.floor(entry.stats!.mtimeMs) !== knownMs) {
         queue.push(entry.path, PRIORITY_CHANGED);
       } else {
         state.scannedTotal += 1;

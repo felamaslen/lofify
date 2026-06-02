@@ -1,4 +1,4 @@
-import { inArray, type SQL, sql } from 'drizzle-orm';
+import { eq, inArray, isNull, or, type SQL, sql } from 'drizzle-orm';
 import type { ID, Int } from 'grats';
 
 import { db } from '../db/client.js';
@@ -56,10 +56,11 @@ function clampLimit(value: Int | null | undefined): number | null {
   return Math.min(MAX_PAGE_SIZE, Math.floor(value));
 }
 
-/** Combine the optional artist/album filters into a single `WHERE` fragment, matching the effective (override-aware) tag against each non-empty list. Null when no filter is active. */
+/** Combine the optional artist/album filters and the duplicate filter into a single `WHERE` fragment. Matches the effective (override-aware) tag against each non-empty list; unless `includeDuplicates`, restricts to canonical rows (`priority` null or 0). Null when nothing is filtered. */
 function buildFilterClause(
   filterArtistIn: string[] | null | undefined,
   filterAlbumIn: string[] | null | undefined,
+  includeDuplicates: boolean,
 ): SQL | null {
   const clauses: SQL[] = [];
   if (filterArtistIn && filterArtistIn.length > 0) {
@@ -71,6 +72,9 @@ function buildFilterClause(
     clauses.push(
       inArray(sql`coalesce(${tracksTable.albumOverride}, ${tracksTable.album})`, filterAlbumIn),
     );
+  }
+  if (!includeDuplicates) {
+    clauses.push(or(isNull(tracksTable.priority), eq(tracksTable.priority, 0))!);
   }
   return clauses.length > 0 ? sql.join(clauses, sql` and `) : null;
 }
@@ -119,8 +123,10 @@ export async function tracks(
   filterAlbumIn?: string[] | null,
   /** Zero-based index of the first row to return, in the library sort order. When set, returns `first` rows from here and ignores `after`/`before`/`last`. */
   offset?: Int | null,
+  /** Include every duplicate copy of a recording. By default only the canonical (highest-quality) copy of each duplicate group is returned. */
+  includeDuplicates?: boolean | null,
 ): Promise<TrackConnection | null> {
-  const filterClause = buildFilterClause(filterArtistIn, filterAlbumIn);
+  const filterClause = buildFilterClause(filterArtistIn, filterAlbumIn, includeDuplicates ?? false);
 
   if (offset != null) {
     const limit = clampLimit(first) ?? DEFAULT_PAGE_SIZE;
@@ -228,8 +234,10 @@ export type ArtistInitial = {
 export async function artistIndex(
   filterArtistIn?: string[] | null,
   filterAlbumIn?: string[] | null,
+  /** Include every duplicate copy of a recording. By default only the canonical copy of each duplicate group is counted, matching `Query.tracks`. */
+  includeDuplicates?: boolean | null,
 ): Promise<ArtistInitial[] | null> {
-  const filterClause = buildFilterClause(filterArtistIn, filterAlbumIn);
+  const filterClause = buildFilterClause(filterArtistIn, filterAlbumIn, includeDuplicates ?? false);
   const effectiveArtist = sql`coalesce(${tracksTable.artistOverride}, ${tracksTable.artist}, '')`;
   const bucket = sql`case when ${effectiveArtist} ~ '^[A-Za-z]' then upper(left(${effectiveArtist}, 1)) else '#' end`;
   const result = await db.execute<{ label: string; offset: number }>(sql`

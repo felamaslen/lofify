@@ -41,8 +41,8 @@ const CancelLibraryScanDocument = graphql(`
 
 const StartLibraryScanDocument = graphql(
   `
-    mutation StartLibraryScan {
-      libraryScanStart {
+    mutation StartLibraryScan($force: Boolean) {
+      libraryScanStart(force: $force) {
         ...LibraryScanProgress
       }
     }
@@ -85,6 +85,7 @@ function percentOf(scan: Snapshot): number | null {
 export function RescanButton() {
   const queryClient = useQueryClient();
   const [scan, setScan] = useState<Snapshot | null>(null);
+  const [force, setForce] = useState(false);
   const timer = useRef(0);
   const [phase, setPhase] = useState<Phase>('idle');
   const animatedPhase = useRef(phase);
@@ -179,17 +180,20 @@ export function RescanButton() {
     }
   }, [scan]);
 
-  const start = useCallback(async () => {
-    if (unsubRef.current || phase === 'indeterminate' || phase === 'determinate') return;
-    try {
-      const res = await gqlRequest(StartLibraryScanDocument, {});
-      const initial = readFragment(LibraryScanProgressDocument, res.libraryScanStart);
-      setScan(initial);
-      attachSubscription(initial.id);
-    } catch (err) {
-      console.error('library scan failed to start', err);
-    }
-  }, [attachSubscription, phase]);
+  const start = useCallback(
+    async (force: boolean) => {
+      if (unsubRef.current || phase === 'indeterminate' || phase === 'determinate') return;
+      try {
+        const res = await gqlRequest(StartLibraryScanDocument, { force });
+        const initial = readFragment(LibraryScanProgressDocument, res.libraryScanStart);
+        setScan(initial);
+        attachSubscription(initial.id);
+      } catch (err) {
+        console.error('library scan failed to start', err);
+      }
+    },
+    [attachSubscription, phase],
+  );
 
   const showProgress = phase === 'indeterminate' || phase === 'determinate';
   const percent = scan ? percentOf(scan) : null;
@@ -199,73 +203,85 @@ export function RescanButton() {
 
   return (
     <TooltipProvider delayDuration={150}>
-      <div className="flex items-center gap-2">
-        {showWarning && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span
-                role="img"
-                aria-label="scan errors"
-                className="inline-flex h-5 w-5 items-center justify-center text-yellow-500"
-              >
-                <AlertTriangle className="h-5 w-5" />
-              </span>
-            </TooltipTrigger>
-            <TooltipContent>{scan?.errorMessage ?? 'Scan errors'}</TooltipContent>
-          </Tooltip>
-        )}
-        <div className="group relative">
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            onClick={start}
-            disabled={disabled}
-            className="relative isolate overflow-hidden min-w-[180px] w-full"
-          >
-            {showProgress &&
-              (phase === 'indeterminate' ? (
-                <span
-                  aria-hidden
-                  className="absolute inset-0 -z-10 animate-progress-stripe"
-                  style={{
-                    backgroundImage:
-                      'repeating-linear-gradient(45deg, hsl(var(--primary) / 0.3) 0 8px, hsl(var(--primary) / 0.1) 8px 16px)',
-                    backgroundSize: '24px 24px',
-                  }}
-                />
-              ) : (
-                <span
-                  aria-hidden
-                  className="absolute inset-y-0 left-0 -z-10 bg-primary/25 transition-[width]"
-                  style={{ width: `${fillPercent}%` }}
-                />
-              ))}
-            {showProgress ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-            <span className="relative">
-              {phase === 'determinate' && scan && scan.filesTotal != null
-                ? `Scanning ${scan.scannedTotal} / ${scan.filesTotal}`
-                : phase === 'indeterminate'
-                  ? 'Scanning…'
-                  : 'Rescan library'}
-            </span>
-          </Button>
-          {showProgress && (
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center gap-2">
+          {showWarning && (
             <Tooltip>
               <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  onClick={cancel}
-                  aria-label="Cancel scan"
-                  className="absolute right-1 top-1/2 -translate-y-1/2 inline-flex h-6 w-6 items-center justify-center rounded-sm text-foreground/70 hover:text-foreground hover:bg-foreground/10 opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&_svg]:size-4"
+                <span
+                  role="img"
+                  aria-label="scan errors"
+                  className="inline-flex h-5 w-5 items-center justify-center text-yellow-500"
                 >
-                  <X />
-                </button>
+                  <AlertTriangle className="h-5 w-5" />
+                </span>
               </TooltipTrigger>
-              <TooltipContent>Cancel scan</TooltipContent>
+              <TooltipContent>{scan?.errorMessage ?? 'Scan errors'}</TooltipContent>
             </Tooltip>
           )}
+          <div className="group relative">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => start(force)}
+              disabled={disabled}
+              className="relative isolate overflow-hidden min-w-[180px] w-full"
+            >
+              {showProgress &&
+                (phase === 'indeterminate' ? (
+                  <span
+                    aria-hidden
+                    className="absolute inset-0 -z-10 animate-progress-stripe"
+                    style={{
+                      backgroundImage:
+                        'repeating-linear-gradient(45deg, hsl(var(--primary) / 0.3) 0 8px, hsl(var(--primary) / 0.1) 8px 16px)',
+                      backgroundSize: '24px 24px',
+                    }}
+                  />
+                ) : (
+                  <span
+                    aria-hidden
+                    className="absolute inset-y-0 left-0 -z-10 bg-primary/25 transition-[width]"
+                    style={{ width: `${fillPercent}%` }}
+                  />
+                ))}
+              {showProgress ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+              <span className="relative">
+                {phase === 'determinate' && scan && scan.filesTotal != null
+                  ? `Scanning ${scan.scannedTotal} / ${scan.filesTotal}`
+                  : phase === 'indeterminate'
+                    ? 'Scanning…'
+                    : 'Rescan library'}
+              </span>
+            </Button>
+            {showProgress && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={cancel}
+                    aria-label="Cancel scan"
+                    className="absolute right-1 top-1/2 -translate-y-1/2 inline-flex h-6 w-6 items-center justify-center rounded-sm text-foreground/70 hover:text-foreground hover:bg-foreground/10 opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&_svg]:size-4"
+                  >
+                    <X />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>Cancel scan</TooltipContent>
+              </Tooltip>
+            )}
+          </div>
         </div>
+        <label className="flex cursor-pointer select-none items-center gap-2 text-xs text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={force}
+            disabled={disabled}
+            onChange={(e) => setForce(e.target.checked)}
+            className="h-3.5 w-3.5 accent-primary disabled:opacity-50"
+          />
+          Re-read every file (slower) — backfills newly captured details
+        </label>
       </div>
     </TooltipProvider>
   );
