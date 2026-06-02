@@ -42,9 +42,15 @@ export const tracks = pgTable(
     /** Container format of the source file (e.g. flac, ogg, mp3, wma). */
     format: text('format').notNull(),
     codec: text('codec').notNull(),
+    /** Codec quality option reported by the decoder, e.g. AAC `LC`/`HE-AAC` or MP3 `CBR`/`VBR`. Null when the decoder reports none. */
+    codecProfile: text('codecProfile'),
     /** Null implies VBR. */
     bitRate: integer('bitRate'),
     sampleRate: integer('sampleRate').notNull(),
+    /** Bits per sample of the source. Null for lossy codecs and any source whose decoder reports no fixed bit depth. */
+    bitDepth: integer('bitDepth'),
+    /** Channel count of the source (e.g. 2 for stereo). Null when the decoder reports none. */
+    channels: integer('channels'),
     isLossless: boolean('isLossless').notNull(),
     /** Absolute path on disk. Natural key for scanner upserts. */
     file: text('file').notNull(),
