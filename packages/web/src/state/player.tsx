@@ -19,6 +19,7 @@ import { gqlRequest } from '../lib/gql-request.ts';
 import { type CreatePlayerOptions, MsePlayer, type QueuedTrack } from '../lib/mse.ts';
 import { subscribe as subscribeToStream } from '../lib/sse-client.ts';
 import { libraryFilterVars } from './library-filter.tsx';
+import { showDuplicatesValue } from './show-duplicates.tsx';
 
 export const TrackByIdDocument = graphql(
   `
@@ -750,12 +751,20 @@ class Player {
     const currentId = this.snapshot.current?.id;
     if (!currentId) return null;
     const filter = libraryFilterVars();
+    const includeDuplicates = showDuplicatesValue();
     const data = await this.queryClient.fetchQuery({
-      queryKey: ['step', 'next', currentId, filter.filterArtistIn, filter.filterAlbumIn],
+      queryKey: [
+        'step',
+        'next',
+        currentId,
+        filter.filterArtistIn,
+        filter.filterAlbumIn,
+        includeDuplicates,
+      ],
       queryFn: ({ signal }) =>
         gqlRequest(
           TracksDocument,
-          { first: 1, last: null, after: currentId, before: null, ...filter },
+          { first: 1, last: null, after: currentId, before: null, ...filter, includeDuplicates },
           signal,
         ),
     });
@@ -774,12 +783,20 @@ class Player {
     const current = this.snapshot.current;
     if (!current) return;
     const filter = libraryFilterVars();
+    const includeDuplicates = showDuplicatesValue();
     const variables =
       direction === 'next'
-        ? { first: 1, last: null, after: current.id, before: null, ...filter }
-        : { first: null, last: 1, after: null, before: current.id, ...filter };
+        ? { first: 1, last: null, after: current.id, before: null, ...filter, includeDuplicates }
+        : { first: null, last: 1, after: null, before: current.id, ...filter, includeDuplicates };
     const data = await this.queryClient.fetchQuery({
-      queryKey: ['step', direction, current.id, filter.filterArtistIn, filter.filterAlbumIn],
+      queryKey: [
+        'step',
+        direction,
+        current.id,
+        filter.filterArtistIn,
+        filter.filterAlbumIn,
+        includeDuplicates,
+      ],
       queryFn: ({ signal }) => gqlRequest(TracksDocument, variables, signal),
     });
     const nextId = data.tracks?.edges[0]?.node.id;

@@ -1,6 +1,7 @@
 import { Settings } from 'lucide-react';
 
 import { usePlayer } from '../state/player.tsx';
+import { useShowDuplicates } from '../state/show-duplicates.tsx';
 import { FormatPicker } from './format-picker.tsx';
 import { QualityPicker } from './quality-picker.tsx';
 import { RescanButton } from './rescan-button.tsx';
@@ -16,6 +17,7 @@ import {
 
 export function SettingsDialog() {
   const { qualityMode } = usePlayer();
+  const { showDuplicates, setShowDuplicates } = useShowDuplicates();
   const formatBlurb =
     qualityMode === 'ORIGINAL'
       ? 'Used only when a source has to be transcoded — a lossy source with no matching copy. Lossless and matching sources are copied without re-encoding.'
@@ -36,6 +38,18 @@ export function SettingsDialog() {
           <section className="grid gap-2">
             <span className="text-sm font-medium">Library</span>
             <RescanButton />
+            <label className="flex cursor-pointer select-none items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={showDuplicates}
+                onChange={(e) => setShowDuplicates(e.target.checked)}
+                className="h-3.5 w-3.5 accent-primary"
+              />
+              Show duplicate tracks
+            </label>
+            <span className="text-xs text-muted-foreground">
+              When off, only the highest-quality copy of each duplicated recording is listed.
+            </span>
           </section>
           <section className="grid gap-2">
             <span className="text-sm font-medium">Quality</span>
