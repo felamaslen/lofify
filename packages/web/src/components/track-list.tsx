@@ -435,9 +435,9 @@ export function TrackList() {
                   className={cn(
                     COLS,
                     'cursor-pointer text-sm hover:bg-accent/40',
-                    t.isLossless && 'shadow-[inset_3px_0_0_0] shadow-amber-400',
+                    !t.isLossless && !active && 'text-muted-foreground',
                     isSelected && 'bg-accent/60',
-                    active && 'bg-primary/15 text-primary-foreground',
+                    active && 'shadow-[inset_4px_0_0_0] shadow-primary text-primary',
                     showScrubber && 'pr-8',
                   )}
                   style={{
