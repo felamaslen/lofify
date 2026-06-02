@@ -7,6 +7,7 @@ import fg, { type Entry } from 'fast-glob';
 
 import { db } from '../db/client.js';
 import { tracks } from '../db/schema/index.js';
+import { dedupKeyOf, deleteTrackAndRecompute, recomputeKeysInTx } from '../dedup/recompute.js';
 import { env } from '../env.js';
 import { logger } from '../logger.js';
 import { AUDIO_EXTENSIONS } from './audio-extensions.js';
@@ -28,18 +29,33 @@ export async function upsertTrack(file: string): Promise<void> {
   }
   const parsed = await parseTrack(file);
   const now = new Date();
-  await db
-    .insert(tracks)
-    .values({ ...parsed, scannedAt: now, updatedAt: now })
-    .onConflictDoUpdate({
-      target: tracks.file,
-      set: { ...parsed, scannedAt: now, updatedAt: now },
-    });
+  const keyCols = {
+    title: tracks.title,
+    titleOverride: tracks.titleOverride,
+    artist: tracks.artist,
+    artistOverride: tracks.artistOverride,
+    album: tracks.album,
+    albumOverride: tracks.albumOverride,
+  };
+  await db.transaction(async (tx) => {
+    const before = await tx.select(keyCols).from(tracks).where(eq(tracks.file, file)).limit(1);
+    const [after] = await tx
+      .insert(tracks)
+      .values({ ...parsed, scannedAt: now, updatedAt: now })
+      .onConflictDoUpdate({
+        target: tracks.file,
+        set: { ...parsed, scannedAt: now, updatedAt: now },
+      })
+      .returning(keyCols);
+    const oldKey = before[0] ? dedupKeyOf(before[0]) : null;
+    const newKey = after ? dedupKeyOf(after) : null;
+    await recomputeKeysInTx(tx, [oldKey, newKey]);
+  });
 }
 
-/** Remove the `Tracks` row matching the given absolute path, if any. */
+/** Remove the `Tracks` row matching the given absolute path, if any, and re-rank its former duplicate group. */
 export async function deleteTrackByFile(file: string): Promise<void> {
-  await db.delete(tracks).where(eq(tracks.file, file));
+  await deleteTrackAndRecompute(file);
 }
 
 const tracer = trace.getTracer('lofify.scanner');

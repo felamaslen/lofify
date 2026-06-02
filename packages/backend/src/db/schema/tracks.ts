@@ -1,10 +1,13 @@
 import { sql } from 'drizzle-orm';
 import {
+  type AnyPgColumn,
   bigint,
   boolean,
+  check,
   index,
   integer,
   pgTable,
+  smallint,
   text,
   timestamp,
   uniqueIndex,
@@ -58,11 +61,20 @@ export const tracks = pgTable(
     durationSeconds: integer('durationSeconds').notNull(),
     /** mtime of the source file when last scanned. Used to detect out-of-band content changes and to invalidate derived state (e.g. cached transcodes). */
     sourceMtime: timestamp('sourceMtime', { withTimezone: true, mode: 'date' }).notNull(),
+    /** Canonical (highest-quality) track of this row's duplicate group — the copy surfaced when duplicates are hidden. Every member of a group carries it, the canonical row pointing at itself. Null when this row has no duplicate. */
+    trackIdDeduplicated: uuid('trackIdDeduplicated').references((): AnyPgColumn => tracks.id),
+    /** Rank of this row within its duplicate group, 0 being the canonical/best source. Null exactly when `trackIdDeduplicated` is null (the row has no duplicate). */
+    priority: smallint('priority'),
   },
   (t) => [
     index('Tracks_artist_idx').on(t.artist),
     index('Tracks_album_idx').on(t.album),
     uniqueIndex('Tracks_file_unq').on(t.file),
+    uniqueIndex('Tracks_dedup_priority_unq').on(t.trackIdDeduplicated, t.priority),
+    check(
+      'Tracks_dedup_pairing_ck',
+      sql`(${t.trackIdDeduplicated} is null) = (${t.priority} is null)`,
+    ),
   ],
 );
 

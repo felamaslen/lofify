@@ -41,8 +41,16 @@ CREATE TABLE "Tracks" (
   "file" text NOT NULL,
   "sizeBytes" bigint NOT NULL,
   "durationSeconds" integer NOT NULL,
-  "sourceMtime" timestamp with time zone NOT NULL
+  "sourceMtime" timestamp with time zone NOT NULL,
+  "trackIdDeduplicated" uuid,
+  "priority" smallint,
+  CONSTRAINT "Tracks_dedup_pairing_ck" CHECK (
+    ("Tracks"."trackIdDeduplicated" IS NULL) = ("Tracks"."priority" IS NULL)
+  )
 );
+
+ALTER TABLE "Tracks"
+ADD CONSTRAINT "Tracks_trackIdDeduplicated_Tracks_id_fk" FOREIGN KEY ("trackIdDeduplicated") REFERENCES "public"."Tracks" ("id") ON DELETE NO ACTION ON UPDATE NO ACTION;
 
 CREATE INDEX "ArtistSynonyms_synonym_idx" ON "ArtistSynonyms" USING btree ("synonym");
 
@@ -53,3 +61,5 @@ CREATE INDEX "Tracks_artist_idx" ON "Tracks" USING btree ("artist");
 CREATE INDEX "Tracks_album_idx" ON "Tracks" USING btree ("album");
 
 CREATE UNIQUE INDEX "Tracks_file_unq" ON "Tracks" USING btree ("file");
+
+CREATE UNIQUE INDEX "Tracks_dedup_priority_unq" ON "Tracks" USING btree ("trackIdDeduplicated", "priority");
