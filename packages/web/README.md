@@ -123,6 +123,37 @@ an on-the-fly switch whose old-quality buffer hasn't drained yet.
 (The backend must expose `X-Quality` via CORS `exposedHeaders` for
 cross-origin reads.)
 
+## Visualiser
+
+A waveform button (`AudioLines`) sits in the playback bar's transport row,
+just after previous / play-pause / next. Toggling it swaps the track list
+for a full-bleed **aurora visualiser** of the playing track
+(`components/visualiser.tsx`): a soft glowing blob, drawn on a `<canvas>`
+each animation frame, built from **composable, simultaneously-visible
+layers** so different music looks different and layered music looks
+layered. Eight log-spaced frequency bands each drive their own low-order angular
+harmonic of the rim, so it stays rounded while coexisting timbres swell it
+together. The fill is a simple two-stop radial gradient — a `from` colour at
+the core to a `to` colour at the rim — taken from a palette that the overall
+timbre (brightness) **rotates**, so different tracks land on very different
+colour schemes. On top of that: it punches with each bass kick; spectral
+flatness (noisy vs tonal) roughens the edge only for noisy material; spectral
+flux (how fast the spectrum moves) sets the swirl speed; treble energy flings
+additive sparks off the rim; and a detected bass onset fires an expanding
+ring. The active state lives in `state/visualiser.tsx` (`VisualiserProvider`
+/ `useVisualiser`) and is ephemeral — a view mode, not a saved preference.
+
+The spectrum comes from a Web Audio `AnalyserNode` (`lib/audio-analyser.ts`),
+created lazily the first time the visualiser is opened. Crucially it taps a
+**parallel `captureStream()`** of the `<audio>` element rather than
+`createMediaElementSource`: the element keeps playing straight to the
+output untouched, so opening the visualiser causes no audible break and
+playback never depends on the context (a suspended context just freezes the
+bars). The context is created suspended and resumed inside the toggle's
+click gesture. The button is feature-gated (`isVisualiserSupported`) to
+non-touch devices with `captureStream` — i.e. desktop Chromium/Firefox, not
+Safari.
+
 ## PWA & background playback
 
 The client is an installable PWA. `vite-plugin-pwa` (configured in
@@ -137,7 +168,9 @@ on the next visit.
 
 Playback keeps going when the tab is backgrounded or the screen locks
 because audio runs through a single `<audio>` element (`lib/audio-element.ts`)
-fed by MSE — there's no `AudioContext`, which browsers suspend when hidden.
+fed by MSE, straight to the output — never through an `AudioContext`, which
+browsers suspend when hidden. (The visualiser's analyser context is a
+parallel tap that carries no audio, so it doesn't change this.)
 The `Player` (`state/player.tsx`) wires `navigator.mediaSession` so the OS
 treats us like a media app: it publishes track metadata (title, artist,
 album, with the app icon as stand-in artwork), keeps `playbackState` and the

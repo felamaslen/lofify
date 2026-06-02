@@ -17,6 +17,44 @@ packages/
 The scanner lives inside `packages/backend` — it is not a separate
 package or service.
 
+## Audio quality
+
+Lofify tracks the lossy/lossless distinction end to end, from the source
+file on disk to the bytes that reach the player. The source file itself is
+never modified.
+
+**Sources.** Every scanned track records an `isLossless` flag — lossless
+containers (FLAC, ALAC, WAV…) versus lossy ones (MP3, Opus, Vorbis, AAC…).
+
+**Outputs.** What the player actually receives depends on the requested
+quality (`Adaptive` vs `Original`; see the
+[web README](packages/web/README.md#playback)) and on what the browser can
+decode, probed once via `MediaSource.isTypeSupported`:
+
+- **Adaptive** always transcodes to a lossy codec (Opus or MP3) at a tier
+  chosen from measured bandwidth — so the output is lossy whatever the
+  source.
+- **Original** asks for the best representation the browser can play. A
+  lossless source is delivered losslessly (FLAC) where supported; a lossy
+  source is **copied verbatim** — a passthrough, no re-encode — when its
+  codec is playable, and only transcoded as a last resort.
+
+The server only ever produces FLAC for lossless output and Opus or MP3 for
+lossy output; Vorbis is copied, never encoded. The exact resolution rules,
+including the per-tier table, live in the
+[backend README](packages/backend/README.md).
+
+**Quality loss** then falls into three cases:
+
+- _Lossless throughout_ — a lossless source delivered as FLAC. No loss.
+- _Single lossy step_ — a lossless source transcoded once to a lossy codec,
+  or a lossy source copied verbatim (no re-encode). One generation of loss
+  at most.
+- _Multi-lossy_ — a **lossy** source re-encoded to a **lossy** output (not
+  a copy), stacking a second generation of compression. The backend flags
+  this as `delivery.isMultiLossy`, and the player shows an amber warning
+  triangle beside the format badge.
+
 ## Toolchain
 
 - Node 24, pnpm 9 (managed with `asdf`; see `.tool-versions`).
