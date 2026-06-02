@@ -436,6 +436,10 @@ class Player {
 
   /** Load the track with id `id`, fetched at the current tier/preference, and start it from the top. Disposes the existing `MsePlayer` so the new track gets a fresh `MediaSource` — rapid clicks between tracks would otherwise leave stale state (cached `initBytes`, in-flight fetch race, etc.) interleaving across the reused instance. The `playToken` check after the fetch drops earlier clicks that resolved before the user's most recent one. */
   async play(id: string): Promise<void> {
+    // Silence the outgoing track synchronously, before the fetch await — otherwise its buffered
+    // samples keep playing audibly until `loadTrack` reassigns `audio.src`, and on mobile (higher
+    // latency, and iOS ignores `audio.volume`) that gap is long enough to hear as a click.
+    this.audio.pause();
     const token = ++this.playToken;
     const track = await this.fetchTrack(
       id,
@@ -783,6 +787,10 @@ class Player {
   private async step(direction: 'next' | 'previous'): Promise<void> {
     const current = this.snapshot.current;
     if (!current) return;
+    // Stop the outgoing track before the library query, not just inside `play` — otherwise it
+    // bleeds through this round-trip too. Resume if we turn out to be at a library boundary.
+    const wasPlaying = !this.audio.paused;
+    this.audio.pause();
     const filter = libraryFilterVars();
     const includeDuplicates = showDuplicatesValue();
     const variables =
@@ -802,6 +810,7 @@ class Player {
     });
     const nextId = data.tracks?.edges[0]?.node.id;
     if (nextId) await this.play(nextId);
+    else if (wasPlaying) await this.audio.play().catch(() => undefined);
   }
 }
 
