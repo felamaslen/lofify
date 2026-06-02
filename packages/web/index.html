@@ -10,6 +10,21 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Lofify" />
     <title>Lofify</title>
+    <script>
+      // Apply the saved colour scheme before first paint to avoid a flash of the
+      // wrong theme. Mirrors the logic in src/state/theme.tsx.
+      (function () {
+        try {
+          var saved = localStorage.getItem('lofify.app.theme');
+          var theme = saved === 'light' || saved === 'dark' ? saved : 'system';
+          var dark =
+            theme === 'dark' ||
+            (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          document.documentElement.classList.toggle('dark', dark);
+          if (dark) document.querySelector('meta[name="theme-color"]').content = '#0f1115';
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

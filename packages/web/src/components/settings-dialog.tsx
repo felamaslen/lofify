@@ -5,6 +5,7 @@ import { useShowDuplicates } from '../state/show-duplicates.tsx';
 import { FormatPicker } from './format-picker.tsx';
 import { QualityPicker } from './quality-picker.tsx';
 import { RescanButton } from './rescan-button.tsx';
+import { ThemePicker } from './theme-picker.tsx';
 import { Button } from './ui/button.tsx';
 import {
   Dialog,
@@ -35,6 +36,10 @@ export function SettingsDialog() {
           <DialogDescription>Library and playback preferences.</DialogDescription>
         </DialogHeader>
         <div className="grid gap-5">
+          <section className="grid gap-2">
+            <span className="text-sm font-medium">Appearance</span>
+            <ThemePicker />
+          </section>
           <section className="grid gap-2">
             <span className="text-sm font-medium">Library</span>
             <RescanButton />

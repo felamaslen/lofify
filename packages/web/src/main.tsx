@@ -14,6 +14,7 @@ import { createRoot } from 'react-dom/client';
 import { queryClient } from './lib/query-client.ts';
 import { Home } from './routes/home.tsx';
 import { PlayerProvider } from './state/player.tsx';
+import { ThemeProvider } from './state/theme.tsx';
 
 const rootRoute = createRootRoute({ component: () => <Outlet /> });
 
@@ -43,9 +44,11 @@ if (!root) throw new Error('Missing #root');
 createRoot(root).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <PlayerProvider>
-        <RouterProvider router={router} />
-      </PlayerProvider>
+      <ThemeProvider>
+        <PlayerProvider>
+          <RouterProvider router={router} />
+        </PlayerProvider>
+      </ThemeProvider>
     </QueryClientProvider>
   </StrictMode>,
 );

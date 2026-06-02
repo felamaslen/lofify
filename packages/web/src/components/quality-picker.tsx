@@ -1,12 +1,7 @@
 import { capabilities } from '../lib/capabilities.ts';
 import { type QualityMode, usePlayer } from '../state/player.tsx';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select.tsx';
+import { ToggleGroup, ToggleGroupItem } from './ui/toggle-group.tsx';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip.tsx';
-
-const CHOICES: { value: QualityMode; label: string }[] = [
-  { value: 'ADAPTIVE', label: 'Adaptive' },
-  { value: 'ORIGINAL', label: 'Original' },
-];
 
 const ADAPTIVE_TOOLTIP =
   'Automatically adjusts the bitrate to your connection speed, switching on the fly without interrupting playback.';
@@ -20,24 +15,30 @@ export function QualityPicker() {
   const originalTooltip = capabilities.flacInMp4
     ? ORIGINAL_TOOLTIP_FLAC_OK
     : ORIGINAL_TOOLTIP_NO_FLAC;
-  const tooltipFor = (v: QualityMode) => (v === 'ADAPTIVE' ? ADAPTIVE_TOOLTIP : originalTooltip);
+  const choices: { value: QualityMode; label: string; tooltip: string }[] = [
+    { value: 'ADAPTIVE', label: 'Adaptive', tooltip: ADAPTIVE_TOOLTIP },
+    { value: 'ORIGINAL', label: 'Original', tooltip: originalTooltip },
+  ];
   return (
     <TooltipProvider delayDuration={150}>
-      <Select value={qualityMode} onValueChange={(v) => setQualityMode(v as QualityMode)}>
-        <SelectTrigger className="w-[150px]">
-          <SelectValue placeholder="Quality" />
-        </SelectTrigger>
-        <SelectContent>
-          {CHOICES.map((c) => (
-            <Tooltip key={c.value}>
-              <TooltipTrigger asChild>
-                <SelectItem value={c.value}>{c.label}</SelectItem>
-              </TooltipTrigger>
-              <TooltipContent side="left">{tooltipFor(c.value)}</TooltipContent>
-            </Tooltip>
-          ))}
-        </SelectContent>
-      </Select>
+      <ToggleGroup
+        type="single"
+        value={qualityMode}
+        onValueChange={(v) => v && setQualityMode(v as QualityMode)}
+        aria-label="Quality"
+      >
+        {choices.map((c) => (
+          <Tooltip key={c.value}>
+            <TooltipTrigger asChild>
+              {/* Wrap rather than merge onto the item: the trigger sets its own data-state, which would clobber the toggle's and kill the selected highlight. */}
+              <span className="inline-flex">
+                <ToggleGroupItem value={c.value}>{c.label}</ToggleGroupItem>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top">{c.tooltip}</TooltipContent>
+          </Tooltip>
+        ))}
+      </ToggleGroup>
     </TooltipProvider>
   );
 }
