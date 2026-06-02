@@ -192,7 +192,14 @@ type Query {
   """
   The first-letter buckets present in the library, in `tracks` order, each with the index where it starts. Powers an A–Z scrubber: map a scroll position to its bucket, or jump to a letter by feeding its `offset` to `Query.tracks`. Honours the same `filterArtistIn`/`filterAlbumIn` as `tracks`.
   """
-  artistIndex(filterAlbumIn: [String!], filterArtistIn: [String!]): [ArtistInitial!]
+  artistIndex(
+    filterAlbumIn: [String!]
+    filterArtistIn: [String!]
+    """
+    Include every duplicate copy of a recording. By default only the canonical copy of each duplicate group is counted, matching `Query.tracks`.
+    """
+    includeDuplicates: Boolean
+  ): [ArtistInitial!]
   """
   The current library scan, if one is in progress or recently completed within the server's grace window. Null when no scan has run recently.
   """
@@ -224,6 +231,10 @@ type Query {
     """
     filterArtistIn: [String!]
     first: Int
+    """
+    Include every duplicate copy of a recording. By default only the canonical (highest-quality) copy of each duplicate group is returned.
+    """
+    includeDuplicates: Boolean
     last: Int
     """
     Zero-based index of the first row to return, in the library sort order. When set, returns `first` rows from here and ignores `after`/`before`/`last`.
@@ -279,10 +290,24 @@ type Track {
   """
   artistSynonyms: [String!]!
   """
+  Source bit depth in bits per sample, or null for lossy sources that have none.
+  """
+  bitDepth: Int
+  """
+  Nominal source bitrate in kbps, or null for variable-bitrate sources that report none.
+  """
+  bitrateKbps: Int
+  """Source channel count (e.g. 2 for stereo), or null when unknown."""
+  channels: Int
+  """
   Delivery plan for this track at the given `format`. See `TrackDelivery`. Defaults to the same baseline as `url`.
   """
   delivery(format: TrackFormat): TrackDelivery!
   discNumber: Int
+  """
+  Other copies of this recording in the library — tracks sharing the same effective title, artist and album — best-quality first. Empty when this track has no duplicate.
+  """
+  duplicates: [Track!]!
   duration: Duration!
   """
   Container plus codec, lower-cased and space-separated, e.g. `"ogg vorbis"`, `"mp3"`, `"webm opus"`.
@@ -295,12 +320,18 @@ type Track {
   Absolute path to the source file on disk. Primarily a fallback label for tracks that carry no title tag.
   """
   path: String!
+  """Source sample rate in Hz."""
+  sampleRate: Int!
+  """When the scanner last read this file from disk, ISO-8601."""
+  scannedAt: String!
   """
   Source codec of the file on disk, lower-cased, e.g. `"flac"`, `"alac"`, `"mp3"`, `"opus"`.
   """
   sourceFormat: String!
   title: String
   trackNumber: Int
+  """When this track was last modified, ISO-8601."""
+  updatedAt: String!
   """
   Signed URL the client should `GET` (with `Range:` headers) to stream this track. The resolver picks the concrete container + codec from `format` (see `TrackFormat`) and bakes it into the URL, so a single URL is reusable for the lifetime of a playback session and the stateless `/play` route needs no capability data.
   

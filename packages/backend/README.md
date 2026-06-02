@@ -85,6 +85,29 @@ columns, so overrides survive rescans. Every read (`Query.track`,
 `Query.tracks`, including the pagination sort) returns the effective
 value, `coalesce(override, scanned)`.
 
+## Deduplication
+
+The library often holds the same recording several times — a FLAC and an
+OGG copy, a 320k and a 96k MP3. A **duplicate group** is every track
+sharing a case-folded, trimmed effective `(title, artist, album)`;
+untitled tracks are never grouped. Within a group the highest-quality
+copy is **canonical**: `compareQuality` (`graphql/quality.ts`) ranks
+lossless above lossy, lossless by fidelity (sample rate, then bit depth,
+then bitrate) with codec preference only as a tiebreak, and lossy by a
+perceptual bitrate normalised across codecs — all from constant tables.
+
+`Tracks.trackIdDeduplicated` points every member at the canonical row
+(the canonical points at itself) and `Tracks.priority` ranks within the
+group (0 = canonical); both are null for a track with no duplicate. The
+columns are recomputed under a per-group advisory lock whenever a row's
+tags or files change — scan, watch and `trackUpdate` — clearing the
+group before reassigning so no self-FK reference dangles
+(`dedup/recompute.ts`).
+
+`Query.tracks` (and `Query.artistIndex`) return only canonical rows by
+default; pass `includeDuplicates: true` to include every copy.
+`Track.duplicates` lists a track's other copies, best-quality first.
+
 ## Search
 
 `Query.search(query)` matches `query` as a case-insensitive prefix
