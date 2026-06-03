@@ -11,6 +11,7 @@ const graphqlEntry = require.resolve('graphql');
 const libraryPath = mkdtempSync(path.join(tmpdir(), 'lofify-test-library-'));
 const transcodeTmpdir = mkdtempSync(path.join(tmpdir(), 'lofify-test-transcode-'));
 const transcodeBakeDir = mkdtempSync(path.join(tmpdir(), 'lofify-test-bakes-'));
+const diskCacheDir = mkdtempSync(path.join(tmpdir(), 'lofify-test-disk-cache-'));
 
 const databaseUrl = process.env.DATABASE_URL ?? 'postgres://lofify:lofify@localhost:5433/lofify';
 process.env.DATABASE_URL = databaseUrl;
@@ -33,6 +34,7 @@ export default defineConfig({
       SCAN_CRON: '',
       TRANSCODE_TMPDIR: transcodeTmpdir,
       TRANSCODE_BAKE_DIR: transcodeBakeDir,
+      DISK_CACHE_DIR: diskCacheDir,
     },
   },
 });
