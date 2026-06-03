@@ -9,6 +9,7 @@ import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { createHandler as createSseHandler } from 'graphql-sse/lib/use/fastify';
 
+import { registerArtworkRoute } from './artwork/route.js';
 import { ensureDiskCacheWritable, migrateDiskCacheLayout } from './disk-cache.js';
 import { env, libraryPaths } from './env.js';
 import { buildSchema } from './graphql/index.js';
@@ -62,6 +63,7 @@ async function buildApp(): Promise<FastifyInstance> {
   });
 
   await registerPlaybackRoute(app);
+  await registerArtworkRoute(app);
 
   const webDistPath = env.WEB_DIST_PATH
     ? env.WEB_DIST_PATH
@@ -72,6 +74,7 @@ async function buildApp(): Promise<FastifyInstance> {
       const isApi =
         req.url.startsWith('/graphql') ||
         req.url.startsWith('/play') ||
+        req.url.startsWith('/artwork') ||
         req.url.startsWith('/healthz');
       if (req.method !== 'GET' || isApi) {
         reply.code(404).send({ error: 'not found' });
