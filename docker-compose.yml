@@ -57,6 +57,19 @@ services:
       otel-lgtm:
         condition: service_started
 
+  artwork-worker:
+    build:
+      context: packages/artwork-worker
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://lofify:lofify@postgres:5432/lofify}
+      DISK_CACHE_DIR: /disk-cache
+    volumes:
+      - playback-cache:/disk-cache
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
   web:
     image: node:24-bookworm-slim
     working_dir: /app

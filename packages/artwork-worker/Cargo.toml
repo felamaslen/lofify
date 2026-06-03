@@ -1,0 +1,27 @@
+[package]
+name = "artwork-worker"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+anyhow = "1"
+# Exact pin: sacad's library API is documented as internal to its binaries.
+sacad = "=3.0.1"
+sqlx = { version = "0.8", default-features = false, features = [
+  "runtime-tokio",
+  "postgres",
+  "uuid",
+] }
+tokio = { version = "1", features = [
+  "rt-multi-thread",
+  "macros",
+  "process",
+  "time",
+  "signal",
+  "sync",
+  "fs",
+] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+uuid = "1"

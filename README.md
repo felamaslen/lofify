@@ -10,8 +10,9 @@ change.
 
 ```
 packages/
-  backend/   TypeScript monolith: GraphQL API, playback, scanner, db schema
-  web/       Vite + React + TanStack Router web client (installable PWA)
+  backend/         TypeScript monolith: GraphQL API, playback, scanner, db schema
+  web/             Vite + React + TanStack Router web client (installable PWA)
+  artwork-worker/  Rust service downloading album covers for the AlbumArt queue
 ```
 
 The scanner lives inside `packages/backend` — it is not a separate
