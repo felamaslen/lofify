@@ -178,15 +178,16 @@ returns `Content-Type` + `Accept-Ranges` (and `X-Quality`), plus
 `Content-Length` once the encode is complete.
 
 **Format resolution** (`resolve.ts`) maps a client `TrackFormat` —
-preference-ordered `losslessFormats` / `lossyFormats` MIME lists plus a
-`quality` — to that concrete target, copying without re-encoding
-whenever possible:
+preference-ordered `losslessFormats` / `lossyFormats` MIME lists, a
+`quality`, and an optional `autoPassthrough` flag — to that concrete target,
+copying without re-encoding whenever possible:
 
-| `quality`                   | source   | served as                                                                                                                                                |
-| --------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `MAX`                       | lossless | first supported `losslessFormats` entry — `audio/mp4; codecs="flac"` (copy for flac, re-encode otherwise)                                                |
-| `MAX`                       | lossy    | first `lossyFormats` entry whose codec matches the source (a **copy**: vorbis→webm, opus→mp4/webm, mp3→mp3); else transcode to the first encodable entry |
-| `MIN`/`LOW`/`MEDIUM`/`HIGH` | any      | transcode to the first `lossyFormats` entry the server can encode (opus or mp3) at the preset bitrate                                                    |
+| `quality`                        | source                 | served as                                                                                                                                                                                                                                         |
+| -------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MAX`                            | lossless               | first supported `losslessFormats` entry — `audio/mp4; codecs="flac"` (copy for flac, re-encode otherwise)                                                                                                                                         |
+| `MAX`                            | lossy                  | first `lossyFormats` entry whose codec matches the source (a **copy**: vorbis→webm, opus→mp4/webm, mp3→mp3); else transcode to the first encodable entry                                                                                          |
+| `MIN`/`LOW`/`MEDIUM`/`HIGH`      | any                    | transcode to the first `lossyFormats` entry the server can encode (opus or mp3) at the preset bitrate                                                                                                                                             |
+| `MIN`–`HIGH` + `autoPassthrough` | lossy (codec playable) | **copy** the source verbatim at its original quality — resolves exactly as the `MAX` lossy row, rather than transcoding to the tier (Smart's no-double-lossy upgrade); lossless sources and unplayable lossy codecs ignore the flag and transcode |
 
 Each target maps to one cache entry under
 `DISK_CACHE_DIR/<trackId>-<sourceMtimeMs>/<targetKey>.{bin,idx}`

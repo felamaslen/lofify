@@ -22,7 +22,9 @@ export function SettingsDialog() {
   const formatBlurb =
     qualityMode === 'ORIGINAL'
       ? 'Used only when a source has to be transcoded — a lossy source with no matching copy. Lossless and matching sources are copied without re-encoding.'
-      : 'Everything is transcoded to this codec, at a bitrate chosen automatically from your connection speed.';
+      : qualityMode === 'SMART'
+        ? 'Used to transcode lossless tracks and lossy ones your browser can’t play; the rest pass through untouched.'
+        : 'Everything is transcoded to this codec, at a bitrate chosen automatically from your connection speed.';
   return (
     <Dialog>
       <DialogTrigger asChild>

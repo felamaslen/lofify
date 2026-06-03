@@ -67,9 +67,9 @@ export type TrackFormat = NonNullable<VariablesOf<typeof TrackByIdDocument>['for
 export type Quality = TrackFormat['quality'];
 
 /**
- * The user-facing playback setting. `ADAPTIVE` automatically picks a lossy tier from the measured connection speed; `ORIGINAL` asks for the best representation of the source (lossless or a copy) and assumes the connection can sustain it. The five `Quality` tiers remain the wire-level requests: `ORIGINAL` maps to `MAX`, `ADAPTIVE` to one of the ladder tiers chosen at runtime.
+ * The user-facing playback setting. `ADAPTIVE` automatically picks a lossy tier from the measured connection speed; `ORIGINAL` asks for the best representation of the source (lossless or a copy) and assumes the connection can sustain it; `SMART` follows `ADAPTIVE` but lets a lossy source the browser can play verbatim through untouched, so it's never re-compressed (no double-lossy). The five `Quality` tiers remain the wire-level requests: `ORIGINAL` maps to `MAX`, `ADAPTIVE` and `SMART` to one of the ladder tiers chosen at runtime — `SMART` additionally sends `autoPassthrough`, which the server honours by copying a playable lossy source through at full quality.
  */
-export type QualityMode = 'ADAPTIVE' | 'ORIGINAL';
+export type QualityMode = 'ADAPTIVE' | 'ORIGINAL' | 'SMART';
 
 /** Lossy tiers the adaptive controller climbs/drops between, ascending. `MAX` is excluded — it's the `ORIGINAL` request, where the codec may differ (lossless/copy). */
 const ADAPTIVE_LADDER: readonly Quality[] = ['MIN', 'LOW', 'MEDIUM', 'HIGH'];
@@ -82,12 +82,17 @@ type TrackNode = NonNullable<ResultOf<typeof TrackByIdDocument>['track']>;
 /** The resolved delivery plan for the current track, as returned by the server. */
 export type Delivery = TrackNode['delivery'];
 
-/** Build the `TrackFormat` to request: quality plus the capability-derived MIME lists, with the lossy list ordered by the user's codec preference. */
-export function trackFormatFor(quality: Quality, preference: LossyPreference): TrackFormat {
+/** Build the `TrackFormat` to request: quality plus the capability-derived MIME lists, with the lossy list ordered by the user's codec preference. `autoPassthrough` (Smart) lets the server copy a playable lossy source through at full quality instead of transcoding it to the requested tier. */
+export function trackFormatFor(
+  quality: Quality,
+  preference: LossyPreference,
+  autoPassthrough = false,
+): TrackFormat {
   return {
     quality,
     losslessFormats: capabilities.losslessFormats,
     lossyFormats: capabilities.lossyFormats(preference),
+    autoPassthrough,
   };
 }
 
@@ -148,13 +153,10 @@ export function resolvePlaybackUrl(url: string): string {
 }
 
 function loadStoredMode(): QualityMode {
-  if (typeof window === 'undefined') return 'ADAPTIVE';
+  if (typeof window === 'undefined') return 'SMART';
   const stored = window.localStorage.getItem(MODE_STORAGE_KEY);
-  if (stored === 'ADAPTIVE' || stored === 'ORIGINAL') return stored;
-  // Migrate the pre-adaptive single-tier setting: `MAX` becomes Original, any lower tier Adaptive.
-  return window.localStorage.getItem(LEGACY_QUALITY_STORAGE_KEY) === 'MAX'
-    ? 'ORIGINAL'
-    : 'ADAPTIVE';
+  if (stored === 'ADAPTIVE' || stored === 'ORIGINAL' || stored === 'SMART') return stored;
+  return 'SMART';
 }
 
 /** The tier Adaptive starts a track at: where the last session left off (cold start `MEDIUM`). Table-free — only the chosen tier is remembered, so there's no bandwidth-to-tier mapping to maintain. */
@@ -296,6 +298,11 @@ class Player {
   private set(patch: Partial<PlayerSnapshot>): void {
     this.snapshot = { ...this.snapshot, ...patch };
     for (const listener of this.listeners) listener();
+  }
+
+  /** Whether to ask the server to pass a playable lossy source through untouched rather than transcode it — Smart's no-double-lossy upgrade. */
+  private autoPassthrough(): boolean {
+    return this.snapshot.qualityMode === 'SMART';
   }
 
   /** Attach the audio-element listeners and return a teardown that detaches them, ends the manifest subscription, and tears down the `MsePlayer`. Drive from the provider's mount effect: `useEffect(() => player.activate(), [player])`. Guarded so a repeat call (e.g. a StrictMode remount) without a teardown in between is a no-op. */
@@ -557,7 +564,11 @@ class Player {
       totalSeconds,
       /** Open a `trackManifest` SSE subscription for `trackId` at `quality` and pipe cumulative snapshots into `onEmit`. The closure handles SSE delta merging (each emission carries only the chunks finalised since the previous one) and idempotent replay after a transparent reconnect. Returns the teardown mse will run on slot replacement / live swap / dispose. */
       subscribeManifest: (quality, onEmit) => {
-        const format = trackFormatFor(quality as Quality, this.snapshot.lossyPreference);
+        const format = trackFormatFor(
+          quality as Quality,
+          this.snapshot.lossyPreference,
+          this.autoPassthrough(),
+        );
         let chunks: ManifestChunk[] = [];
         return subscribeToStream(
           TrackManifestDocument,
@@ -610,7 +621,7 @@ class Player {
     const track = this.snapshot.current;
     if (!track || !this.mse) return;
     const token = ++this.changeToken;
-    const format = trackFormatFor(tier, preference);
+    const format = trackFormatFor(tier, preference, this.autoPassthrough());
     const next = await this.fetchTrack(track.id, tier, preference, format);
     if (token !== this.changeToken || this.snapshot.current?.id !== track.id || !next) return;
     this.tracksById.set(next.id, next);
@@ -668,7 +679,11 @@ class Player {
 
   /** Unified ABR signal from mse. `chunkFinished = true` is a confident, post-completion sample: try to upscale if the buffer is healthy and there's headroom. `chunkFinished = false` is a mid-flight sample: try to downscale if the rate already can't sustain the current tier (and let `changeFormat` cancel the doomed fetch). Gated by a cooldown so it can't flap. */
   private onTransfer(bitsPerSecond: number, chunkFinished: boolean): void {
-    if (this.snapshot.qualityMode !== 'ADAPTIVE') return;
+    // Original is pinned to MAX, so never adapts. Adaptive and Smart both ride the ladder — but in
+    // Smart a lossy source the server passed through verbatim has a fixed bitrate, so there's no tier
+    // to climb (and re-requesting would just yield the same copy); only adapt a genuine transcode.
+    if (this.snapshot.qualityMode === 'ORIGINAL') return;
+    if (this.snapshot.delivery?.isPassthrough) return;
     if (performance.now() - this.lastSwitchAt < SWITCH_COOLDOWN_MS) return;
     const idx = ADAPTIVE_LADDER.indexOf(this.snapshot.requestedTier);
     if (idx < 0 || this.tierBitsPerSecond(idx) === null) return;
@@ -741,11 +756,15 @@ class Player {
     id: string,
     tier: Quality,
     preference: LossyPreference,
-    format: TrackFormat = trackFormatFor(tier, preference),
+    format: TrackFormat = trackFormatFor(tier, preference, this.autoPassthrough()),
   ): Promise<TrackNode | null | undefined> {
     return this.queryClient
       .fetchQuery({
-        queryKey: ['track', id, tier, preference],
+        // `autoPassthrough` is part of the key: it changes the resolved delivery (a playable lossy
+        // source becomes a `MAX` copy rather than a transcode at `tier`), so a cached entry from
+        // another mode must not be reused — that mismatch would leave the delivery URL and the
+        // manifest describing different bytes and stall the first chunk in a refetch loop.
+        queryKey: ['track', id, tier, preference, format.autoPassthrough ?? false],
         queryFn: ({ signal }) => gqlRequest(TrackByIdDocument, { id, format }, signal),
       })
       .then((data) => data.track);
