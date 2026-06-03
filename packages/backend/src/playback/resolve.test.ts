@@ -108,6 +108,38 @@ test('unproducible MIME types are ignored', () => {
   expect(fmt(t)).toBe('mp4/opus');
 });
 
+test('autoPassthrough copies a sub-MAX lossy source the client can play verbatim', () => {
+  const t = resolveTarget(lossy('vorbis'), {
+    quality: Quality.MEDIUM,
+    lossyFormats: [OPUS_MP4, VORBIS_WEBM, MP3],
+    autoPassthrough: true,
+  });
+  expect(fmt(t)).toBe('webm/vorbis');
+  expect(t.quality).toBe(Quality.MAX);
+  expect(isPassthrough(t, 'vorbis')).toBe(true);
+});
+
+test('autoPassthrough still transcodes a lossy source the client can not play verbatim', () => {
+  const t = resolveTarget(lossy('vorbis'), {
+    quality: Quality.LOW,
+    lossyFormats: [OPUS_MP4, MP3],
+    autoPassthrough: true,
+  });
+  expect(fmt(t)).toBe('mp4/opus');
+  expect(t.quality).toBe(Quality.LOW);
+});
+
+test('autoPassthrough never copies a lossless source — it transcodes to the requested tier', () => {
+  const t = resolveTarget(lossless('flac'), {
+    quality: Quality.MEDIUM,
+    losslessFormats: [FLAC],
+    lossyFormats: [OPUS_MP4],
+    autoPassthrough: true,
+  });
+  expect(fmt(t)).toBe('mp4/opus');
+  expect(t.quality).toBe(Quality.MEDIUM);
+});
+
 const multiLossy = (source: ResolveSource, req: Parameters<typeof resolveTarget>[1]): boolean => {
   const t = resolveTarget(source, req);
   return isMultiLossy(source, t, isPassthrough(t, source.sourceCodec));

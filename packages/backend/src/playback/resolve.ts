@@ -1,7 +1,7 @@
 /**
  * Resolve a client's `TrackFormat` request into the concrete `EncodeTarget` the cache will produce. Shared by `Track.url` (which bakes the result into the signed playback URL) and the `trackManifest` subscription (which must describe the very same bytes) — so the function is pure over `(track, request)` and both callers pass identical input.
  *
- * Below `MAX` the rule is unchanged: transcode to the requested lossy codec. At `MAX` the server picks the best representation of the source the client can play from its preference-ordered MIME lists, preferring a passthrough copy (source codec already matches a supported format) over a transcode. Passthrough vs re-encode is decided downstream by the cache from `sourceCodec === target.codec`.
+ * Below `MAX` the rule is unchanged: transcode to the requested lossy codec — unless the request sets `autoPassthrough` and the source is a lossy file the client can play verbatim, in which case it's copied through at its original quality instead (Smart's no-double-lossy upgrade). At `MAX` the server picks the best representation of the source the client can play from its preference-ordered MIME lists, preferring a passthrough copy (source codec already matches a supported format) over a transcode. Passthrough vs re-encode is decided downstream by the cache from `sourceCodec === target.codec`.
  */
 
 import { Quality, type TrackFormat } from '../graphql/playback-format.js';
@@ -64,6 +64,14 @@ export function resolveTarget(source: ResolveSource, req: TrackFormat): EncodeTa
   const firstTranscodable = lossy.find((f) => TRANSCODABLE.has(f.codec));
 
   if (req.quality !== Quality.MAX) {
+    // Smart's no-double-lossy upgrade: a lossy source whose codec the client can play verbatim is
+    // copied through at full quality rather than re-compressed to this tier. (A sub-MAX transcode is
+    // always lossy, so the "would otherwise be lossy" half of the condition is implicit here.) Lossless
+    // sources, and lossy sources the client can't play, fall through and transcode to the requested tier.
+    if (req.autoPassthrough && !source.isLossless) {
+      const copy = lossy.find((f) => f.codec === source.sourceCodec);
+      if (copy) return { format: copy, quality: Quality.MAX };
+    }
     // Below MAX we always transcode, into the client's first preference we can actually encode to.
     if (!firstTranscodable) throw new ResolveError('no producible lossy format to transcode to');
     return { format: firstTranscodable, quality: req.quality };
