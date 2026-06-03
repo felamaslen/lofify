@@ -39,7 +39,7 @@ services:
       NODE_ENV: development
       PLAYBACK_SIGNING_SECRET: ${PLAYBACK_SIGNING_SECRET:-dev-secret}
       TRANSCODE_MAX_PARALLEL: ${TRANSCODE_MAX_PARALLEL:-4}
-      DISK_CACHE_DIR: /playback-cache
+      DISK_CACHE_DIR: /disk-cache
       DISK_CACHE_MAX_BYTES: 1073741824
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-lgtm:4318
       OTEL_SERVICE_NAME: lofify-backend
@@ -49,7 +49,8 @@ services:
       - .:/app
       - backend-node-modules:/app/node_modules
       - ${LIBRARY_PATH:-./music}:/music:ro
-      - playback-cache:/playback-cache
+      # The volume keeps its historical name (renaming a named volume would orphan the cached data); only the mount path is /disk-cache.
+      - playback-cache:/disk-cache
     depends_on:
       postgres:
         condition: service_healthy

@@ -28,7 +28,7 @@ const Schema = z.object({
   /** Maximum number of concurrent ffmpeg encode processes. */
   TRANSCODE_MAX_PARALLEL: z.coerce.number().int().positive().default(12),
 
-  /** Persistent directory where the unified per-entry cache writes `<trackId>-<mtimeMs>/<targetKey>.{bin,idx}`. Survives process restarts; the `.idx` sidecar is the durable manifest. Defaults to `${os.tmpdir()}/lofify-cache`. */
+  /** Persistent root of the on-disk cache. Playback entries live under `transcode/<trackId>-<mtimeMs>/<targetKey>.{bin,idx}` (the `.idx` sidecar is the durable manifest) and downloaded album art under `artwork/<albumArtId>.jpg`. Survives process restarts. Defaults to `${os.tmpdir()}/lofify-cache`. */
   DISK_CACHE_DIR: z.string().optional(),
 
   /** Soft byte budget for the on-disk playback cache. When set, completed entries are swept least-recently-accessed-first once total usage exceeds this value. Unset disables sweeping, leaving the cache unbounded. */

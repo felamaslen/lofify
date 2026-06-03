@@ -24,12 +24,13 @@ services:
       BACKEND_HOST: ${BACKEND_HOST:-0.0.0.0}
       BACKEND_PORT: 4002
       LIBRARY_PATH: ${LIBRARY_PATH:-/music}
-      DISK_CACHE_DIR: /playback-cache/lofify
+      DISK_CACHE_DIR: /disk-cache/lofify
     ports:
       - '4002:4002'
     volumes:
       - ${LIBRARY_MOUNT}:/music:ro
-      - playback-cache:/playback-cache
+      # The volume keeps its historical name (renaming a named volume would orphan the cached data); only the mount path is /disk-cache.
+      - playback-cache:/disk-cache
     depends_on:
       postgres:
         condition: service_healthy

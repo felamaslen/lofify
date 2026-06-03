@@ -9,6 +9,7 @@ import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { createHandler as createSseHandler } from 'graphql-sse/lib/use/fastify';
 
+import { ensureDiskCacheWritable, migrateDiskCacheLayout } from './disk-cache.js';
 import { env, libraryPaths } from './env.js';
 import { buildSchema } from './graphql/index.js';
 import { defaultCache } from './playback/cache.js';
@@ -22,6 +23,9 @@ const SCHEMA_SDL_PATH = fileURLToPath(
 );
 
 async function buildApp(): Promise<FastifyInstance> {
+  await ensureDiskCacheWritable();
+  await migrateDiskCacheLayout();
+
   const app = Fastify({ logger: false });
 
   const allow = env.CORS_ALLOW_ORIGINS.split(',')
