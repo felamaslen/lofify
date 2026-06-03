@@ -48,6 +48,9 @@ const Schema = z.object({
 
   /** Service name tagged on every span and log record. */
   OTEL_SERVICE_NAME: z.string().default('lofify-backend'),
+
+  /** Git commit SHA this server was built from, baked in at image build time. Compared against the client's build SHA by `Query.isUpdateAvailable`. The `dev` default means "unknown", which suppresses the client's update prompt during local development. */
+  GIT_SHA: z.string().default('dev'),
 });
 
 export const env = Schema.parse(process.env);
