@@ -200,13 +200,13 @@ pausing hidden web audio.
 
 `components/track-artwork.tsx` owns the artwork UI: a colocated
 `TrackArtwork` fragment, a `useTrackArtwork` hook and the `ArtworkTile`
-renderer (cover image, spinner while a download runs, a download
-affordance when never requested, and a warning triangle on failure —
-the reason rides the tooltip, and clicking retries). Downloads
-are manual: clicking the tile calls `Mutation.artworkDownload` and the
-hook polls `Track.artwork` every 2s until the row resolves, sharing one
-TanStack Query key per track so no two consumers poll the same track
-twice.
+renderer (cover image, spinner while a download runs, and a warning
+triangle on failure — the reason rides the tooltip, and clicking
+retries). A never-requested track is requested automatically the
+moment its artwork is previewed; only a FAILED row waits for a manual
+retry. Either way the hook calls `Mutation.artworkDownload` and polls
+`Track.artwork` every 2s until the row resolves, sharing one TanStack
+Query key per track so no two consumers poll the same track twice.
 
 It surfaces in two places. The playback bar shows a 40px thumbnail next
 to the playing track's title (seeded by the fragment riding the
