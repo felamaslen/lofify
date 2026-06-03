@@ -66,15 +66,9 @@ function isInProgress(artwork: TrackArtworkValue | undefined): boolean {
 }
 
 /**
- * The live artwork state for a track, and a `download` trigger. `initial` seeds the state from a
- * colocated fragment (the playback bar's case); pass `fetchOnMount` instead to load lazily (the
- * info popover, where embedding artwork in the list fragment would fan a resolver query out to
- * every visible row). Polls while a download is running, stopping on resolution; the query key is
- * shared, so the bar and the popover never poll the same track twice.
+ * The live artwork state for a track, and a `download` trigger. `initial` seeds the state from a colocated fragment (the playback bar's case); pass `fetchOnMount` instead to load lazily (the info popover, where embedding artwork in the list fragment would fan a resolver query out to every visible row). Polls while a download is running, stopping on resolution; the query key is shared, so the bar and the popover never poll the same track twice.
  *
- * A track whose artwork has never been requested is requested automatically the moment it is
- * previewed. Only the never-requested state auto-fires: a FAILED row stays failed until the user
- * retries by hand, and an auto-request that errors (e.g. the track has no album) is not repeated.
+ * A track whose artwork has never been requested is requested automatically the moment it is previewed. Only the never-requested state auto-fires: a FAILED row stays failed until the user retries by hand, and an auto-request that errors (e.g. the track has no album) is not repeated.
  */
 export function useTrackArtwork(
   trackId: string,
@@ -138,8 +132,7 @@ export function useTrackArtwork(
 }
 
 /**
- * Square artwork tile: the cover once downloaded, a spinner while one is fetched, and a
- * download/retry affordance otherwise. Size and rounding come from `className`.
+ * Square artwork tile: the cover once downloaded, a spinner while one is fetched, and a download/retry affordance otherwise. Size and rounding come from `className`.
  */
 export function ArtworkTile({
   artwork,

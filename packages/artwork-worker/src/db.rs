@@ -5,13 +5,11 @@ pub struct Job {
     pub id: Uuid,
     pub album_artist: String,
     pub album: String,
-    /// How long the row sat PENDING before this claim — distinguishes queue latency from
-    /// download latency in traces.
+    /// How long the row sat PENDING before this claim — distinguishes queue latency from download latency in traces.
     pub wait_seconds: f64,
 }
 
-/// Requeue rows left IN_PROGRESS by a previous run. This worker is the only claimer, so at
-/// startup any IN_PROGRESS row is an orphan from a crash or kill mid-download.
+/// Requeue rows left IN_PROGRESS by a previous run. This worker is the only claimer, so at startup any IN_PROGRESS row is an orphan from a crash or kill mid-download.
 pub async fn reset_stale(pool: &PgPool) -> sqlx::Result<u64> {
     let result = sqlx::query(
         r#"UPDATE "AlbumArt" SET status = 'PENDING', "updatedAt" = now() WHERE status = 'IN_PROGRESS'"#,
@@ -21,8 +19,7 @@ pub async fn reset_stale(pool: &PgPool) -> sqlx::Result<u64> {
     Ok(result.rows_affected())
 }
 
-/// Claim the oldest PENDING row, marking it IN_PROGRESS. SKIP LOCKED keeps concurrent claims
-/// from blocking on each other.
+/// Claim the oldest PENDING row, marking it IN_PROGRESS. SKIP LOCKED keeps concurrent claims from blocking on each other.
 #[tracing::instrument(name = "db.claim_next", skip_all)]
 pub async fn claim_next(pool: &PgPool) -> sqlx::Result<Option<Job>> {
     // RETURNING sees the post-update row, so the time the row sat PENDING (it became PENDING at

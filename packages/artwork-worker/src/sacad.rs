@@ -8,9 +8,7 @@ use sacad::SearchStatus;
 
 pub use sacad::cl::SourceName;
 
-/// The default cover sources. Cover Art Archive is excluded: its MusicBrainz lookups are
-/// rate-limited to one request per second, and a single search burns ~10s waiting on them while
-/// the reference image almost always comes from iTunes anyway.
+/// The default cover sources. Cover Art Archive is excluded: its MusicBrainz lookups are rate-limited to one request per second, and a single search burns ~10s waiting on them while the reference image almost always comes from iTunes anyway.
 pub fn default_sources() -> Vec<SourceName> {
     vec![
         SourceName::Deezer,
@@ -20,9 +18,7 @@ pub fn default_sources() -> Vec<SourceName> {
     ]
 }
 
-/// Parse a comma-separated source list (the names the sacad CLI uses, e.g.
-/// `itunes,deezer,coverartarchive`). Unknown names and an empty list are errors — a worker
-/// silently searching nothing would fail every row with "no cover found".
+/// Parse a comma-separated source list (the names the sacad CLI uses, e.g. `itunes,deezer,coverartarchive`). Unknown names and an empty list are errors — a worker silently searching nothing would fail every row with "no cover found".
 pub fn parse_sources(value: &str) -> anyhow::Result<Vec<SourceName>> {
     let sources = value
         .split(',')
@@ -37,8 +33,7 @@ pub fn parse_sources(value: &str) -> anyhow::Result<Vec<SourceName>> {
     Ok(sources)
 }
 
-/// Search for a cover with the sacad library and write it to `out`. The crate's API is
-/// documented as internal to its binaries, hence the exact version pin in Cargo.toml.
+/// Search for a cover with the sacad library and write it to `out`. The crate's API is documented as internal to its binaries, hence the exact version pin in Cargo.toml.
 #[tracing::instrument(name = "sacad.search_and_download", skip_all)]
 pub async fn download(
     album_artist: &str,

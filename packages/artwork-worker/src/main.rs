@@ -29,8 +29,7 @@ fn env_parsed<T: std::str::FromStr>(name: &str, default: T) -> T {
         .unwrap_or(default)
 }
 
-/// Crash-fast when the artwork directory cannot be written: a worker that cannot store images
-/// would otherwise claim every row and fail it.
+/// Crash-fast when the artwork directory cannot be written: a worker that cannot store images would otherwise claim every row and fail it.
 fn ensure_writable(dir: &Path) -> anyhow::Result<()> {
     fs::create_dir_all(dir)?;
     let probe = dir.join(format!(".write-probe-{}", std::process::id()));
@@ -39,8 +38,7 @@ fn ensure_writable(dir: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Wire `tracing` to stdout and, when `OTEL_EXPORTER_OTLP_ENDPOINT` is set, to an OTLP trace
-/// exporter. Returns the provider so `main` can flush it on shutdown.
+/// Wire `tracing` to stdout and, when `OTEL_EXPORTER_OTLP_ENDPOINT` is set, to an OTLP trace exporter. Returns the provider so `main` can flush it on shutdown.
 fn init_tracing() -> Option<opentelemetry_sdk::trace::SdkTracerProvider> {
     use opentelemetry::trace::TracerProvider as _;
     use tracing_subscriber::layer::SubscriberExt;
@@ -75,9 +73,7 @@ fn init_tracing() -> Option<opentelemetry_sdk::trace::SdkTracerProvider> {
     provider
 }
 
-/// Telemetry is initialised outside the async runtime: the OTLP exporter's blocking HTTP client
-/// panics when constructed inside one. The provider is shut down after the runtime exits so
-/// pending spans flush.
+/// Telemetry is initialised outside the async runtime: the OTLP exporter's blocking HTTP client panics when constructed inside one. The provider is shut down after the runtime exits so pending spans flush.
 fn main() -> anyhow::Result<()> {
     let provider = init_tracing();
     let result = tokio::runtime::Builder::new_multi_thread()
@@ -147,8 +143,7 @@ async fn run() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Claim and process rows until the queue is empty, running up to `max_parallel` downloads at
-/// once. In-flight rows are IN_PROGRESS, so the claim loop never sees them twice.
+/// Claim and process rows until the queue is empty, running up to `max_parallel` downloads at once. In-flight rows are IN_PROGRESS, so the claim loop never sees them twice.
 async fn drain(pool: &PgPool, semaphore: &Arc<Semaphore>, config: &Arc<Config>) {
     loop {
         let Ok(permit) = semaphore.clone().acquire_owned().await else {
@@ -216,8 +211,7 @@ async fn process(pool: &PgPool, config: &Config, job: db::Job) {
     }
 }
 
-/// Wake the drain loop on every NOTIFY. Connection drops are logged and retried; the poll tick
-/// covers anything missed in the gap.
+/// Wake the drain loop on every NOTIFY. Connection drops are logged and retried; the poll tick covers anything missed in the gap.
 async fn listen(pool: PgPool, wake: Arc<Notify>) {
     loop {
         let mut listener = match PgListener::connect_with(&pool).await {
@@ -245,8 +239,7 @@ async fn listen(pool: PgPool, wake: Arc<Notify>) {
     }
 }
 
-/// Fallback sweep: NOTIFY is fire-and-forget, so rows inserted while the worker is down (or a
-/// dropped notification) are only picked up by polling.
+/// Fallback sweep: NOTIFY is fire-and-forget, so rows inserted while the worker is down (or a dropped notification) are only picked up by polling.
 async fn tick(wake: Arc<Notify>, every: Duration) {
     let mut interval = tokio::time::interval(every);
     loop {
