@@ -126,3 +126,11 @@ use, so the export can be shared with other consumers.
 Every environment variable the system reads is documented in
 [`.env.example`](./.env.example). Only `DATABASE_URL` is exposed; the
 compose stack hardcodes the Postgres bootstrap credentials.
+
+The exception is the build-time git SHA. `scripts/deploy.sh` bakes the
+commit it builds from into the image as the `GIT_SHA` build arg, which
+the Dockerfile threads into both the backend (`GIT_SHA`) and the web
+bundle (`VITE_GIT_SHA`). The client polls `Query.isUpdateAvailable` with
+its own SHA and shows a reload prompt when the server is running a newer
+build. These are set by the image, not by `.env`, so they're not listed
+in `.env.example`.

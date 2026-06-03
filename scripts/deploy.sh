@@ -91,6 +91,7 @@ if [[ "$SKIP_BUILD" -eq 0 ]]; then
   docker buildx build \
     --platform "$PLATFORM" \
     --target backend \
+    --build-arg "GIT_SHA=${SHA}" \
     -t "${IMAGE}:${TAG}" \
     -t "${IMAGE}:${SHA}" \
     --push \
