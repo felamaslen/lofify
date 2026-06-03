@@ -22,8 +22,8 @@ This is a Cargo project, not a pnpm workspace package; build it with
    missed.
 3. Pending rows are claimed oldest-first with
    `FOR UPDATE SKIP LOCKED`, marked `IN_PROGRESS`, and downloaded via
-   sacad's `search_and_download` (album artist + album, all cover
-   sources) — up to `ARTWORK_MAX_PARALLEL` at a time.
+   sacad's `search_and_download` (album artist + album, across the
+   configured cover sources) — up to `ARTWORK_MAX_PARALLEL` at a time.
 4. A successful download lands in
    `$DISK_CACHE_DIR/artwork/<id>.jpg` and resolves the row to
    `SUCCEEDED`; a `NotFound` result, error or timeout resolves it to
@@ -32,16 +32,17 @@ This is a Cargo project, not a pnpm workspace package; build it with
 
 ## Env
 
-| Variable                      | Default    | Meaning                                                                                                                               |
-| ----------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`                | _required_ | Postgres connection string                                                                                                            |
-| `DISK_CACHE_DIR`              | _required_ | Shared disk-cache root; images go in `artwork/`                                                                                       |
-| `ARTWORK_SIZE`                | `600`      | Cover size in pixels passed to sacad                                                                                                  |
-| `ARTWORK_MAX_PARALLEL`        | `2`        | Concurrent sacad downloads                                                                                                            |
-| `ARTWORK_POLL_SECONDS`        | `30`       | Fallback poll interval for missed notifications                                                                                       |
-| `ARTWORK_TIMEOUT_SECONDS`     | `120`      | Per-download timeout before the row is failed                                                                                         |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | _(unset)_  | OTLP base URL for trace export (e.g. `http://otel-lgtm:4318`). Unset disables tracing entirely; export failures never block downloads |
-| `RUST_LOG`                    | `info`     | Log/span filter, e.g. `info,sacad=debug` to see per-source search detail                                                              |
+| Variable                      | Default                        | Meaning                                                                                                                                                      |
+| ----------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `DATABASE_URL`                | _required_                     | Postgres connection string                                                                                                                                   |
+| `DISK_CACHE_DIR`              | _required_                     | Shared disk-cache root; images go in `artwork/`                                                                                                              |
+| `ARTWORK_SIZE`                | `600`                          | Cover size in pixels passed to sacad                                                                                                                         |
+| `ARTWORK_COVER_SOURCES`       | `deezer,discogs,itunes,lastfm` | Comma-separated sacad cover sources. `coverartarchive` is excluded by default — its MusicBrainz lookups are rate-limited to 1 req/s and add ~10s+ per search |
+| `ARTWORK_MAX_PARALLEL`        | `2`                            | Concurrent sacad downloads                                                                                                                                   |
+| `ARTWORK_POLL_SECONDS`        | `30`                           | Fallback poll interval for missed notifications                                                                                                              |
+| `ARTWORK_TIMEOUT_SECONDS`     | `120`                          | Per-download timeout before the row is failed                                                                                                                |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | _(unset)_                      | OTLP base URL for trace export (e.g. `http://otel-lgtm:4318`). Unset disables tracing entirely; export failures never block downloads                        |
+| `RUST_LOG`                    | `info`                         | Log/span filter, e.g. `info,sacad=debug` to see per-source search detail                                                                                     |
 
 Each processed row emits one trace: `artwork.process` (with album,
 album artist and queue-wait attributes) wrapping

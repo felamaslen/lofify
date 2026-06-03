@@ -18,6 +18,7 @@ const NOTIFY_CHANNEL: &str = "album_art_pending";
 struct Config {
     artwork_dir: PathBuf,
     size: u32,
+    sources: Vec<sacad::SourceName>,
     timeout: Duration,
 }
 
@@ -99,9 +100,14 @@ async fn run() -> anyhow::Result<()> {
 
     let max_parallel: usize = env_parsed("ARTWORK_MAX_PARALLEL", 2);
     let poll_seconds: u64 = env_parsed("ARTWORK_POLL_SECONDS", 30);
+    let sources = match env::var("ARTWORK_COVER_SOURCES") {
+        Ok(value) => sacad::parse_sources(&value).context("invalid ARTWORK_COVER_SOURCES")?,
+        Err(_) => sacad::default_sources(),
+    };
     let config = Arc::new(Config {
         artwork_dir,
         size: env_parsed("ARTWORK_SIZE", 600),
+        sources,
         timeout: Duration::from_secs(env_parsed("ARTWORK_TIMEOUT_SECONDS", 120)),
     });
 
@@ -187,6 +193,7 @@ async fn process(pool: &PgPool, config: &Config, job: db::Job) {
         &job.album_artist,
         &job.album,
         config.size,
+        &config.sources,
         &out,
         config.timeout,
     )
