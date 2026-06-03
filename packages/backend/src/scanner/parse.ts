@@ -65,6 +65,12 @@ async function parseLegacyApeFormat(
   }
 }
 
+/** Re-read just the album-artist tag from a file on disk. Backfills rows scanned before the `albumArtist` column existed without waiting for a forced rescan. */
+export async function readAlbumArtistTag(file: string): Promise<string | null> {
+  const metadata = await parseFile(file, { skipCovers: true });
+  return cleanTag(metadata.common.albumartist);
+}
+
 /** Read audio metadata and file stats for a single track, returning the columns the scanner will write to `Tracks`. */
 export async function parseTrack(file: string): Promise<ParsedTrack> {
   return tracer.startActiveSpan('scanner.parseTrack', async (span) => {
