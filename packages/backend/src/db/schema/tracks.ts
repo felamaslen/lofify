@@ -14,6 +14,8 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core';
 
+import { albumArt } from './album-art.js';
+
 export const tracks = pgTable(
   'Tracks',
   {
@@ -65,6 +67,8 @@ export const tracks = pgTable(
     durationSeconds: integer('durationSeconds').notNull(),
     /** mtime of the source file when last scanned. Used to detect out-of-band content changes and to invalidate derived state (e.g. cached transcodes). */
     sourceMtime: timestamp('sourceMtime', { withTimezone: true, mode: 'date' }).notNull(),
+    /** Album art shared by every track of this row's album. Linked by `Mutation.artworkDownload`; null when art has never been requested. Kept on tag edits so artwork survives renames. */
+    albumArtId: uuid('albumArtId').references(() => albumArt.id, { onDelete: 'set null' }),
     /** Canonical (highest-quality) track of this row's duplicate group — the copy surfaced when duplicates are hidden. Every member of a group carries it, the canonical row pointing at itself. Null when this row has no duplicate. */
     trackIdDeduplicated: uuid('trackIdDeduplicated').references((): AnyPgColumn => tracks.id),
     /** Rank of this row within its duplicate group, 0 being the canonical/best source. Null exactly when `trackIdDeduplicated` is null (the row has no duplicate). */
