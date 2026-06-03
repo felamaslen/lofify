@@ -44,6 +44,6 @@ This is a Cargo project, not a pnpm workspace package; build it with
 ## Tests
 
 There are no unit tests in this package: the worker is a thin
-orchestration shell around postgres and the sacad binary, and is
+orchestration shell around postgres and the sacad library, and is
 exercised end-to-end via `docker compose up` (request art in the web
 UI and watch the row resolve).
