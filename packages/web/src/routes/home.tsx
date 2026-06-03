@@ -1,13 +1,51 @@
+import { useSuspenseQuery } from '@tanstack/react-query';
 import { X } from 'lucide-react';
+import { useRef } from 'react';
 
 import { ErrorToast } from '../components/error-toast.tsx';
 import { PlaybackBar } from '../components/playback-bar.tsx';
 import { SearchBox } from '../components/search-box.tsx';
-import { TrackList } from '../components/track-list.tsx';
+import {
+  ArtistIndexDocument,
+  PAGE_SIZE,
+  TrackList,
+  TrackWindowDocument,
+} from '../components/track-list.tsx';
+import { UpdateIndicator, UpdateIndicatorDocument } from '../components/update-indicator.tsx';
 import { Visualiser } from '../components/visualiser.tsx';
+import { graphql } from '../lib/gql.ts';
+import { gqlRequest } from '../lib/gql-request.ts';
+import { GIT_SHA } from '../lib/version.ts';
 import { LibraryFilterProvider, useLibraryFilter } from '../state/library-filter.tsx';
-import { ShowDuplicatesProvider } from '../state/show-duplicates.tsx';
+import { ShowDuplicatesProvider, useShowDuplicates } from '../state/show-duplicates.tsx';
 import { useVisualiser, VisualiserProvider } from '../state/visualiser.tsx';
+
+/** Bootstraps the home screen in one request: the first window of the view the page opened on (whatever its persisted filters) and whether the server is running a newer build than this bundle. */
+const HomeDocument = graphql(
+  `
+    query Home(
+      $offset: Int!
+      $first: Int!
+      $appVersion: String!
+      $filterArtistIn: [String!]
+      $filterAlbumIn: [String!]
+      $includeDuplicates: Boolean
+    ) {
+      ...UpdateIndicator
+      ...ArtistIndex
+      tracks(
+        offset: $offset
+        first: $first
+        filterArtistIn: $filterArtistIn
+        filterAlbumIn: $filterAlbumIn
+        includeDuplicates: $includeDuplicates
+      ) {
+        ...TrackWindow
+      }
+    }
+  `,
+  [ArtistIndexDocument, TrackWindowDocument, UpdateIndicatorDocument],
+);
 
 function FilterChip() {
   const { artist, album, clear } = useLibraryFilter();
@@ -28,6 +66,29 @@ function FilterChip() {
 
 function HomeLayout() {
   const { active } = useVisualiser();
+  const { artist, album } = useLibraryFilter();
+  const { showDuplicates } = useShowDuplicates();
+  // The view the page opened on, captured once: filter changes mustn't re-run
+  // (and so re-suspend) the bootstrap — they fetch their own data in the list.
+  const { current: opening } = useRef({ artist, album, showDuplicates });
+  // Seeds the cache for the track list's first page/index and the update
+  // indicator. Runs regardless of the visualiser so the flag stays current.
+  useSuspenseQuery({
+    queryKey: ['home', GIT_SHA, opening.artist, opening.album, opening.showDuplicates],
+    queryFn: ({ signal }) =>
+      gqlRequest(
+        HomeDocument,
+        {
+          offset: 0,
+          first: PAGE_SIZE,
+          appVersion: GIT_SHA,
+          filterArtistIn: opening.artist ? [opening.artist] : null,
+          filterAlbumIn: opening.album ? [opening.album] : null,
+          includeDuplicates: opening.showDuplicates,
+        },
+        signal,
+      ),
+  });
   return (
     <div className="flex min-h-screen flex-col">
       <header className="sticky top-0 z-30 flex h-10 items-center gap-3 border-b border-border bg-background px-3 max-sm:h-auto max-sm:py-1.5">
@@ -36,6 +97,7 @@ function HomeLayout() {
         </h1>
         <SearchBox />
         <FilterChip />
+        <UpdateIndicator />
       </header>
       {active ? <Visualiser /> : <TrackList />}
       <div className="sticky bottom-0 z-30">
