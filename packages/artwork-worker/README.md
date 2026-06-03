@@ -32,14 +32,22 @@ This is a Cargo project, not a pnpm workspace package; build it with
 
 ## Env
 
-| Variable                  | Default    | Meaning                                         |
-| ------------------------- | ---------- | ----------------------------------------------- |
-| `DATABASE_URL`            | _required_ | Postgres connection string                      |
-| `DISK_CACHE_DIR`          | _required_ | Shared disk-cache root; images go in `artwork/` |
-| `ARTWORK_SIZE`            | `600`      | Cover size in pixels passed to sacad            |
-| `ARTWORK_MAX_PARALLEL`    | `2`        | Concurrent sacad downloads                      |
-| `ARTWORK_POLL_SECONDS`    | `30`       | Fallback poll interval for missed notifications |
-| `ARTWORK_TIMEOUT_SECONDS` | `120`      | Per-download timeout before the row is failed   |
+| Variable                      | Default    | Meaning                                                                                                                               |
+| ----------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                | _required_ | Postgres connection string                                                                                                            |
+| `DISK_CACHE_DIR`              | _required_ | Shared disk-cache root; images go in `artwork/`                                                                                       |
+| `ARTWORK_SIZE`                | `600`      | Cover size in pixels passed to sacad                                                                                                  |
+| `ARTWORK_MAX_PARALLEL`        | `2`        | Concurrent sacad downloads                                                                                                            |
+| `ARTWORK_POLL_SECONDS`        | `30`       | Fallback poll interval for missed notifications                                                                                       |
+| `ARTWORK_TIMEOUT_SECONDS`     | `120`      | Per-download timeout before the row is failed                                                                                         |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | _(unset)_  | OTLP base URL for trace export (e.g. `http://otel-lgtm:4318`). Unset disables tracing entirely; export failures never block downloads |
+| `RUST_LOG`                    | `info`     | Log/span filter, e.g. `info,sacad=debug` to see per-source search detail                                                              |
+
+Each processed row emits one trace: `artwork.process` (with album,
+album artist and queue-wait attributes) wrapping
+`sacad.search_and_download` and the `db.*` updates. SIGTERM/SIGINT
+shut down gracefully — in-flight downloads finish and pending spans
+flush before exit.
 
 ## Tests
 

@@ -8,6 +8,7 @@ use sacad::SearchStatus;
 
 /// Search for a cover with the sacad library and write it to `out`. The crate's API is
 /// documented as internal to its binaries, hence the exact version pin in Cargo.toml.
+#[tracing::instrument(name = "sacad.search_and_download", skip_all)]
 pub async fn download(
     album_artist: &str,
     album: &str,

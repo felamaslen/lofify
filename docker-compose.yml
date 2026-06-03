@@ -63,11 +63,14 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgres://lofify:lofify@postgres:5432/lofify}
       DISK_CACHE_DIR: /disk-cache
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-lgtm:4318
     volumes:
       - playback-cache:/disk-cache
     depends_on:
       postgres:
         condition: service_healthy
+      otel-lgtm:
+        condition: service_started
     restart: unless-stopped
 
   web:

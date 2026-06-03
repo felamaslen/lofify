@@ -38,10 +38,60 @@ fn ensure_writable(dir: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt().init();
+/// Wire `tracing` to stdout and, when `OTEL_EXPORTER_OTLP_ENDPOINT` is set, to an OTLP trace
+/// exporter. Returns the provider so `main` can flush it on shutdown.
+fn init_tracing() -> Option<opentelemetry_sdk::trace::SdkTracerProvider> {
+    use opentelemetry::trace::TracerProvider as _;
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
 
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+
+    let provider = env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok().map(|_| {
+        let exporter = opentelemetry_otlp::SpanExporter::builder()
+            .with_http()
+            .build()
+            .expect("failed to build OTLP span exporter");
+        opentelemetry_sdk::trace::SdkTracerProvider::builder()
+            .with_batch_exporter(exporter)
+            .with_resource(
+                opentelemetry_sdk::Resource::builder()
+                    .with_service_name("lofify-artwork-worker")
+                    .build(),
+            )
+            .build()
+    });
+    let otel_layer = provider
+        .as_ref()
+        .map(|p| tracing_opentelemetry::layer().with_tracer(p.tracer("artwork-worker")));
+
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(tracing_subscriber::fmt::layer())
+        .with(otel_layer)
+        .init();
+    provider
+}
+
+/// Telemetry is initialised outside the async runtime: the OTLP exporter's blocking HTTP client
+/// panics when constructed inside one. The provider is shut down after the runtime exits so
+/// pending spans flush.
+fn main() -> anyhow::Result<()> {
+    let provider = init_tracing();
+    let result = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(run());
+    if let Some(provider) = provider {
+        if let Err(err) = provider.shutdown() {
+            warn!("failed to flush traces on shutdown: {err}");
+        }
+    }
+    result
+}
+
+async fn run() -> anyhow::Result<()> {
     let database_url = env::var("DATABASE_URL").context("DATABASE_URL is required")?;
     let disk_cache_dir = env::var("DISK_CACHE_DIR").context("DISK_CACHE_DIR is required")?;
     let artwork_dir = PathBuf::from(disk_cache_dir).join("artwork");
@@ -71,15 +121,22 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(listen(pool.clone(), wake.clone()));
     tokio::spawn(tick(wake.clone(), Duration::from_secs(poll_seconds)));
 
+    // Docker stops with SIGTERM; without a handler the process dies before the span exporter flushes (and before a clean shutdown generally).
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+
     info!("artwork worker ready");
     let semaphore = Arc::new(Semaphore::new(max_parallel));
     loop {
         tokio::select! {
             _ = wake.notified() => {}
             _ = tokio::signal::ctrl_c() => break,
+            _ = sigterm.recv() => break,
         }
         drain(&pool, &semaphore, &config).await;
     }
+    // Let in-flight downloads finish (their rows are IN_PROGRESS and would otherwise wait for
+    // the next start's requeue) before the runtime is torn down.
+    let _ = semaphore.acquire_many(max_parallel as u32).await;
     info!("shutting down");
     Ok(())
 }
@@ -109,6 +166,16 @@ async fn drain(pool: &PgPool, semaphore: &Arc<Semaphore>, config: &Arc<Config>) 
     }
 }
 
+#[tracing::instrument(
+    name = "artwork.process",
+    skip_all,
+    fields(
+        album_art.id = %job.id,
+        album_art.album = %job.album,
+        album_art.album_artist = %job.album_artist,
+        album_art.queue_wait_seconds = job.wait_seconds,
+    )
+)]
 async fn process(pool: &PgPool, config: &Config, job: db::Job) {
     let file = format!("{}.jpg", job.id);
     let out = config.artwork_dir.join(&file);
