@@ -1,5 +1,10 @@
 # syntax=docker/dockerfile:1.7
 
+# Git commit the image is built from. Threaded into the web bundle (VITE_GIT_SHA)
+# and the backend runtime (GIT_SHA) so Query.isUpdateAvailable can flag clients
+# running an older build. Pass `--build-arg GIT_SHA=$(git rev-parse HEAD)`.
+ARG GIT_SHA=dev
+
 # ---------- base ----------
 FROM node:24-bookworm-slim AS base
 ENV PNPM_HOME=/pnpm
@@ -17,6 +22,8 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
 
 # ---------- build (web) ----------
 FROM deps AS build
+ARG GIT_SHA
+ENV VITE_GIT_SHA=$GIT_SHA
 RUN pnpm --filter ./packages/web build
 
 # ---------- runtime ----------
@@ -51,6 +58,8 @@ RUN corepack enable \
 
 WORKDIR /app
 COPY --from=build /app /app
+ARG GIT_SHA
+ENV GIT_SHA=$GIT_SHA
 ENV NODE_ENV=production
 EXPOSE 4000
 CMD ["pnpm", "--filter", "./packages/backend", "start"]

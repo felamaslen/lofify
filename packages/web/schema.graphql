@@ -171,7 +171,7 @@ type Mutation {
   """
   Override one or more tags on a single track. Each supplied tag is stored as an override that takes precedence over the value read from the file on disk and survives rescans — the scanner never touches it.
   
-  Omit an argument to leave its current override untouched; pass an explicit `null` to clear the override and fall back to the scanned tag.
+  Omit an argument to leave its current override untouched; pass an explicit `null` to clear the override and fall back to the scanned tag; pass an empty string to blank the field outright.
   
   Throws when no track with the given id exists.
   """
@@ -206,6 +206,12 @@ type Query {
     """
     includeDuplicates: Boolean
   ): [ArtistInitial!]
+  """
+  Whether a newer build of the app is live than the one the client is running.
+  
+  The client passes `version`, the git commit SHA its bundle was built from; this returns `true` when the server was built from a different commit, signalling the client should reload to pick up the new deployment. Returns `false` whenever the server's own build SHA is unknown (the development default), so local work is never flagged.
+  """
+  isUpdateAvailable(version: String!): Boolean
   """
   The current library scan, if one is in progress or recently completed within the server's grace window. Null when no scan has run recently.
   """

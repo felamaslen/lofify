@@ -5,8 +5,8 @@
 
 import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, GraphQLInt, specifiedDirectives, GraphQLObjectType, GraphQLList, GraphQLString, GraphQLBoolean, GraphQLID, GraphQLEnumType, GraphQLInputObjectType, GraphQLFloat } from "graphql";
 import { artistIndex as queryArtistIndexResolver, track as queryTrackResolver, tracks as queryTracksResolver } from "./../track-queries.js";
+import { isUpdateAvailable as queryIsUpdateAvailableResolver, ping as queryPingResolver, noop as mutationNoopResolver } from "./../root.js";
 import { libraryScan as queryLibraryScanResolver, libraryScanCancel as mutationLibraryScanCancelResolver, libraryScanStart as mutationLibraryScanStartResolver, libraryScanSubscription as subscriptionLibraryScanResolver } from "./../library-scan.js";
-import { ping as queryPingResolver, noop as mutationNoopResolver } from "./../root.js";
 import { artistSynonyms as trackArtistSynonymsResolver, artistSynonymCreate as mutationArtistSynonymCreateResolver, artistSynonymDelete as mutationArtistSynonymDeleteResolver, artistSynonymUpdate as mutationArtistSynonymUpdateResolver } from "./../artist-synonyms.js";
 import { delivery as trackDeliveryResolver, duplicates as trackDuplicatesResolver, path as trackPathResolver, url as trackUrlResolver } from "./../track.js";
 import { search as querySearchResolver } from "./../search.js";
@@ -538,6 +538,19 @@ export function getSchema(): GraphQLSchema {
                     },
                     resolve(_source, args) {
                         return queryArtistIndexResolver(args.filterArtistIn, args.filterAlbumIn, args.includeDuplicates);
+                    }
+                },
+                isUpdateAvailable: {
+                    description: "Whether a newer build of the app is live than the one the client is running.\n\nThe client passes `version`, the git commit SHA its bundle was built from; this returns `true` when the server was built from a different commit, signalling the client should reload to pick up the new deployment. Returns `false` whenever the server's own build SHA is unknown (the development default), so local work is never flagged.",
+                    name: "isUpdateAvailable",
+                    type: GraphQLBoolean,
+                    args: {
+                        version: {
+                            type: new GraphQLNonNull(GraphQLString)
+                        }
+                    },
+                    resolve(_source, args) {
+                        return queryIsUpdateAvailableResolver(args.version);
                     }
                 },
                 libraryScan: {

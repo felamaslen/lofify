@@ -195,6 +195,21 @@ lock-screen scrub position in sync, and handles the hardware/lock-screen
 Session handlers are what stop mobile platforms (iOS especially) from
 pausing hidden web audio.
 
+## Update indicator
+
+`autoUpdate` swaps in a fresh service worker on the next visit, but a
+long-lived tab can drift behind a live deployment. `UpdateIndicator`
+(`components/update-indicator.tsx`) closes that gap. It owns an `UpdateIndicator`
+fragment on `Query` (`isUpdateAvailable(version: $appVersion)`) that the home
+bootstrap query (`HomeDocument` in `routes/home.tsx`) spreads alongside the
+initial track window, so the flag arrives with the first paint. The indicator
+seeds its initial value from that cached result and, kept never-stale
+(`staleTime: Infinity`), defers its own first request to the first poll a minute
+later. When the server reports a newer build it shows a small pulsing dot in
+the top-right of the header; clicking it reloads the page, letting the service
+worker pick up the new app shell. In development `VITE_GIT_SHA` is `dev` (see
+`lib/version.ts`) and the server suppresses the prompt, so the dot never appears.
+
 ## Search
 
 The search box in the header runs `Query.search` as you type (debounced),
@@ -257,7 +272,8 @@ one artist.
 
 ## Env
 
-| Variable                  | Purpose                                       |
-| ------------------------- | --------------------------------------------- |
-| `VITE_GRAPHQL_URL`        | Backend GraphQL endpoint (default `/graphql`) |
-| `VITE_GRAPHQL_STREAM_URL` | SSE endpoint (default `/graphql/stream`)      |
+| Variable                  | Purpose                                                                                                                                                                                    |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `VITE_GRAPHQL_URL`        | Backend GraphQL endpoint (default `/graphql`)                                                                                                                                              |
+| `VITE_GRAPHQL_STREAM_URL` | SSE endpoint (default `/graphql/stream`)                                                                                                                                                   |
+| `VITE_GIT_SHA`            | Git commit this bundle was built from, baked in at build time (default `dev`). Sent to `Query.isUpdateAvailable` to detect a newer deployment — see [Update indicator](#update-indicator). |

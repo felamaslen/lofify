@@ -1,12 +1,13 @@
-import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
+import { skipToken, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useWindowVirtualizer } from '@tanstack/react-virtual';
 import { readFragment } from 'gql.tada';
 import { type MouseEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { useIsMobile } from '../hooks/use-is-mobile.ts';
-import { graphql, type ResultOf } from '../lib/gql.ts';
+import { type FragmentOf, graphql, type ResultOf } from '../lib/gql.ts';
 import { gqlRequest } from '../lib/gql-request.ts';
 import { cn } from '../lib/utils.ts';
+import { GIT_SHA } from '../lib/version.ts';
 import { useLibraryFilter } from '../state/library-filter.tsx';
 import { TrackByIdDocument, trackFormatFor, usePlayer } from '../state/player.tsx';
 import { useShowDuplicates } from '../state/show-duplicates.tsx';
@@ -20,7 +21,7 @@ import {
   ContextMenuTrigger,
 } from './ui/context-menu.tsx';
 
-const TrackListRowDocument = graphql(`
+export const TrackListRowDocument = graphql(`
   fragment TrackListRow on Track {
     title
     path
@@ -37,11 +38,7 @@ const TrackListRowDocument = graphql(`
   }
 `);
 
-/**
- * Cursor-paginated track list. Kept for the player's next/previous resolution, which walks the
- * library relative to the current track. The list view itself loads by index (see
- * `TracksWindowDocument`) so it can jump anywhere without paging through the gap.
- */
+/** Cursor-paginated track list. Kept for the player's next/previous resolution, which walks the library relative to the current track. The list view itself loads by index (see `TracksWindowDocument`) so it can jump anywhere without paging through the gap. */
 export const TracksDocument = graphql(
   `
     query Tracks(
@@ -82,6 +79,24 @@ export const TracksDocument = graphql(
   [TrackListRowDocument],
 );
 
+/** One page of the library: the matching total plus a window of rows. Composed into the index-addressed `TracksWindowDocument` and the home bootstrap query (`routes/home.tsx`) alike. */
+export const TrackWindowDocument = graphql(
+  `
+    fragment TrackWindow on TrackConnection {
+      totalCount
+      edges {
+        cursor
+        node {
+          id
+          ...TrackListRow
+          ...TrackInfo
+        }
+      }
+    }
+  `,
+  [TrackListRowDocument, TrackInfoDocument],
+);
+
 /** A window of the list addressed by absolute index, so the scrubber can jump to any offset. */
 const TracksWindowDocument = graphql(
   `
@@ -99,27 +114,16 @@ const TracksWindowDocument = graphql(
         filterAlbumIn: $filterAlbumIn
         includeDuplicates: $includeDuplicates
       ) {
-        totalCount
-        edges {
-          cursor
-          node {
-            id
-            ...TrackListRow
-            ...TrackInfo
-          }
-        }
+        ...TrackWindow
       }
     }
   `,
-  [TrackListRowDocument, TrackInfoDocument],
+  [TrackWindowDocument],
 );
 
-const ArtistIndexDocument = graphql(`
-  query ArtistIndex(
-    $filterArtistIn: [String!]
-    $filterAlbumIn: [String!]
-    $includeDuplicates: Boolean
-  ) {
+/** The A–Z scrubber buckets for the active filters: each first-letter label and the row index it starts at. Composed into the index-addressed `ArtistIndexQueryDocument` and the home bootstrap query (`routes/home.tsx`) alike. */
+export const ArtistIndexDocument = graphql(`
+  fragment ArtistIndex on Query {
     artistIndex(
       filterArtistIn: $filterArtistIn
       filterAlbumIn: $filterAlbumIn
@@ -131,11 +135,42 @@ const ArtistIndexDocument = graphql(`
   }
 `);
 
-type WindowEdge = NonNullable<
-  NonNullable<ResultOf<typeof TracksWindowDocument>['tracks']>['edges']
->[number];
+/** Standalone artist index for a view filtered after load; the opening view's index rides the home bootstrap query instead. */
+const ArtistIndexQueryDocument = graphql(
+  `
+    query ArtistIndexQuery(
+      $filterArtistIn: [String!]
+      $filterAlbumIn: [String!]
+      $includeDuplicates: Boolean
+    ) {
+      ...ArtistIndex
+    }
+  `,
+  [ArtistIndexDocument],
+);
 
-const PAGE_SIZE = 100;
+type WindowEdge = ResultOf<typeof TrackWindowDocument>['edges'][number];
+
+/** Shape of the home bootstrap query's cached result (see `routes/home.tsx`), read here to seed the opening view: its `tracks` is the same `TrackWindow` fragment the window queries select, and it carries the `ArtistIndex` fragment at the root. */
+type HomeData = FragmentOf<typeof ArtistIndexDocument> & {
+  tracks: ResultOf<typeof TracksWindowDocument>['tracks'];
+};
+
+/** Unmask a track connection selected via the `TrackWindow` fragment. */
+function readWindow(
+  connection: ResultOf<typeof TracksWindowDocument>['tracks'] | undefined,
+): ResultOf<typeof TrackWindowDocument> | null {
+  return connection ? readFragment(TrackWindowDocument, connection) : null;
+}
+
+/** Unmask a query result carrying the `ArtistIndex` fragment. */
+function readIndex(
+  source: FragmentOf<typeof ArtistIndexDocument> | undefined,
+): ResultOf<typeof ArtistIndexDocument> | null {
+  return source ? readFragment(ArtistIndexDocument, source) : null;
+}
+
+export const PAGE_SIZE = 100;
 const ROW_HEIGHT = 36;
 // Mobile rows stack title over artist, so they need room for two lines.
 const ROW_HEIGHT_MOBILE = 52;
@@ -155,10 +190,22 @@ export function TrackList() {
   const filterArtistIn = artist ? [artist] : null;
   const filterAlbumIn = album ? [album] : null;
 
+  // The home bootstrap query (`routes/home.tsx`) loads the first page + artist
+  // index for the view the page opened on, whatever its filters. We seed from it
+  // (read-only observer, never fetches) while the current filters still match
+  // that opening view — a cache hit on this key — and fetch our own data once
+  // they diverge.
+  const home = useQuery<HomeData>({
+    queryKey: ['home', GIT_SHA, artist, album, showDuplicates],
+    queryFn: skipToken,
+  });
+  const seeded = home.data !== undefined;
+
   // A cheap, stable source of the total — independent of which windows are loaded — so the
   // virtualizer's row count (and thus the scrollbar range) never collapses while paging.
   const countQuery = useQuery({
     queryKey: ['tracks-count', artist, album, showDuplicates],
+    enabled: !seeded,
     queryFn: ({ signal }) =>
       gqlRequest(
         TracksWindowDocument,
@@ -166,18 +213,26 @@ export function TrackList() {
         signal,
       ),
   });
-  const totalCount = countQuery.data?.tracks?.totalCount ?? 0;
+  const totalCount =
+    (seeded ? readWindow(home.data?.tracks) : readWindow(countQuery.data?.tracks))?.totalCount ?? 0;
 
+  // Only refetched when the key (filters) changes — never on mount or focus. The
+  // opening view's index is seeded from the home bootstrap query instead.
   const indexQuery = useQuery({
     queryKey: ['artist-index', artist, album, showDuplicates],
+    enabled: !seeded,
+    staleTime: Infinity,
     queryFn: ({ signal }) =>
       gqlRequest(
-        ArtistIndexDocument,
+        ArtistIndexQueryDocument,
         { filterArtistIn, filterAlbumIn, includeDuplicates: showDuplicates },
         signal,
       ),
   });
-  const buckets = useMemo(() => indexQuery.data?.artistIndex ?? [], [indexQuery.data]);
+  const buckets = useMemo(
+    () => readIndex(seeded ? home.data : indexQuery.data)?.artistIndex ?? [],
+    [seeded, home.data, indexQuery.data],
+  );
 
   const spacerRef = useRef<HTMLDivElement | null>(null);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -230,6 +285,8 @@ export function TrackList() {
   const windowResults = useQueries({
     queries: pageIndexes.map((p) => ({
       queryKey: ['tracks-window', artist, album, showDuplicates, p],
+      // Page 0 of the initial view is already loaded by the home bootstrap query.
+      enabled: !(seeded && p === 0),
       queryFn: ({ signal }: { signal: AbortSignal }) =>
         gqlRequest(
           TracksWindowDocument,
@@ -248,7 +305,8 @@ export function TrackList() {
 
   const rowsByIndex = new Map<number, WindowEdge>();
   pageIndexes.forEach((p, i) => {
-    const edges = windowResults[i]?.data?.tracks?.edges ?? [];
+    const connection = seeded && p === 0 ? home.data?.tracks : windowResults[i]?.data?.tracks;
+    const edges = readWindow(connection)?.edges ?? [];
     edges.forEach((edge, j) => rowsByIndex.set(p * PAGE_SIZE + j, edge));
   });
 
@@ -335,14 +393,16 @@ export function TrackList() {
   // labels nor the source badge slide under the letters.
   const showScrubber = buckets.length > 1;
 
-  if (countQuery.isError) {
+  // A seeded view already has its data (the home bootstrap resolved before this
+  // rendered); otherwise the count query drives the loading/error state.
+  if (!seeded && countQuery.isError) {
     return (
       <div className="flex-1 p-6 text-sm text-destructive-foreground">
         Failed to load: {(countQuery.error as Error).message}
       </div>
     );
   }
-  if (totalCount === 0 && countQuery.isLoading) {
+  if (totalCount === 0 && !seeded && countQuery.isLoading) {
     return <div className="flex-1 p-6 text-sm text-muted-foreground">Loading…</div>;
   }
   if (totalCount === 0) {
