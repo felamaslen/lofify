@@ -28,6 +28,7 @@ export const TrackListRowDocument = graphql(`
     trackNumber
     discNumber
     artist
+    albumArtist
     album
     year
     isLossless
@@ -348,6 +349,7 @@ export function TrackList() {
         id: edge.node.id,
         title: t.title,
         artist: t.artist,
+        albumArtist: t.albumArtist,
         album: t.album,
         trackNumber: t.trackNumber,
         discNumber: t.discNumber,

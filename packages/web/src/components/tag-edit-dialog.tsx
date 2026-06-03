@@ -20,6 +20,7 @@ const TrackUpdateDocument = graphql(`
     $id: ID!
     $title: String
     $artist: String
+    $albumArtist: String
     $album: String
     $trackNumber: Int
     $discNumber: Int
@@ -29,6 +30,7 @@ const TrackUpdateDocument = graphql(`
       id: $id
       title: $title
       artist: $artist
+      albumArtist: $albumArtist
       album: $album
       trackNumber: $trackNumber
       discNumber: $discNumber
@@ -43,6 +45,7 @@ export type EditableTrack = {
   id: string;
   title: string | null;
   artist: string | null;
+  albumArtist: string | null;
   album: string | null;
   trackNumber: number | null;
   discNumber: number | null;
@@ -50,11 +53,12 @@ export type EditableTrack = {
 };
 
 /** Fields editable for a single track. When several tracks are selected we restrict to those shared across an album. */
-type Field = 'title' | 'artist' | 'album' | 'trackNumber' | 'discNumber' | 'year';
+type Field = 'title' | 'artist' | 'albumArtist' | 'album' | 'trackNumber' | 'discNumber' | 'year';
 
 const SINGLE_FIELDS: { key: Field; label: string; numeric?: boolean }[] = [
   { key: 'title', label: 'Title' },
   { key: 'artist', label: 'Artist' },
+  { key: 'albumArtist', label: 'Album artist' },
   { key: 'album', label: 'Album' },
   { key: 'trackNumber', label: 'Track', numeric: true },
   { key: 'discNumber', label: 'CD', numeric: true },
@@ -62,6 +66,7 @@ const SINGLE_FIELDS: { key: Field; label: string; numeric?: boolean }[] = [
 ];
 const MULTI_FIELDS: { key: Field; label: string; numeric?: boolean }[] = [
   { key: 'artist', label: 'Artist' },
+  { key: 'albumArtist', label: 'Album artist' },
   { key: 'album', label: 'Album' },
   { key: 'discNumber', label: 'CD', numeric: true },
   { key: 'year', label: 'Year' },
@@ -183,7 +188,7 @@ export function TagEditDialog({
           }}
         >
           {fields.map(({ key, label, numeric }) => (
-            <label key={key} className="grid grid-cols-[80px_1fr] items-center gap-3 text-sm">
+            <label key={key} className="grid grid-cols-[96px_1fr] items-center gap-3 text-sm">
               <span className="text-muted-foreground">{label}</span>
               <Input
                 value={values[key] ?? ''}
