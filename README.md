@@ -91,7 +91,8 @@ cp .env.example .env.production   # then edit secrets
 scripts/deploy.sh --host my-server --nfs-host 10.0.0.2 --nfs-path /srv/dockercache
 ```
 
-`scripts/deploy.sh` builds and pushes `felamaslen/lofify:latest`, copies
+`scripts/deploy.sh` builds and pushes `felamaslen/lofify:latest` and
+`felamaslen/lofify-artwork-worker:latest`, copies
 `docker-compose.prod.yml` to `{directory}/docker-compose.yml` on the
 remote (default `/opt/lofify`), and copies `.env.production` to
 `{directory}/.env`. Backend listens on host port `4002`. Postgres data
