@@ -51,21 +51,31 @@ opens a settings dialog holding the appearance, library rescan, quality
 and preferred format controls (the latter two are pill toggles —
 `ToggleGroup`):
 
-- **Quality** — two modes. `Adaptive` transcodes to a lossy tier whose
+- **Quality** — three modes. `Adaptive` transcodes to a lossy tier whose
   bitrate is chosen automatically from the measured connection speed,
   switching tiers on the fly mid-track. `Original` asks for the best
   representation of the source the browser can play (lossless or a copy
-  where possible) and assumes the connection can sustain it. The wire
-  protocol is unchanged — `Original` requests the `MAX` tier, `Adaptive`
-  requests one of `MIN`/`LOW`/`MEDIUM`/`HIGH` picked at runtime.
+  where possible) and assumes the connection can sustain it. `Smart` (the
+  default) follows `Adaptive` for lossless sources but lets a lossy source
+  the browser can play through **verbatim** — like `Original`, so it's never
+  re-compressed — falling back to an adaptive transcode for a lossy source
+  the browser can't play. Its purpose is to avoid double-lossy playback
+  wherever possible. The wire protocol is unchanged — `Original` requests the
+  `MAX` tier, `Adaptive` and `Smart` request one of
+  `MIN`/`LOW`/`MEDIUM`/`HIGH` picked at runtime; `Smart` additionally sets the
+  `autoPassthrough` flag, which the server honours by copying a playable lossy
+  source through at full quality rather than transcoding it to that tier. The
+  player then reads back `delivery.isPassthrough` to know when a track came
+  through untouched and stops adapting it (a verbatim copy has a fixed bitrate
+  — there's no tier to climb).
 
-  In `Adaptive`, a bitrate step is a same-codec change, so it applies
-  **live mid-track**: the new bitrate splices into the existing buffer
-  with no gap, and already-buffered audio ahead of the playhead is
-  re-fetched at the new tier in the background (overwriting in place, so
-  playback never stalls) rather than waiting for the old buffer to drain.
-  Toggling between `Adaptive` and `Original` crosses a codec boundary, so
-  the player reloads at the current playback position.
+  In `Adaptive` (and a `Smart` track being transcoded), a bitrate step is a
+  same-codec change, so it applies **live mid-track**: the new bitrate splices
+  into the existing buffer with no gap, and already-buffered audio ahead of
+  the playhead is re-fetched at the new tier in the background (overwriting in
+  place, so playback never stalls) rather than waiting for the old buffer to
+  drain. Switching mode can cross a codec boundary, so the player reloads at
+  the current playback position.
 
   The adaptation is best-fit (`state/player.tsx`): downloads are timed
   body-only (first-byte→last-byte, excluding TTFB — the `/play` route blocks
@@ -95,9 +105,10 @@ and preferred format controls (the latter two are pill toggles —
     sensibly abort a healthy in-flight download to go up.
 
 - **Codec** — a _preference_ used only when the server has to transcode
-  (Adaptive, or a lossy source in Original with no matching copy): `Opus`
-  or `MP3`. In Original, sources are copied without re-encoding where
-  possible; in Adaptive everything is transcoded to this codec.
+  (Adaptive; a lossy source in Original or Smart with no matching copy; or a
+  lossless source in Smart): `Opus` or `MP3`. In Original, sources are copied
+  without re-encoding where possible; in Adaptive everything is transcoded to
+  this codec; Smart copies a playable lossy source and transcodes the rest.
 
 `capabilities.ts` probes `MediaSource.isTypeSupported` once per page load
 and exposes the supported formats as the preference-ordered
@@ -109,19 +120,24 @@ then streams chunk byte ranges via the `trackManifest` subscription (see the
 backend README). The format badge by the track title shows the resolved
 codec, distinguishing a copy (no re-encode) from a transcode, with
 `description` revealed by a `Hint` (hover tooltip on pointer devices, tap
-popover on touchscreens). When `delivery.isMultiLossy` is set — a lossy
-source re-encoded to a lossy output — an amber warning triangle sits to its
-left, flagging the extra generation of compression loss. MSE failures or
-unreachable endpoints raise a toast.
+popover on touchscreens). A leading icon names the active quality policy
+(`Gauge` for Adaptive, `Wand2` for Smart, `Disc3` for Original), so
+the badge says both _what_ is playing and _why_. When `delivery.isMultiLossy`
+is set — a lossy source re-encoded to a lossy output — a small amber warning
+triangle is overlaid on the policy icon's bottom-right corner, flagging the extra
+generation of compression loss. MSE failures or unreachable endpoints raise a
+toast.
 
 Each playback range response carries an `X-Quality` header naming the
 tier its bytes were encoded at. The player records it per fetched chunk
 and exposes the value under the playhead as `playingQuality`. The format
 badge shows this effective tier (falling back to `requestedTier` before
 the first chunk reports), and fades while the two disagree — i.e. during
-an on-the-fly switch whose old-quality buffer hasn't drained yet.
-(The backend must expose `X-Quality` via CORS `exposedHeaders` for
-cross-origin reads.)
+an on-the-fly switch whose old-quality buffer hasn't drained yet. A
+passthrough copy is exempt: the server serves it as `MAX` while the request
+carried a ladder tier, so the two never converge and that's the resting
+state, not a switch. (The backend must expose `X-Quality` via CORS
+`exposedHeaders` for cross-origin reads.)
 
 ## Visualiser
 

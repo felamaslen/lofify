@@ -27,7 +27,7 @@ never modified.
 containers (FLAC, ALAC, WAV…) versus lossy ones (MP3, Opus, Vorbis, AAC…).
 
 **Outputs.** What the player actually receives depends on the requested
-quality (`Adaptive` vs `Original`; see the
+quality (`Adaptive`, `Smart` or `Original`; see the
 [web README](packages/web/README.md#playback)) and on what the browser can
 decode, probed once via `MediaSource.isTypeSupported`:
 
@@ -38,6 +38,14 @@ decode, probed once via `MediaSource.isTypeSupported`:
   lossless source is delivered losslessly (FLAC) where supported; a lossy
   source is **copied verbatim** — a passthrough, no re-encode — when its
   codec is playable, and only transcoded as a last resort.
+- **Smart** (the default) follows **Adaptive** for lossless sources — where
+  the original is large and a lossy tier is the sensible choice — but lets a
+  lossy source the browser can play **through verbatim**, like **Original**,
+  so it is never compressed a second time. A lossy source the browser can't
+  play falls back to an adaptive transcode. The effect is to avoid
+  multi-lossy playback wherever possible. Mechanically it rides the adaptive
+  ladder but adds an `autoPassthrough` flag the server honours by copying a
+  playable lossy source through at full quality.
 
 The server only ever produces FLAC for lossless output and Opus or MP3 for
 lossy output; Vorbis is copied, never encoded. The exact resolution rules,
