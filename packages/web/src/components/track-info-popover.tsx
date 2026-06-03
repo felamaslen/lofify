@@ -2,10 +2,12 @@ import { Info } from 'lucide-react';
 
 import { type FragmentOf, graphql, readFragment } from '../lib/gql.ts';
 import { cn } from '../lib/utils.ts';
+import { ArtworkTile, useTrackArtwork } from './track-artwork.tsx';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover.tsx';
 
 export const TrackInfoDocument = graphql(`
   fragment TrackInfo on Track {
+    id
     format
     sourceFormat
     codecProfile
@@ -29,6 +31,23 @@ const dateFormat = new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeS
 function formatDate(iso: string): string {
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? iso : dateFormat.format(d);
+}
+
+/** Cover preview at the top of the popover. Fetched on open rather than carried by the list fragment, so the artwork resolver isn't fanned out to every visible row; the query key is shared with the playback bar's. */
+function PopoverArtwork({ trackId }: { trackId: string }) {
+  const { artwork, loading, download, downloadError } = useTrackArtwork(trackId, undefined, {
+    fetchOnMount: true,
+  });
+  return (
+    <ArtworkTile
+      artwork={artwork}
+      loading={loading}
+      download={download}
+      downloadError={downloadError}
+      className="aspect-square w-full"
+      iconClassName="size-6"
+    />
+  );
 }
 
 /** A source's codec plus its quality detail, e.g. "FLAC · 44.1 kHz · 16-bit" or "MP3 · 192 kbps · CBR". */
@@ -69,6 +88,7 @@ export function TrackInfoButton({ track }: { track: FragmentOf<typeof TrackInfoD
       </PopoverTrigger>
       <PopoverContent align="end" onClick={stop} onDoubleClick={stop} className="text-xs">
         <div className="grid gap-2">
+          <PopoverArtwork trackId={t.id} />
           <div className="flex items-center gap-2">
             <span className="font-medium uppercase tracking-wide">{t.format}</span>
             <span

@@ -16,6 +16,11 @@ enum Quality {
 }
 
 """
+Album art for a track: the downloaded image, or the state of a download that has not produced one.
+"""
+union TrackArtwork = Artwork | ArtworkStatus
+
+"""
 How the client wants the track delivered. The client advertises what it can decode as two preference-ordered MIME lists: `losslessFormats` (e.g. `audio/mp4; codecs="flac"`) and `lossyFormats` (e.g. `audio/webm; codecs="opus"`). `lossyFormats` must be non-empty.
 
 Below `MAX` the server transcodes into the first `lossyFormats` entry it can encode to (opus or mp3) at the requested bitrate. At `MAX` it picks the best representation of the source the client can play, copying without re-encoding whenever possible.
@@ -108,6 +113,27 @@ type ArtistSynonym {
   synonym: String!
 }
 
+"""A successfully downloaded album-art image."""
+type Artwork {
+  """Album the image was found for."""
+  album: String!
+  """Album artist the image was found for."""
+  albumArtist: String!
+  media: Media!
+}
+
+"""
+The state of an album-art download that has not (yet) produced an image.
+"""
+type ArtworkStatus {
+  """
+  Whether the download is queued or running. False means it failed and may be retried with `artworkDownload`.
+  """
+  inProgress: Boolean!
+  """Why the download failed, or an empty string while it is in progress."""
+  message: String!
+}
+
 """The expected bitrate of one adaptive quality tier for a track."""
 type DeliveryTier {
   """Nominal transcode bitrate in kbps."""
@@ -143,6 +169,12 @@ type LibraryScan {
   scannedTotal: Int!
 }
 
+"""A renderable media resource."""
+type Media {
+  """URL of the resource, relative to the API origin."""
+  url: String!
+}
+
 type Mutation {
   """
   Register `synonym` as an alternative name for `artist`. Throws when either is blank or the pair already exists.
@@ -156,6 +188,12 @@ type Mutation {
   Rename the synonym `synonym` of `artist` to `newSynonym`. Throws when `newSynonym` is blank, the original pair is unknown, or the renamed pair already exists.
   """
   artistSynonymUpdate(artist: String!, newSynonym: String!, synonym: String!): ArtistSynonym!
+  """
+  Request album art for a track's album. Upserts an `AlbumArt` row keyed on the track's effective album artist (falling back to its artist) and album — creating it PENDING, resetting a FAILED row to PENDING for a retry, and leaving an in-progress or succeeded row untouched — then links every track of the album to the row. The artwork worker processes PENDING rows asynchronously; poll `Track.artwork` for the result.
+  
+  Throws when the track does not exist or has no album or artist to search by.
+  """
+  artworkDownload(trackId: ID!): TrackArtwork!
   """
   Requests cancellation of the named in-progress scan. No-op when the scan is unknown or already completed.
   """
@@ -305,6 +343,10 @@ type Track {
   Alternative names registered for this track's effective artist, alphabetically. Empty when the track has no artist or none are registered.
   """
   artistSynonyms: [String!]!
+  """
+  Album art for this track's album: the image once downloaded, otherwise the download's status. Null when art has never been requested — request it with `Mutation.artworkDownload`.
+  """
+  artwork: TrackArtwork
   """
   Source bit depth in bits per sample, or null for lossy sources that have none.
   """

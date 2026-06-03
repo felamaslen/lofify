@@ -189,11 +189,32 @@ browsers suspend when hidden. (The visualiser's analyser context is a
 parallel tap that carries no audio, so it doesn't change this.)
 The `Player` (`state/player.tsx`) wires `navigator.mediaSession` so the OS
 treats us like a media app: it publishes track metadata (title, artist,
-album, with the app icon as stand-in artwork), keeps `playbackState` and the
-lock-screen scrub position in sync, and handles the hardware/lock-screen
+album, with the track's downloaded cover as artwork — the app icon when
+there is none), keeps `playbackState` and the lock-screen scrub position in
+sync, and handles the hardware/lock-screen
 `play`/`pause`/`previoustrack`/`nexttrack`/`seekto` controls. The Media
 Session handlers are what stop mobile platforms (iOS especially) from
 pausing hidden web audio.
+
+## Album art
+
+`components/track-artwork.tsx` owns the artwork UI: a colocated
+`TrackArtwork` fragment, a `useTrackArtwork` hook and the `ArtworkTile`
+renderer (cover image, spinner while a download runs, a download
+affordance when never requested, and a warning triangle on failure —
+the reason rides the tooltip, and clicking retries). Downloads
+are manual: clicking the tile calls `Mutation.artworkDownload` and the
+hook polls `Track.artwork` every 2s until the row resolves, sharing one
+TanStack Query key per track so no two consumers poll the same track
+twice.
+
+It surfaces in two places. The playback bar shows a 40px thumbnail next
+to the playing track's title (seeded by the fragment riding the
+player's track fetch, so the common case costs no extra request) and
+feeds the resolved cover to the Media Session as it lands. The track
+info popover shows a full-width preview, fetched lazily on open rather
+than carried by the list fragment — embedding artwork there would fan
+the resolver out to every visible row.
 
 ## Update indicator
 
