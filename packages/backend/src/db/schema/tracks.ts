@@ -28,6 +28,8 @@ export const tracks = pgTable(
     trackNumber: integer('trackNumber'),
     discNumber: integer('discNumber'),
     artist: text('artist'),
+    /** Artist credited for the whole album (e.g. "Various Artists" on a compilation). Null when the file carries no album-artist tag. */
+    albumArtist: text('albumArtist'),
     album: text('album'),
     year: text('year'),
     /** User-supplied title that takes precedence over the scanned `title`. Preserved across rescans; null means fall back to the scanned tag, an empty string blanks the field. */
@@ -38,6 +40,8 @@ export const tracks = pgTable(
     discNumberOverride: integer('discNumberOverride'),
     /** User-supplied artist that takes precedence over the scanned `artist`. Preserved across rescans; null means fall back to the scanned tag, an empty string blanks the field. */
     artistOverride: text('artistOverride'),
+    /** User-supplied album artist that takes precedence over the scanned `albumArtist`. Preserved across rescans; null means fall back to the scanned tag, an empty string blanks the field. */
+    albumArtistOverride: text('albumArtistOverride'),
     /** User-supplied album that takes precedence over the scanned `album`. Preserved across rescans; null means fall back to the scanned tag, an empty string blanks the field. */
     albumOverride: text('albumOverride'),
     /** User-supplied year that takes precedence over the scanned `year`. Preserved across rescans; null means fall back to the scanned tag, an empty string blanks the field. */
