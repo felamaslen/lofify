@@ -23,6 +23,8 @@ src/
   playback/     `/play/...` HTTP route, HMAC-signed URLs, unified
                 per-entry encoded cache (.bin + .idx live-tail), and
                 ffmpeg encoder.
+  artwork/      `/artwork/:id` HTTP route serving downloaded album-art
+                images from the disk cache.
   test/         Vitest behavioural tests driven by fastify.inject.
 ```
 
@@ -153,6 +155,30 @@ effective artist. `Mutation.artistSynonym{Create,Update,Delete}` manage
 them; create/update reject blank or colliding pairs, delete is
 idempotent.
 
+## Album art
+
+Album art is downloaded on demand, once per album. `Mutation.
+artworkDownload(trackId)` upserts an `AlbumArt` row keyed on the
+track's effective album artist (falling back to its artist) and album —
+re-reading the file's album-artist tag first when the row predates the
+`albumArtist` column — and links every track of that album to the row
+via `Tracks.albumArtId`. The FK is what ties a track to its art, so
+later tag edits never detach it; the `(albumArtist, album)` pair on the
+row is only a snapshot of the search terms.
+
+Rows move `PENDING → IN_PROGRESS → SUCCEEDED | FAILED`. An insert or
+reset to PENDING fires a `pg_notify` on the `album_art_pending` channel
+(trigger `AlbumArt_pending_notify`, declared via `pgCustomSQL` in the
+schema) which wakes the artwork worker (`packages/artwork-worker`); the
+worker also poll-sweeps, so a missed notification only delays the
+download. Successful images land in `DISK_CACHE_DIR/artwork/<id>.jpg`
+and are served by `GET /artwork/:id`.
+
+`Track.artwork` resolves the linked row into a `TrackArtwork` union:
+`Artwork` (the image) or `ArtworkStatus` (`inProgress`, or a failure
+`message` when `inProgress` is false — retry by calling
+`artworkDownload` again). Null means art was never requested.
+
 ## Endpoints
 
 - `GET /healthz` — liveness probe; returns `{ "status": "ok" }`.
@@ -161,6 +187,10 @@ idempotent.
   [`graphql-sse`](https://github.com/enisdenjo/graphql-sse)
   (distinct-connections mode). Send a `subscription` operation with
   `Accept: text/event-stream`.
+- `GET /artwork/:id` — downloaded album-art image for an `AlbumArt`
+  row, served from `DISK_CACHE_DIR/artwork/<id>.jpg` with an immutable
+  cache header (a new download is a new row, hence a new URL). 404 for
+  ids with no image yet.
 
 ### Playback
 

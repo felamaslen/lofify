@@ -2,7 +2,11 @@ import { and, asc, eq, ne } from 'drizzle-orm';
 import type { ID, Int } from 'grats';
 
 import { db } from '../db/client.js';
-import { type Track as DbTrack, tracks as tracksTable } from '../db/schema/index.js';
+import {
+  albumArt as albumArtTable,
+  type Track as DbTrack,
+  tracks as tracksTable,
+} from '../db/schema/index.js';
 import {
   contentTypeFor,
   deliveryDescription,
@@ -12,6 +16,7 @@ import {
   tierBitratesKbps,
 } from '../playback/resolve.js';
 import { signPlaybackUrl } from '../playback/sign.js';
+import { toTrackArtwork, type TrackArtwork } from './artwork.js';
 import { abbreviateCodec, deriveFormat } from './codec.js';
 import { Duration } from './duration.js';
 import { Quality, type TrackFormat } from './playback-format.js';
@@ -69,6 +74,8 @@ export type Track = {
   sourceMtime: Date;
   /** Id of the canonical track of this row's duplicate group, or null when it has no duplicate. Internal — resolves `duplicates`. */
   dedupGroupId: string | null;
+  /** Id of the `AlbumArt` row this track's album is linked to, or null when art has never been requested. Internal — resolves `artwork`. */
+  albumArtId: string | null;
 };
 
 const DEFAULT_FORMAT: TrackFormat = {
@@ -168,6 +175,21 @@ export async function duplicates(track: Track): Promise<Track[]> {
   return rows.map(toGqlTrack);
 }
 
+/**
+ * Album art for this track's album: the image once downloaded, otherwise the download's status. Null when art has never been requested — request it with `Mutation.artworkDownload`.
+ *
+ * @gqlField
+ */
+export async function artwork(track: Track): Promise<TrackArtwork | null> {
+  if (track.albumArtId == null) return null;
+  const rows = await db
+    .select()
+    .from(albumArtTable)
+    .where(eq(albumArtTable.id, track.albumArtId))
+    .limit(1);
+  return rows[0] ? toTrackArtwork(rows[0]) : null;
+}
+
 /** Whether two timestamps fall on the same calendar date (UTC). */
 function sameDate(a: Date, b: Date): boolean {
   return a.toISOString().slice(0, 10) === b.toISOString().slice(0, 10);
@@ -203,5 +225,6 @@ export function toGqlTrack(row: DbTrack): Track {
     file: row.file,
     sourceMtime: row.sourceMtime,
     dedupGroupId: row.trackIdDeduplicated,
+    albumArtId: row.albumArtId,
   };
 }

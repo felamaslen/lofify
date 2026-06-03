@@ -3,13 +3,15 @@
  * Do not manually edit. Regenerate by running `npx grats`.
  */
 
-import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, GraphQLInt, specifiedDirectives, GraphQLObjectType, GraphQLList, GraphQLString, GraphQLBoolean, GraphQLID, GraphQLEnumType, GraphQLInputObjectType, GraphQLFloat } from "graphql";
+import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, GraphQLInt, specifiedDirectives, GraphQLObjectType, GraphQLList, GraphQLString, GraphQLBoolean, GraphQLID, GraphQLUnionType, GraphQLEnumType, GraphQLInputObjectType, GraphQLFloat } from "graphql";
 import { artistIndex as queryArtistIndexResolver, track as queryTrackResolver, tracks as queryTracksResolver } from "./../track-queries.js";
 import { isUpdateAvailable as queryIsUpdateAvailableResolver, ping as queryPingResolver, noop as mutationNoopResolver } from "./../root.js";
 import { libraryScan as queryLibraryScanResolver, libraryScanCancel as mutationLibraryScanCancelResolver, libraryScanStart as mutationLibraryScanStartResolver, libraryScanSubscription as subscriptionLibraryScanResolver } from "./../library-scan.js";
 import { artistSynonyms as trackArtistSynonymsResolver, artistSynonymCreate as mutationArtistSynonymCreateResolver, artistSynonymDelete as mutationArtistSynonymDeleteResolver, artistSynonymUpdate as mutationArtistSynonymUpdateResolver } from "./../artist-synonyms.js";
-import { delivery as trackDeliveryResolver, duplicates as trackDuplicatesResolver, path as trackPathResolver, url as trackUrlResolver } from "./../track.js";
+import { Artwork as ArtworkClass, ArtworkStatus as ArtworkStatusClass } from "./../artwork.js";
+import { artwork as trackArtworkResolver, delivery as trackDeliveryResolver, duplicates as trackDuplicatesResolver, path as trackPathResolver, url as trackUrlResolver } from "./../track.js";
 import { search as querySearchResolver } from "./../search.js";
+import { artworkDownload as mutationArtworkDownloadResolver } from "./../artwork-mutations.js";
 import { trackUpdate as mutationTrackUpdateResolver } from "./../track-mutations.js";
 import { trackManifestSubscription as subscriptionTrackManifestResolver } from "./../track-manifest.js";
 export function getSchema(): GraphQLSchema {
@@ -167,6 +169,67 @@ export function getSchema(): GraphQLSchema {
             };
         }
     });
+    const MediaType: GraphQLObjectType = new GraphQLObjectType({
+        name: "Media",
+        description: "A renderable media resource.",
+        fields() {
+            return {
+                url: {
+                    description: "URL of the resource, relative to the API origin.",
+                    name: "url",
+                    type: new GraphQLNonNull(GraphQLString)
+                }
+            };
+        }
+    });
+    const ArtworkType: GraphQLObjectType = new GraphQLObjectType({
+        name: "Artwork",
+        description: "A successfully downloaded album-art image.",
+        fields() {
+            return {
+                album: {
+                    description: "Album the image was found for.",
+                    name: "album",
+                    type: new GraphQLNonNull(GraphQLString)
+                },
+                albumArtist: {
+                    description: "Album artist the image was found for.",
+                    name: "albumArtist",
+                    type: new GraphQLNonNull(GraphQLString)
+                },
+                media: {
+                    name: "media",
+                    type: new GraphQLNonNull(MediaType)
+                }
+            };
+        }
+    });
+    const ArtworkStatusType: GraphQLObjectType = new GraphQLObjectType({
+        name: "ArtworkStatus",
+        description: "The state of an album-art download that has not (yet) produced an image.",
+        fields() {
+            return {
+                inProgress: {
+                    description: "Whether the download is queued or running. False means it failed and may be retried with `artworkDownload`.",
+                    name: "inProgress",
+                    type: new GraphQLNonNull(GraphQLBoolean)
+                },
+                message: {
+                    description: "Why the download failed, or an empty string while it is in progress.",
+                    name: "message",
+                    type: new GraphQLNonNull(GraphQLString)
+                }
+            };
+        }
+    });
+    const TrackArtworkType: GraphQLUnionType = new GraphQLUnionType({
+        name: "TrackArtwork",
+        description: "Album art for a track: the downloaded image, or the state of a download that has not produced one.",
+        types() {
+            return [ArtworkType, ArtworkStatusType];
+        },
+        resolveType
+    });
     const QualityType: GraphQLEnumType = new GraphQLEnumType({
         description: "Coarse playback quality. `MIN` / `LOW` / `MEDIUM` / `HIGH` ask for a transcode at an ascending bitrate; `MAX` delivers the best representation of the source the client can play, copying without re-encoding whenever possible.",
         name: "Quality",
@@ -311,6 +374,14 @@ export function getSchema(): GraphQLSchema {
                     type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(GraphQLString))),
                     resolve(source) {
                         return trackArtistSynonymsResolver(source);
+                    }
+                },
+                artwork: {
+                    description: "Album art for this track's album: the image once downloaded, otherwise the download's status. Null when art has never been requested \u2014 request it with `Mutation.artworkDownload`.",
+                    name: "artwork",
+                    type: TrackArtworkType,
+                    resolve(source) {
+                        return trackArtworkResolver(source);
                     }
                 },
                 bitDepth: {
@@ -726,6 +797,19 @@ export function getSchema(): GraphQLSchema {
                         return mutationArtistSynonymUpdateResolver(args.artist, args.synonym, args.newSynonym);
                     }
                 },
+                artworkDownload: {
+                    description: "Request album art for a track's album. Upserts an `AlbumArt` row keyed on the track's effective album artist (falling back to its artist) and album \u2014 creating it PENDING, resetting a FAILED row to PENDING for a retry, and leaving an in-progress or succeeded row untouched \u2014 then links every track of the album to the row. The artwork worker processes PENDING rows asynchronously; poll `Track.artwork` for the result.\n\nThrows when the track does not exist or has no album or artist to search by.",
+                    name: "artworkDownload",
+                    type: new GraphQLNonNull(TrackArtworkType),
+                    args: {
+                        trackId: {
+                            type: new GraphQLNonNull(GraphQLID)
+                        }
+                    },
+                    resolve(_source, args) {
+                        return mutationArtworkDownloadResolver(args.trackId);
+                    }
+                },
                 libraryScanCancel: {
                     description: "Requests cancellation of the named in-progress scan. No-op when the scan is unknown or already completed.",
                     name: "libraryScanCancel",
@@ -927,6 +1011,23 @@ export function getSchema(): GraphQLSchema {
         query: QueryType,
         mutation: MutationType,
         subscription: SubscriptionType,
-        types: [QualityType, TrackFormatType, AlbumType, AlbumConnectionType, AlbumEdgeType, ArtistType, ArtistConnectionType, ArtistEdgeType, ArtistInitialType, ArtistSynonymType, DeliveryTierType, DurationType, LibraryScanType, MutationType, PageInfoType, QueryType, SearchType, SubscriptionType, TrackType, TrackConnectionType, TrackDeliveryType, TrackEdgeType, TrackManifestType, TrackManifestChunkType, TrackManifestInitType, VoidType]
+        types: [QualityType, TrackArtworkType, TrackFormatType, AlbumType, AlbumConnectionType, AlbumEdgeType, ArtistType, ArtistConnectionType, ArtistEdgeType, ArtistInitialType, ArtistSynonymType, ArtworkType, ArtworkStatusType, DeliveryTierType, DurationType, LibraryScanType, MediaType, MutationType, PageInfoType, QueryType, SearchType, SubscriptionType, TrackType, TrackConnectionType, TrackDeliveryType, TrackEdgeType, TrackManifestType, TrackManifestChunkType, TrackManifestInitType, VoidType]
     });
+}
+const typeNameMap = new Map();
+typeNameMap.set(ArtworkClass, "Artwork");
+typeNameMap.set(ArtworkStatusClass, "ArtworkStatus");
+function resolveType(obj: any): string {
+    if (typeof obj.__typename === "string") {
+        return obj.__typename;
+    }
+    let prototype = Object.getPrototypeOf(obj);
+    while (prototype) {
+        const name = typeNameMap.get(prototype.constructor);
+        if (name != null) {
+            return name;
+        }
+        prototype = Object.getPrototypeOf(prototype);
+    }
+    throw new Error("Cannot find type name.");
 }
