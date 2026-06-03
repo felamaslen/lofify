@@ -296,6 +296,11 @@ export function getSchema(): GraphQLSchema {
                     name: "album",
                     type: GraphQLString
                 },
+                albumArtist: {
+                    description: "Artist credited for the whole album (e.g. \"Various Artists\" on a compilation). Null when the track carries no album-artist tag.",
+                    name: "albumArtist",
+                    type: GraphQLString
+                },
                 artist: {
                     name: "artist",
                     type: GraphQLString
@@ -763,6 +768,9 @@ export function getSchema(): GraphQLSchema {
                         album: {
                             type: GraphQLString
                         },
+                        albumArtist: {
+                            type: GraphQLString
+                        },
                         artist: {
                             type: GraphQLString
                         },
@@ -783,7 +791,7 @@ export function getSchema(): GraphQLSchema {
                         }
                     },
                     resolve(_source, args) {
-                        return mutationTrackUpdateResolver(args.id, args.title, args.trackNumber, args.discNumber, args.artist, args.album, args.year);
+                        return mutationTrackUpdateResolver(args.id, args.title, args.trackNumber, args.discNumber, args.artist, args.albumArtist, args.album, args.year);
                     }
                 }
             };

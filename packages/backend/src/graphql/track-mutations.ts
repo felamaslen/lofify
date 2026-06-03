@@ -21,6 +21,7 @@ export async function trackUpdate(
   trackNumber?: Int | null,
   discNumber?: Int | null,
   artist?: string | null,
+  albumArtist?: string | null,
   album?: string | null,
   year?: string | null,
 ): Promise<Track> {
@@ -29,6 +30,7 @@ export async function trackUpdate(
   if (trackNumber !== undefined) set.trackNumberOverride = trackNumber;
   if (discNumber !== undefined) set.discNumberOverride = discNumber;
   if (artist !== undefined) set.artistOverride = artist;
+  if (albumArtist !== undefined) set.albumArtistOverride = albumArtist;
   if (album !== undefined) set.albumOverride = album;
   if (year !== undefined) set.yearOverride = year;
 

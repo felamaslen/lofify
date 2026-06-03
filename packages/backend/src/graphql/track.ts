@@ -35,6 +35,8 @@ export type Track = {
   discNumber: Int | null;
   /** @gqlField */
   artist: string | null;
+  /** Artist credited for the whole album (e.g. "Various Artists" on a compilation). Null when the track carries no album-artist tag. @gqlField */
+  albumArtist: string | null;
   /** @gqlField */
   album: string | null;
   /** @gqlField */
@@ -172,7 +174,7 @@ function sameDate(a: Date, b: Date): boolean {
 }
 
 /** Resolve a text override against its scanned tag: an empty-string override means the user explicitly blanked the field (effective value `null`), a null override falls back to the scanned tag. */
-function applyOverride(override: string | null, scanned: string | null): string | null {
+export function applyOverride(override: string | null, scanned: string | null): string | null {
   if (override === '') return null;
   return override ?? scanned;
 }
@@ -184,6 +186,7 @@ export function toGqlTrack(row: DbTrack): Track {
     trackNumber: row.trackNumberOverride ?? row.trackNumber,
     discNumber: row.discNumberOverride ?? row.discNumber,
     artist: applyOverride(row.artistOverride, row.artist),
+    albumArtist: applyOverride(row.albumArtistOverride, row.albumArtist),
     album: applyOverride(row.albumOverride, row.album),
     year: applyOverride(row.yearOverride, row.year),
     format: deriveFormat(row.format, row.codec),

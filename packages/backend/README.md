@@ -80,7 +80,8 @@ the resolver runs.
 ## Tag overrides
 
 Each editable tag on `Tracks` (`title`, `trackNumber`, `discNumber`,
-`artist`, `album`, `year`) has a nullable `*Override` sibling column.
+`artist`, `albumArtist`, `album`, `year`) has a nullable `*Override`
+sibling column.
 `Mutation.trackUpdate(id, ...)` writes the supplied tags to those
 override columns; omit an argument to leave its override untouched, or
 pass an explicit `null` to clear it. The scanner only writes the base

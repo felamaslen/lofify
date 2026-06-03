@@ -175,7 +175,7 @@ type Mutation {
   
   Throws when no track with the given id exists.
   """
-  trackUpdate(album: String, artist: String, discNumber: Int, id: ID!, title: String, trackNumber: Int, year: String): Track!
+  trackUpdate(album: String, albumArtist: String, artist: String, discNumber: Int, id: ID!, title: String, trackNumber: Int, year: String): Track!
 }
 
 """Boundary metadata for a `TrackConnection`."""
@@ -296,6 +296,10 @@ type Subscription {
 """A single audio file in the library."""
 type Track {
   album: String
+  """
+  Artist credited for the whole album (e.g. "Various Artists" on a compilation). Null when the track carries no album-artist tag.
+  """
+  albumArtist: String
   artist: String
   """
   Alternative names registered for this track's effective artist, alphabetically. Empty when the track has no artist or none are registered.

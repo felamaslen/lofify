@@ -17,6 +17,7 @@ async function seedOne() {
     trackNumber: 3,
     discNumber: 1,
     artist: 'Scanned Artist',
+    albumArtist: 'Scanned Album Artist',
     album: 'Scanned Album',
     year: '1999',
     format: 'mp3',
@@ -36,6 +37,7 @@ const TrackUpdateMutation = graphql(`
     $id: ID!
     $title: String
     $artist: String
+    $albumArtist: String
     $album: String
     $trackNumber: Int
     $discNumber: Int
@@ -45,6 +47,7 @@ const TrackUpdateMutation = graphql(`
       id: $id
       title: $title
       artist: $artist
+      albumArtist: $albumArtist
       album: $album
       trackNumber: $trackNumber
       discNumber: $discNumber
@@ -53,6 +56,7 @@ const TrackUpdateMutation = graphql(`
       id
       title
       artist
+      albumArtist
       album
       trackNumber
       discNumber
@@ -85,6 +89,7 @@ test('Mutation.trackUpdate overrides supplied tags and leaves omitted ones scann
   expect(data.trackUpdate).toMatchInlineSnapshot(`
     {
       "album": "Scanned Album",
+      "albumArtist": "Scanned Album Artist",
       "artist": "New Artist",
       "discNumber": 1,
       "id": "01934567-89ab-7cde-8123-456789abcdef",
@@ -109,6 +114,28 @@ test('Mutation.trackUpdate with explicit null clears an override back to the sca
     .expectNoErrors();
 
   expect(cleared.trackUpdate.artist).toBe('Scanned Artist');
+});
+
+test('Mutation.trackUpdate overrides and clears albumArtist like other text tags', async () => {
+  await seedOne();
+
+  const { data: overridden } = await gqlRequest(app)
+    .mutate(TrackUpdateMutation)
+    .variables({ id, albumArtist: 'Various Artists' })
+    .expectNoErrors();
+  expect(overridden.trackUpdate.albumArtist).toBe('Various Artists');
+
+  const { data: blanked } = await gqlRequest(app)
+    .mutate(TrackUpdateMutation)
+    .variables({ id, albumArtist: '' })
+    .expectNoErrors();
+  expect(blanked.trackUpdate.albumArtist).toBeNull();
+
+  const { data: cleared } = await gqlRequest(app)
+    .mutate(TrackUpdateMutation)
+    .variables({ id, albumArtist: null })
+    .expectNoErrors();
+  expect(cleared.trackUpdate.albumArtist).toBe('Scanned Album Artist');
 });
 
 test('Mutation.trackUpdate persists overrides across a fresh read', async () => {
