@@ -59,6 +59,9 @@ export type QueuedTrack = {
 
 const bitsPerSecond = (bytes: number, ms: number): number => (bytes * 8000) / ms;
 
+/** Whether a track's bytes belong in the chunk cache. Lossless (FLAC) deliveries are excluded — at lossless bitrates a handful of albums would churn the entire byte budget, evicting far more replayable lossy audio than they're worth. */
+const isCacheableContentType = (contentType: string): boolean => !/flac/i.test(contentType);
+
 /** Construction-time hooks; all optional. */
 export type CreatePlayerOptions = {
   /** Called with the `X-Quality` of the bytes under the playhead whenever it changes. Trails the requested tier mid-swap until the old-quality buffer drains. `null` before any chunk under the playhead has been fetched. */
@@ -845,7 +848,13 @@ export class MsePlayer {
     const ctrl = new AbortController();
     this.pending.set(key, ctrl);
     try {
-      const res = await this.fetchRange(entry.url, init.byteStart, init.byteEnd, ctrl.signal);
+      const res = await this.fetchRange(
+        entry.url,
+        init.byteStart,
+        init.byteEnd,
+        entry.contentType,
+        ctrl.signal,
+      );
       if (!res || this.disposed || ctrl.signal.aborted) return;
       entry.initBytes = res.data;
       this.appendQueue.unshift({
@@ -874,6 +883,7 @@ export class MsePlayer {
         entry.url,
         chunk.byteStart,
         chunk.byteEnd,
+        entry.contentType,
         ctrl.signal,
         this.options.onTransfer,
       );
@@ -893,16 +903,20 @@ export class MsePlayer {
     }
   }
 
-  /** Issue a HTTP `Range` request and stream the response. Returns the body bytes and the `X-Quality` header. The IndexedDB chunk cache is consulted first — the browser's HTTP cache never stores these 206 responses, so re-use across replays and PWA launches has to be explicit. A cache hit fires no `onTransfer` samples (a disk read would feed the ABR controller an absurd rate); a network response the server marked immutable is stored for next time. When `onTransfer` is supplied (chunk fetches only — init segments skip it), fires periodic mid-flight rate samples once `TRANSFER_MIN_MS` of body has been read (so TCP slow-start doesn't distort the first reading), then a final sample with `chunkFinished = true`. */
+  /** Issue a HTTP `Range` request and stream the response. Returns the body bytes and the `X-Quality` header. The IndexedDB chunk cache is consulted first — the browser's HTTP cache never stores these 206 responses, so re-use across replays and PWA launches has to be explicit. A cache hit fires no `onTransfer` samples (a disk read would feed the ABR controller an absurd rate); a network response the server marked immutable is stored for next time. Lossless deliveries bypass the cache entirely (see `isCacheableContentType`). When `onTransfer` is supplied (chunk fetches only — init segments skip it), fires periodic mid-flight rate samples once `TRANSFER_MIN_MS` of body has been read (so TCP slow-start doesn't distort the first reading), then a final sample with `chunkFinished = true`. */
   private async fetchRange(
     url: string,
     byteStart: number,
     byteEnd: number,
+    contentType: string,
     signal: AbortSignal,
     onTransfer?: (bitsPerSecond: number, chunkFinished: boolean) => void,
   ): Promise<{ data: Uint8Array; quality: string | null } | null> {
-    const cached = await readCachedChunk(url, byteStart, byteEnd);
-    if (cached) return cached;
+    const mayCache = isCacheableContentType(contentType);
+    if (mayCache) {
+      const cached = await readCachedChunk(url, byteStart, byteEnd);
+      if (cached) return cached;
+    }
     try {
       const res = await fetch(url, {
         signal,
@@ -910,7 +924,8 @@ export class MsePlayer {
       });
       if (!res.ok) return null;
       const quality = res.headers.get('X-Quality');
-      const cacheable = res.headers.get('Cache-Control')?.includes('immutable') ?? false;
+      const cacheable =
+        mayCache && (res.headers.get('Cache-Control')?.includes('immutable') ?? false);
       // Stream the body so we can time first-byte → last-byte (line speed) rather than including
       // the request's TTFB, which on this route is dominated by encode-wait, not the network.
       const reader = res.body?.getReader();

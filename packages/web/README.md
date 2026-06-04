@@ -147,7 +147,10 @@ by slicing a complete cached body, which never exists because the player
 only ever fetches ranges. Entries are keyed by signed URL + byte range
 (so each tier caches separately), only responses the server marks
 `immutable` are stored, and the cache is capped at 250 MB with
-oldest-first eviction. A cache hit produces no ABR transfer sample — a
+oldest-first eviction. Lossless (FLAC) deliveries bypass the cache
+entirely — at lossless bitrates a handful of albums would churn the
+whole budget, evicting far more replayable lossy audio than they're
+worth. A cache hit produces no ABR transfer sample — a
 disk read would register as near-infinite bandwidth — so adaptation only
 reacts to real network fetches.
 
