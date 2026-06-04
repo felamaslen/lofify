@@ -153,13 +153,11 @@ export function TagEditDialog({
         await Promise.all(
           tracks.map((t) => gqlRequest(TrackUpdateDocument, { id: t.id, ...changes })),
         );
-        // The list reads from these keys; editing artist/album can also shift the
-        // counts and the letter index, so refresh all three.
-        await Promise.all([
-          queryClient.invalidateQueries({ queryKey: ['tracks-window'] }),
-          queryClient.invalidateQueries({ queryKey: ['tracks-count'] }),
-          queryClient.invalidateQueries({ queryKey: ['artist-index'] }),
-        ]);
+        // A tag edit can touch anything that renders track data — the list windows
+        // and counts, the letter index, search, the playing track's metadata —
+        // so invalidate everything rather than maintain a key list that rots.
+        // Edits are rare enough that the blanket refetch is cheap.
+        await queryClient.invalidateQueries();
       }
       onOpenChange(false);
     } catch (err) {

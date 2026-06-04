@@ -1,4 +1,4 @@
-import { useSuspenseQuery } from '@tanstack/react-query';
+import { useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
 import { X } from 'lucide-react';
 import { useRef } from 'react';
 
@@ -71,12 +71,13 @@ function HomeLayout() {
   // The view the page opened on, captured once: filter changes mustn't re-run
   // (and so re-suspend) the bootstrap — they fetch their own data in the list.
   const { current: opening } = useRef({ artist, album, showDuplicates });
+  const queryClient = useQueryClient();
   // Seeds the cache for the track list's first page/index and the update
   // indicator. Runs regardless of the visualiser so the flag stays current.
   useSuspenseQuery({
     queryKey: ['home', GIT_SHA, opening.artist, opening.album, opening.showDuplicates],
-    queryFn: ({ signal }) =>
-      gqlRequest(
+    queryFn: async ({ signal }) => {
+      const data = await gqlRequest(
         HomeDocument,
         {
           offset: 0,
@@ -87,7 +88,18 @@ function HomeLayout() {
           includeDuplicates: opening.showDuplicates,
         },
         signal,
-      ),
+      );
+      // Decompose the bootstrap into the track list's own query keys so the
+      // opening view renders from cache without refetching. The list owns these
+      // keys — and crucially their refetching — from here on, so invalidation
+      // anywhere (tag edits, scans) just works; nothing observes this query's
+      // data for track content.
+      const view = [opening.artist, opening.album, opening.showDuplicates];
+      queryClient.setQueryData(['tracks-window', ...view, 0], { tracks: data.tracks });
+      queryClient.setQueryData(['tracks-count', ...view], { tracks: data.tracks });
+      queryClient.setQueryData(['artist-index', ...view], data);
+      return data;
+    },
   });
   return (
     <div className="flex min-h-screen flex-col">

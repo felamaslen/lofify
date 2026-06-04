@@ -138,8 +138,9 @@ export function RescanButton() {
           },
           complete: () => {
             unsubRef.current = null;
-            void queryClient.invalidateQueries({ queryKey: ['libraryScan', 'current'] });
-            void queryClient.invalidateQueries({ queryKey: ['tracks'] });
+            // A finished scan can change any track data anywhere; invalidate everything
+            // (the previous ['tracks'] key matched no query at all, so the list never refreshed).
+            void queryClient.invalidateQueries();
           },
         },
       );

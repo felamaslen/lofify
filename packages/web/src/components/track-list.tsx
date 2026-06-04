@@ -1,4 +1,4 @@
-import { skipToken, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useWindowVirtualizer } from '@tanstack/react-virtual';
 import { readFragment } from 'gql.tada';
 import { type MouseEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -7,7 +7,6 @@ import { useIsMobile } from '../hooks/use-is-mobile.ts';
 import { type FragmentOf, graphql, type ResultOf } from '../lib/gql.ts';
 import { gqlRequest } from '../lib/gql-request.ts';
 import { cn } from '../lib/utils.ts';
-import { GIT_SHA } from '../lib/version.ts';
 import { useLibraryFilter } from '../state/library-filter.tsx';
 import { TrackByIdDocument, trackFormatFor, usePlayer } from '../state/player.tsx';
 import { useShowDuplicates } from '../state/show-duplicates.tsx';
@@ -152,11 +151,6 @@ const ArtistIndexQueryDocument = graphql(
 
 type WindowEdge = ResultOf<typeof TrackWindowDocument>['edges'][number];
 
-/** Shape of the home bootstrap query's cached result (see `routes/home.tsx`), read here to seed the opening view: its `tracks` is the same `TrackWindow` fragment the window queries select, and it carries the `ArtistIndex` fragment at the root. */
-type HomeData = FragmentOf<typeof ArtistIndexDocument> & {
-  tracks: ResultOf<typeof TracksWindowDocument>['tracks'];
-};
-
 /** Unmask a track connection selected via the `TrackWindow` fragment. */
 function readWindow(
   connection: ResultOf<typeof TracksWindowDocument>['tracks'] | undefined,
@@ -191,22 +185,13 @@ export function TrackList() {
   const filterArtistIn = artist ? [artist] : null;
   const filterAlbumIn = album ? [album] : null;
 
-  // The home bootstrap query (`routes/home.tsx`) loads the first page + artist
-  // index for the view the page opened on, whatever its filters. We seed from it
-  // (read-only observer, never fetches) while the current filters still match
-  // that opening view — a cache hit on this key — and fetch our own data once
-  // they diverge.
-  const home = useQuery<HomeData>({
-    queryKey: ['home', GIT_SHA, artist, album, showDuplicates],
-    queryFn: skipToken,
-  });
-  const seeded = home.data !== undefined;
-
   // A cheap, stable source of the total — independent of which windows are loaded — so the
   // virtualizer's row count (and thus the scrollbar range) never collapses while paging.
+  // The home bootstrap (`routes/home.tsx`) seeds this key for the opening view, so the
+  // staleTime keeps the seed from being refetched straight back on mount.
   const countQuery = useQuery({
     queryKey: ['tracks-count', artist, album, showDuplicates],
-    enabled: !seeded,
+    staleTime: 30_000,
     queryFn: ({ signal }) =>
       gqlRequest(
         TracksWindowDocument,
@@ -214,14 +199,12 @@ export function TrackList() {
         signal,
       ),
   });
-  const totalCount =
-    (seeded ? readWindow(home.data?.tracks) : readWindow(countQuery.data?.tracks))?.totalCount ?? 0;
+  const totalCount = readWindow(countQuery.data?.tracks)?.totalCount ?? 0;
 
-  // Only refetched when the key (filters) changes — never on mount or focus. The
-  // opening view's index is seeded from the home bootstrap query instead.
+  // Only refetched when the key (filters) changes or it is invalidated — never on
+  // focus. The opening view's index is seeded by the home bootstrap.
   const indexQuery = useQuery({
     queryKey: ['artist-index', artist, album, showDuplicates],
-    enabled: !seeded,
     staleTime: Infinity,
     queryFn: ({ signal }) =>
       gqlRequest(
@@ -230,10 +213,7 @@ export function TrackList() {
         signal,
       ),
   });
-  const buckets = useMemo(
-    () => readIndex(seeded ? home.data : indexQuery.data)?.artistIndex ?? [],
-    [seeded, home.data, indexQuery.data],
-  );
+  const buckets = useMemo(() => readIndex(indexQuery.data)?.artistIndex ?? [], [indexQuery.data]);
 
   const spacerRef = useRef<HTMLDivElement | null>(null);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -285,9 +265,8 @@ export function TrackList() {
 
   const windowResults = useQueries({
     queries: pageIndexes.map((p) => ({
+      // Page 0 of the opening view is seeded by the home bootstrap query.
       queryKey: ['tracks-window', artist, album, showDuplicates, p],
-      // Page 0 of the initial view is already loaded by the home bootstrap query.
-      enabled: !(seeded && p === 0),
       queryFn: ({ signal }: { signal: AbortSignal }) =>
         gqlRequest(
           TracksWindowDocument,
@@ -306,8 +285,7 @@ export function TrackList() {
 
   const rowsByIndex = new Map<number, WindowEdge>();
   pageIndexes.forEach((p, i) => {
-    const connection = seeded && p === 0 ? home.data?.tracks : windowResults[i]?.data?.tracks;
-    const edges = readWindow(connection)?.edges ?? [];
+    const edges = readWindow(windowResults[i]?.data?.tracks)?.edges ?? [];
     edges.forEach((edge, j) => rowsByIndex.set(p * PAGE_SIZE + j, edge));
   });
 
@@ -395,16 +373,16 @@ export function TrackList() {
   // labels nor the source badge slide under the letters.
   const showScrubber = buckets.length > 1;
 
-  // A seeded view already has its data (the home bootstrap resolved before this
-  // rendered); otherwise the count query drives the loading/error state.
-  if (!seeded && countQuery.isError) {
+  // The count query drives the loading/error state; the opening view never shows
+  // either because the home bootstrap seeded its data before this rendered.
+  if (countQuery.isError) {
     return (
       <div className="flex-1 p-6 text-sm text-destructive-foreground">
         Failed to load: {(countQuery.error as Error).message}
       </div>
     );
   }
-  if (totalCount === 0 && !seeded && countQuery.isLoading) {
+  if (totalCount === 0 && countQuery.isLoading) {
     return <div className="flex-1 p-6 text-sm text-muted-foreground">Loading…</div>;
   }
   if (totalCount === 0) {
