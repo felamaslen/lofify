@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { check, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { boolean, check, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { pgCustomSQL } from 'drizzle-pgkit-migrator';
 
 /**
@@ -20,6 +20,8 @@ export const albumArt = pgTable(
     /** Basename of the downloaded image inside the artwork directory (`<id>.jpg`). Null until the download succeeds. */
     file: text('file'),
     status: text('status').notNull().default('PENDING'),
+    /** Whether the current image was uploaded by hand rather than fetched by the worker. Manual images can be cleared (requeueing an automatic download); the worker resets this whenever it resolves the row. */
+    isManual: boolean('isManual').notNull().default(false),
     /** Human-readable failure detail. Null unless the status is FAILED. */
     error: text('error'),
   },

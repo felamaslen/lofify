@@ -9,6 +9,7 @@ CREATE TABLE "AlbumArt" (
   "album" text NOT NULL,
   "file" text,
   "status" text DEFAULT 'PENDING' NOT NULL,
+  "isManual" boolean DEFAULT FALSE NOT NULL,
   "error" text,
   CONSTRAINT "AlbumArt_status_ck" CHECK (
     "AlbumArt"."status" IN ('PENDING', 'IN_PROGRESS', 'SUCCEEDED', 'FAILED')
