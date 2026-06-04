@@ -368,6 +368,85 @@ test('replacing artwork keeps the stable URL serving the new image and busts the
   expect(served.rawPayload).toEqual(replacement);
 });
 
+const ArtworkClearMutation = graphql(`
+  mutation ArtworkClear($trackId: ID!) {
+    artworkClear(trackId: $trackId) {
+      __typename
+      ... on ArtworkStatus {
+        inProgress
+        message
+      }
+    }
+  }
+`);
+
+test('artworkClear removes a manual image and requeues an automatic download', async () => {
+  await seedAlbum();
+  await uploadArtwork(trackId, PNG);
+
+  const { data } = await gqlRequest(app)
+    .mutate(ArtworkClearMutation)
+    .variables({ trackId })
+    .expectNoErrors();
+  expect(data.artworkClear).toEqual({
+    __typename: 'ArtworkStatus',
+    inProgress: true,
+    message: '',
+  });
+
+  const [row] = await db.select().from(albumArt);
+  expect(row).toMatchObject({ status: 'PENDING', file: null });
+});
+
+test('artworkClear rejects artwork that was not manually set', async () => {
+  await seedAlbum();
+  await gqlRequest(app).mutate(ArtworkDownloadMutation).variables({ trackId }).expectNoErrors();
+  // An automatically fetched image (what the worker writes).
+  await db.update(albumArt).set({ status: 'SUCCEEDED', file: 'auto.jpg', isManual: false });
+
+  const { errors } = await gqlRequest(app)
+    .mutate(ArtworkClearMutation)
+    .variables({ trackId })
+    .expectErrors();
+  expect(errors[0]?.message).toMatch(/not set manually/);
+
+  const noArt = await gqlRequest(app)
+    .mutate(ArtworkClearMutation)
+    .variables({ trackId: siblingId })
+    .expectErrors();
+  expect(noArt.errors[0]?.message).toMatch(/not set manually|no artwork/);
+});
+
+test('uploaded artwork is manual; automatically fetched artwork is not', async () => {
+  await seedAlbum();
+  await uploadArtwork(trackId, PNG);
+
+  const IsManualQuery = graphql(`
+    query ArtworkIsManual($id: ID!) {
+      track(id: $id) {
+        artwork {
+          ... on Artwork {
+            isManual
+          }
+        }
+      }
+    }
+  `);
+  const { data: manual } = await gqlRequest(app)
+    .query(IsManualQuery)
+    .variables({ id: trackId })
+    .expectNoErrors();
+  expect(manual.track?.artwork).toEqual({ isManual: true });
+
+  // What the worker writes when it resolves a row.
+  await db.update(albumArt).set({ isManual: false });
+  const { data: auto } = await gqlRequest(app)
+    .query(IsManualQuery)
+    .variables({ id: trackId })
+    .expectNoErrors();
+  expect(auto.track?.artwork).toEqual({ isManual: false });
+});
+
 test('artwork uploads that are not real images are rejected', async () => {
   await seedAlbum();
 

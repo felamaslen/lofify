@@ -14,7 +14,7 @@ import { Image as ImageClass } from "./../media.js";
 import { Artwork as ArtworkClass, ArtworkStatus as ArtworkStatusClass } from "./../artwork.js";
 import { artwork as trackArtworkResolver, delivery as trackDeliveryResolver, duplicates as trackDuplicatesResolver, path as trackPathResolver, url as trackUrlResolver } from "./../track.js";
 import { search as querySearchResolver } from "./../search.js";
-import { artworkDownload as mutationArtworkDownloadResolver } from "./../artwork-mutations.js";
+import { artworkClear as mutationArtworkClearResolver, artworkDownload as mutationArtworkDownloadResolver } from "./../artwork-mutations.js";
 import { trackUpdate as mutationTrackUpdateResolver } from "./../track-mutations.js";
 import { trackManifestSubscription as subscriptionTrackManifestResolver } from "./../track-manifest.js";
 export type SchemaConfig = {
@@ -205,6 +205,11 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
                     description: "Album artist the image was found for.",
                     name: "albumArtist",
                     type: new GraphQLNonNull(GraphQLString)
+                },
+                isManual: {
+                    description: "Whether the image was uploaded by hand rather than fetched automatically. Manual images can be cleared with `artworkClear`, requeueing an automatic download.",
+                    name: "isManual",
+                    type: new GraphQLNonNull(GraphQLBoolean)
                 },
                 media: {
                     name: "media",
@@ -809,6 +814,19 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
                     },
                     resolve(_source, args) {
                         return mutationArtistSynonymUpdateResolver(args.artist, args.synonym, args.newSynonym);
+                    }
+                },
+                artworkClear: {
+                    description: "Clear a manually uploaded cover from a track's album \u2014 the undo for a wrong upload. The image is removed and the album is requeued for an automatic download; poll `Track.artwork` for the result.\n\nThrows when the track does not exist, has no artwork, or its artwork was not manually set.",
+                    name: "artworkClear",
+                    type: new GraphQLNonNull(TrackArtworkType),
+                    args: {
+                        trackId: {
+                            type: new GraphQLNonNull(GraphQLID)
+                        }
+                    },
+                    resolve(_source, args) {
+                        return mutationArtworkClearResolver(args.trackId);
                     }
                 },
                 artworkDownload: {

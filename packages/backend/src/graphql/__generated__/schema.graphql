@@ -135,6 +135,10 @@ type Artwork {
   album: String!
   """Album artist the image was found for."""
   albumArtist: String!
+  """
+  Whether the image was uploaded by hand rather than fetched automatically. Manual images can be cleared with `artworkClear`, requeueing an automatic download.
+  """
+  isManual: Boolean!
   media: Media!
 }
 
@@ -216,6 +220,12 @@ type Mutation {
   Rename the synonym `synonym` of `artist` to `newSynonym`. Throws when `newSynonym` is blank, the original pair is unknown, or the renamed pair already exists.
   """
   artistSynonymUpdate(artist: String!, newSynonym: String!, synonym: String!): ArtistSynonym!
+  """
+  Clear a manually uploaded cover from a track's album — the undo for a wrong upload. The image is removed and the album is requeued for an automatic download; poll `Track.artwork` for the result.
+  
+  Throws when the track does not exist, has no artwork, or its artwork was not manually set.
+  """
+  artworkClear(trackId: ID!): TrackArtwork!
   """
   Request album art for a track's album. Upserts an `AlbumArt` row keyed on the track's effective album artist (falling back to its artist) and album — creating it PENDING, resetting a FAILED row to PENDING for a retry, and leaving an in-progress or succeeded row untouched — then links every track of the album to the row. The artwork worker processes PENDING rows asynchronously; poll `Track.artwork` for the result.
   

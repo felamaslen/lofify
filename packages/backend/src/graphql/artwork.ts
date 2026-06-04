@@ -12,6 +12,8 @@ export class Artwork {
     public album: string,
     /** Album artist the image was found for. @gqlField */
     public albumArtist: string,
+    /** Whether the image was uploaded by hand rather than fetched automatically. Manual images can be cleared with `artworkClear`, requeueing an automatic download. @gqlField */
+    public isManual: boolean,
     private row: {
       id: string;
       updatedAt: Date;
@@ -53,7 +55,7 @@ export type TrackArtwork = Artwork | ArtworkStatus;
 export function toTrackArtwork(row: AlbumArt): TrackArtwork {
   switch (row.status) {
     case 'SUCCEEDED':
-      return new Artwork(row.album, row.albumArtist, row);
+      return new Artwork(row.album, row.albumArtist, row.isManual, row);
     case 'FAILED':
       return new ArtworkStatus(false, row.error ?? 'Artwork download failed.');
     default:

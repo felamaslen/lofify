@@ -1,7 +1,7 @@
 import { eq, sql } from 'drizzle-orm';
 import type { ID } from 'grats';
 
-import { linkAlbumTracks, resolveArtworkKey } from '../artwork/store.js';
+import { clearManualArtwork, linkAlbumTracks, resolveArtworkKey } from '../artwork/store.js';
 import { db } from '../db/client.js';
 import { albumArt, tracks } from '../db/schema/index.js';
 import { toTrackArtwork, type TrackArtwork } from './artwork.js';
@@ -37,4 +37,20 @@ export async function artworkDownload(trackId: ID): Promise<TrackArtwork> {
   await linkAlbumTracks(row.id, key);
 
   return toTrackArtwork(row);
+}
+
+/**
+ * Clear a manually uploaded cover from a track's album — the undo for a wrong upload. The image is removed and the album is requeued for an automatic download; poll `Track.artwork` for the result.
+ *
+ * Throws when the track does not exist, has no artwork, or its artwork was not manually set.
+ *
+ * @gqlMutationField
+ */
+export async function artworkClear(trackId: ID): Promise<TrackArtwork> {
+  const trackRows = await db.select().from(tracks).where(eq(tracks.id, trackId)).limit(1);
+  const track = trackRows[0];
+  if (!track) throw new Error('Unknown track.');
+  if (!track.albumArtId) throw new Error('Track has no artwork to clear.');
+
+  return toTrackArtwork(await clearManualArtwork(track.albumArtId));
 }

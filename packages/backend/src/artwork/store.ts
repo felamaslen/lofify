@@ -86,10 +86,10 @@ export async function storeUploadedArtwork(track: DbTrack, bytes: Buffer): Promi
 
   const [row] = await db
     .insert(albumArt)
-    .values({ ...key, status: 'SUCCEEDED', file })
+    .values({ ...key, status: 'SUCCEEDED', file, isManual: true })
     .onConflictDoUpdate({
       target: [albumArt.albumArtist, albumArt.album],
-      set: { status: 'SUCCEEDED', file, error: null, updatedAt: new Date() },
+      set: { status: 'SUCCEEDED', file, isManual: true, error: null, updatedAt: new Date() },
     })
     .returning();
   if (!row) throw new Error('Failed to store the artwork.');
@@ -102,4 +102,27 @@ export async function storeUploadedArtwork(track: DbTrack, bytes: Buffer): Promi
     await unlink(path.join(artworkDir(), stale)).catch(() => undefined);
   }
   return row;
+}
+
+/**
+ * Remove a manually uploaded image and requeue the album for an automatic download — the undo for a wrong upload. The status flip to PENDING fires the worker's NOTIFY trigger; the worker resets `isManual` when it resolves the row. Throws when the row's image was not manually set.
+ */
+export async function clearManualArtwork(albumArtId: string): Promise<AlbumArt> {
+  const rows = await db.select().from(albumArt).where(eq(albumArt.id, albumArtId)).limit(1);
+  const row = rows[0];
+  if (!row || !row.isManual || row.status !== 'SUCCEEDED') {
+    throw new Error('Artwork was not set manually.');
+  }
+
+  const [updated] = await db
+    .update(albumArt)
+    .set({ status: 'PENDING', file: null, error: null, updatedAt: new Date() })
+    .where(eq(albumArt.id, albumArtId))
+    .returning();
+  if (!updated) throw new Error('Failed to clear the artwork.');
+
+  if (row.file) {
+    await unlink(path.join(artworkDir(), row.file)).catch(() => undefined);
+  }
+  return updated;
 }
