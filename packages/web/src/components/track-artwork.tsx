@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ImageDown, Loader2, TriangleAlert } from 'lucide-react';
+import { ImageDown, Loader2, Trash2, TriangleAlert } from 'lucide-react';
 import { type DragEvent, useEffect, useRef, useState } from 'react';
 
 import { graphql, readFragment, type ResultOf } from '../lib/gql.ts';
@@ -14,6 +14,7 @@ export const TrackArtworkDocument = graphql(`
       ... on Artwork {
         album
         albumArtist
+        isManual
         media {
           ... on Image {
             preview(size: SQUARE_500) {
@@ -48,6 +49,7 @@ const ArtworkDownloadDocument = graphql(`
       ... on Artwork {
         album
         albumArtist
+        isManual
         media {
           ... on Image {
             preview(size: SQUARE_500) {
@@ -74,6 +76,30 @@ const TrackArtworkUploadDocument = graphql(
   `,
   [TrackArtworkDocument],
 );
+
+const ArtworkClearDocument = graphql(`
+  mutation ArtworkClear($trackId: ID!) {
+    artworkClear(trackId: $trackId) {
+      __typename
+      ... on Artwork {
+        album
+        albumArtist
+        isManual
+        media {
+          ... on Image {
+            preview(size: SQUARE_500) {
+              src
+            }
+          }
+        }
+      }
+      ... on ArtworkStatus {
+        inProgress
+        message
+      }
+    }
+  }
+`);
 
 type TrackArtworkValue = ResultOf<typeof TrackArtworkDocument>['artwork'];
 
@@ -150,6 +176,15 @@ export function useTrackArtwork(
     },
   });
 
+  // Clearing flips the row back to PENDING, so its result seeds the poll the same way a download request does.
+  const clearMutation = useMutation({
+    mutationFn: () => gqlRequest(ArtworkClearDocument, { trackId }),
+    onSuccess: (data) => {
+      setRequested({ forId: trackId, value: data.artworkClear });
+      void queryClient.invalidateQueries({ queryKey: ['track-artwork', trackId] });
+    },
+  });
+
   // The auto-request. The ref stops it re-firing for the same track (StrictMode remounts, an
   // errored attempt leaving artwork null); the server-side upsert makes concurrent fires from the
   // bar and the popover harmless.
@@ -161,19 +196,20 @@ export function useTrackArtwork(
     mutate();
   }, [neverRequested, trackId, mutate]);
 
-  const error = uploadMutation.error ?? mutation.error;
+  const error = clearMutation.error ?? uploadMutation.error ?? mutation.error;
   return {
     artwork,
     loading,
     download: () => mutate(),
     upload: (file: File) => uploadMutation.mutate(file),
-    uploading: uploadMutation.isPending,
+    uploading: uploadMutation.isPending || clearMutation.isPending,
+    clear: () => clearMutation.mutate(),
     error: error instanceof Error ? error.message : null,
   };
 }
 
 /**
- * Square artwork tile: the cover once downloaded, a spinner while one is fetched or uploaded, and a download/retry affordance otherwise. Size and rounding come from `className`. Dropping an image file onto the tile — in any state — uploads it as the album's artwork.
+ * Square artwork tile: the cover once downloaded, a spinner while one is fetched or uploaded, and a download/retry affordance otherwise. Size and rounding come from `className`. Dropping an image file onto the tile — in any state — uploads it as the album's artwork. Pass `clear` to offer a hover button on manually uploaded covers that removes them and requeues an automatic download.
  */
 export function ArtworkTile({
   artwork,
@@ -181,6 +217,7 @@ export function ArtworkTile({
   download,
   upload,
   uploading = false,
+  clear,
   error,
   className,
   iconClassName = 'size-4',
@@ -190,6 +227,7 @@ export function ArtworkTile({
   download: () => void;
   upload: (file: File) => void;
   uploading?: boolean;
+  clear?: () => void;
   error: string | null;
   className?: string;
   iconClassName?: string;
@@ -221,13 +259,26 @@ export function ArtworkTile({
     );
   } else if (artwork?.__typename === 'Artwork') {
     inner = (
-      <img
-        src={artworkDisplayUrl(artwork) ?? undefined}
-        alt={`Cover of ${artwork.album} by ${artwork.albumArtist}`}
-        loading="lazy"
-        title="Drop an image to replace the album art"
-        className="size-full rounded-md object-cover ring-1 ring-border animate-in fade-in"
-      />
+      <>
+        <img
+          src={artworkDisplayUrl(artwork) ?? undefined}
+          alt={`Cover of ${artwork.album} by ${artwork.albumArtist}`}
+          loading="lazy"
+          title="Drop an image to replace the album art"
+          className="size-full rounded-md object-cover ring-1 ring-border animate-in fade-in"
+        />
+        {clear && artwork.isManual && (
+          <button
+            type="button"
+            onClick={clear}
+            title="Clear this manually set cover and fetch one automatically"
+            aria-label="Clear manual artwork"
+            className="absolute right-1 top-1 flex size-6 items-center justify-center rounded-md bg-background/80 text-muted-foreground opacity-0 shadow backdrop-blur transition-opacity hover:text-destructive-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover:opacity-100"
+          >
+            <Trash2 className="size-3.5" />
+          </button>
+        )}
+      </>
     );
   } else {
     const failed = artwork?.__typename === 'ArtworkStatus' || error != null;
@@ -259,7 +310,7 @@ export function ArtworkTile({
   return (
     <div
       className={cn(
-        'relative shrink-0 rounded-md',
+        'group relative shrink-0 rounded-md',
         dragOver && 'ring-2 ring-ring ring-offset-2 ring-offset-background',
         className,
       )}

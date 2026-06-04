@@ -35,7 +35,7 @@ function formatDate(iso: string): string {
 
 /** Cover preview at the top of the popover. Fetched on open rather than carried by the list fragment, so the artwork resolver isn't fanned out to every visible row; the query key is shared with the playback bar's. */
 function PopoverArtwork({ trackId }: { trackId: string }) {
-  const { artwork, loading, download, upload, uploading, error } = useTrackArtwork(
+  const { artwork, loading, download, upload, uploading, clear, error } = useTrackArtwork(
     trackId,
     undefined,
     { fetchOnMount: true },
@@ -47,6 +47,7 @@ function PopoverArtwork({ trackId }: { trackId: string }) {
       download={download}
       upload={upload}
       uploading={uploading}
+      clear={clear}
       error={error}
       className="aspect-square w-full"
       iconClassName="size-6"
