@@ -1021,15 +1021,28 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
             }
         }
     });
+    const ImageSourceType: GraphQLObjectType = new GraphQLObjectType({
+        name: "ImageSource",
+        description: "A render of an image at one logical display size, shaped for an `<img>` element.",
+        fields() {
+            return {
+                src: {
+                    description: "URL of the render at the logical size. Use as the `src` attribute.",
+                    name: "src",
+                    type: new GraphQLNonNull(GraphQLString)
+                }
+            };
+        }
+    });
     const ImageType: GraphQLObjectType = new GraphQLObjectType({
         name: "Image",
         description: "A renderable image resource.",
         fields() {
             return {
                 preview: {
-                    description: "A processed render of this image: the original URL behind the API's `/asset/<options>/` processing route.",
+                    description: "A processed render of this image, shaped for an `<img>` element: the original URL behind the API's `/asset/<options>/` processing route.",
                     name: "preview",
-                    type: new GraphQLNonNull(ImageType),
+                    type: new GraphQLNonNull(ImageSourceType),
                     args: {
                         size: {
                             type: new GraphQLNonNull(MediaSizeType)
@@ -1067,7 +1080,7 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
         query: QueryType,
         mutation: MutationType,
         subscription: SubscriptionType,
-        types: [UploadType, MediaSizeType, QualityType, TrackArtworkType, MediaType, TrackFormatType, AlbumType, AlbumConnectionType, AlbumEdgeType, ArtistType, ArtistConnectionType, ArtistEdgeType, ArtistInitialType, ArtistSynonymType, ArtworkType, ArtworkStatusType, DeliveryTierType, DurationType, ImageType, LibraryScanType, MutationType, PageInfoType, QueryType, SearchType, SubscriptionType, TrackType, TrackConnectionType, TrackDeliveryType, TrackEdgeType, TrackManifestType, TrackManifestChunkType, TrackManifestInitType, VoidType]
+        types: [UploadType, MediaSizeType, QualityType, TrackArtworkType, MediaType, TrackFormatType, AlbumType, AlbumConnectionType, AlbumEdgeType, ArtistType, ArtistConnectionType, ArtistEdgeType, ArtistInitialType, ArtistSynonymType, ArtworkType, ArtworkStatusType, DeliveryTierType, DurationType, ImageType, ImageSourceType, LibraryScanType, MutationType, PageInfoType, QueryType, SearchType, SubscriptionType, TrackType, TrackConnectionType, TrackDeliveryType, TrackEdgeType, TrackManifestType, TrackManifestChunkType, TrackManifestInitType, VoidType]
     });
 }
 const typeNameMap = new Map();

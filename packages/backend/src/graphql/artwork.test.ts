@@ -171,7 +171,7 @@ test('Image.preview wraps the original URL behind the asset route', async () => 
               url
               ... on Image {
                 preview(size: SQUARE_500) {
-                  url
+                  src
                 }
               }
             }
@@ -189,7 +189,7 @@ test('Image.preview wraps the original URL behind the asset route', async () => 
   const original = `http://lofify.test/artwork/${row!.id}`;
   expect(media?.url).toBe(original);
   expect(media?.__typename).toBe('Image');
-  expect(media?.preview.url).toBe(
+  expect(media?.preview.src).toBe(
     `http://lofify.test/asset/format=avif&size=500&v=${row!.updatedAt.getTime()}/${original}`,
   );
 });

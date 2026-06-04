@@ -169,11 +169,19 @@ type Duration {
 """A renderable image resource."""
 type Image implements Media {
   """
-  A processed render of this image: the original URL behind the API's `/asset/<options>/` processing route.
+  A processed render of this image, shaped for an `<img>` element: the original URL behind the API's `/asset/<options>/` processing route.
   """
-  preview(size: MediaSize!): Image!
+  preview(size: MediaSize!): ImageSource!
   """Absolute URL of the original resource."""
   url: String!
+}
+
+"""
+A render of an image at one logical display size, shaped for an `<img>` element.
+"""
+type ImageSource {
+  """URL of the render at the logical size. Use as the `src` attribute."""
+  src: String!
 }
 
 """Snapshot of an ongoing or completed library scan."""

@@ -38,11 +38,24 @@ export class Image implements Media {
     return new Image(publicUrl(path), version ?? null);
   }
 
-  /** A processed render of this image: the original URL behind the API's `/asset/<options>/` processing route. @gqlField */
-  preview(size: MediaSize): Image {
+  /** A processed render of this image, shaped for an `<img>` element: the original URL behind the API's `/asset/<options>/` processing route. @gqlField */
+  preview(size: MediaSize): ImageSource {
     const options = this.version
       ? `${PREVIEW_OPTIONS[size]}&v=${this.version}`
       : PREVIEW_OPTIONS[size];
-    return new Image(publicUrl(`/asset/${options}/${this.url}`), null);
+    return new ImageSource(publicUrl(`/asset/${options}/${this.url}`));
   }
+}
+
+/**
+ * A render of an image at one logical display size, shaped for an `<img>` element.
+ *
+ * @gqlType
+ */
+// Hidpi is additive when wanted: a `srcSet: String!` field carrying server-rendered density variants (each exactly the right pixel size for the logical size, possibly processed differently per density) — clients then spread { src, srcSet } straight onto <img> without ever composing densities themselves.
+export class ImageSource {
+  constructor(
+    /** URL of the render at the logical size. Use as the `src` attribute. @gqlField */
+    public src: string,
+  ) {}
 }
