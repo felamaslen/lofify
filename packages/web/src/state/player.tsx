@@ -121,9 +121,9 @@ const FORMAT_VALUES: readonly LossyPreference[] = ['OPUS', 'MP3'];
 // would lag), so we track the current observation and lean on the cooldown + hysteresis to stay
 // stable rather than averaging the responsiveness away.
 /** Step up only when the connection can pull this many times the current tier's bitrate. */
-const UP_FACTOR = 2;
+const UP_FACTOR = 3;
 /** Step down when throughput drops below this multiple of the current tier's bitrate. */
-const DOWN_FACTOR = 1.3;
+const DOWN_FACTOR = 2;
 /** Step up only when this much is buffered ahead, so a brief spike doesn't over-commit. */
 const BUFFER_HIGH_SECONDS = 20;
 /** Minimum gap between tier switches. */
