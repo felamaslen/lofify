@@ -166,6 +166,12 @@ function loadStoredMode(): QualityMode {
   return 'SMART';
 }
 
+/** Whether the browser signals the user wants reduced data usage (the `Save-Data` client hint). Read live per check so flipping the OS/browser data saver applies from the next enqueued track. */
+function saveDataEnabled(): boolean {
+  const conn = (navigator as { connection?: { saveData?: boolean } }).connection;
+  return conn?.saveData === true;
+}
+
 /** The tier Adaptive starts a track at: where the last session left off (cold start `MEDIUM`). Table-free — only the chosen tier is remembered, so there's no bandwidth-to-tier mapping to maintain. */
 function loadStoredAdaptiveTier(): Quality {
   const onLadder = (v: string | null): v is Quality =>
@@ -594,6 +600,9 @@ class Player {
       contentType: track.delivery.mimeType,
       quality: this.snapshot.requestedTier,
       totalSeconds,
+      // Eager prefetch is for everyday adaptive listening: Original mode opts out (its deliveries
+      // are large and often lossless, which the chunk cache refuses anyway), as does data saver.
+      prefetch: this.snapshot.qualityMode !== 'ORIGINAL' && !saveDataEnabled(),
       /** Open a `trackManifest` SSE subscription for `trackId` at `quality` and pipe cumulative snapshots into `onEmit`. The closure handles SSE delta merging (each emission carries only the chunks finalised since the previous one) and idempotent replay after a transparent reconnect. Returns the teardown mse will run on slot replacement / live swap / dispose. */
       subscribeManifest: (quality, onEmit) => {
         const format = trackFormatFor(

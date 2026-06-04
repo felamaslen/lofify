@@ -13,6 +13,8 @@
  *
  * Preload of the successor is mse-driven: the caller passes a `trackNext` thunk to `init`, and mse invokes it when the playhead is within `NEXT_TRACK_PRELOAD_SECONDS` of `current`'s end. If it returns `null` (end of library) or a codec the browser can't decode at all, `MediaSource.endOfStream()` fires after `current`'s tail and the caller's `ended` handler can step.
  *
+ * Eager prefetch bridges coverage gaps (tunnels, trains): once the forward window is fully buffered and nothing else is in flight, the player pulls the rest of `current` (playhead → end) and then all of `next` into the persistent chunk cache, one chunk at a time, without appending — the cache, not the quota-capped SourceBuffer, is the offline reservoir. It starts only after `PREFETCH_AFTER_SECONDS` of the current track have played (so skipping around doesn't pull full tracks) and only for tracks whose `QueuedTrack.prefetch` flag allows it (the caller's policy: quality mode, data-saver). Once `current` is fully prefetched, `trackNext` is resolved immediately rather than at the preload window, so the successor prefetches too and the server starts encoding it early. Prefetch fetches deliberately report no `onTransfer` samples: a tunnel mid-prefetch must not trigger a downscale into a tier whose bytes were never cached while a fully-cached tier sits unused.
+ *
  * `ManifestSnapshot` and `ManifestChunk` are derived from the `TrackManifest` subscription document in `state/player.tsx`, so the player consumes the exact GraphQL response shape with no in-between conversion.
  */
 
@@ -37,6 +39,10 @@ const NEXT_TRACK_PRELOAD_SECONDS = 20;
 const BOUNDARY_STALL_MS = 1500;
 /** Wall-clock interval for the watchdog `tick` driven by `setInterval`. Audio-element events (`timeupdate`, `updateend`) stop firing during a stall, so the stall detector wouldn't otherwise get a chance to run. Short enough that the bridge fires within ~2× `BOUNDARY_STALL_MS` of the true stall start. */
 const WATCHDOG_TICK_MS = 500;
+/** Eager prefetch waits until this many seconds of the current track have played, so skipping through tracks doesn't pull each one's full audio into the chunk cache. */
+const PREFETCH_AFTER_SECONDS = 6;
+/** Back-off before retrying after a failed prefetch fetch, so a dead radio (tunnel, airplane mode) isn't hammered with attempts on every tick. */
+const PREFETCH_RETRY_MS = 5_000;
 
 /** Half-open seconds interval `[start, end)`. Mirrors the shape of `TimeRanges` entries that `SourceBuffer.buffered` reports, so a buffered region round-trips through the public accessors without conversion. */
 export type Range = { start: number; end: number };
@@ -53,14 +59,18 @@ export type QueuedTrack = {
   quality: string;
   /** Nominal length from the track's metadata. Used as the duration estimate for `MediaSource.duration` and the preload-window lookahead — the authoritative end is `chunks[last].endSeconds` once the manifest reports `done`. */
   totalSeconds: number;
+  /** Whether mse may eagerly prefetch this track's remaining chunks (and, once it's fully prefetched, resolve and prefetch its successor) into the persistent chunk cache. The caller decides the policy (quality mode, data-saver); mse owns the mechanics (priority, timing). */
+  prefetch: boolean;
   /** Open a manifest stream for this track at `quality` and deliver cumulative snapshots via `onEmit`. mse calls this when the track joins a slot, and re-invokes it after a live tier change on `current`. The returned function is mse's only way to close the subscription. */
   subscribeManifest: (quality: string, onEmit: (m: ManifestSnapshot) => void) => () => void;
 };
 
 const bitsPerSecond = (bytes: number, ms: number): number => (bytes * 8000) / ms;
 
-/** Whether a track's bytes belong in the chunk cache. Lossless (FLAC) deliveries are excluded — at lossless bitrates a handful of albums would churn the entire byte budget, evicting far more replayable lossy audio than they're worth. */
-const isCacheableContentType = (contentType: string): boolean => !/flac/i.test(contentType);
+/** Whether the server permits storing a response's bytes in the chunk cache: `Cache-Control: immutable` says the bytes are final, and `X-Client-Cache: 1` is the server's opt-in to client-side storage (lossless deliveries send `0` — see the playback route). A separate header rather than a `Cache-Control` directive so HTTP cacheability is untouched: every final response stays `public` for CDN edge-caching. Keeping the decision server-side means the player never sniffs codecs. */
+const allowsChunkCache = (headers: Headers): boolean =>
+  (headers.get('Cache-Control')?.includes('immutable') ?? false) &&
+  headers.get('X-Client-Cache') === '1';
 
 /** Construction-time hooks; all optional. */
 export type CreatePlayerOptions = {
@@ -129,6 +139,12 @@ type TrackEntry = {
   subscribeManifest: QueuedTrack['subscribeManifest'];
   /** Teardown for the open subscription, or `null` between transitions. */
   unsubManifest: (() => void) | null;
+  /** Caller's prefetch policy for this track, from `QueuedTrack.prefetch`. */
+  prefetch: boolean;
+  /** Chunk indices verified to be in the persistent chunk cache at this entry's URL (`-1` = init). In-memory memo so the prefetch walk doesn't re-query IndexedDB per tick; reset on a live tier swap (the cache is keyed by URL). */
+  prefetched: Set<number>;
+  /** Flips false when a prefetch response's headers forbade storing (the server said no — e.g. an unexpectedly lossless delivery). Stops the prefetch walk re-downloading bytes that will never persist. */
+  prefetchable: boolean;
 };
 
 /** Last finalised end (concatenated) of `entry`'s encoded region, or `null` if not yet known. Returning `durationOffset` when no chunks have arrived would mis-represent the track as zero-length and clamp seeks to 0. */
@@ -259,6 +275,10 @@ export class MsePlayer {
 
   /** In-flight range fetches, keyed by `pendingKey(trackId, chunkIndex)` (`-1` = init). */
   private pending = new Map<PendingKey, AbortController>();
+  /** The single in-flight prefetch, or `null`. Kept apart from `pending` so the window logic neither counts it as an urgent fetch nor aborts it as out-of-window — prefetch is *meant* to be far ahead. */
+  private prefetchPending: { trackId: string; ctrl: AbortController } | null = null;
+  /** `performance.now()` before which the prefetch walk stays idle, set after a failed prefetch fetch. */
+  private prefetchRetryAt = 0;
   private appendQueue: AppendItem[] = [];
   /** Last chunk fetched to cover an uncovered playhead. Snap-to-buffered guard against fmp4 decode-time drift causing a refetch loop. */
   private lastUncoveredFetch: PendingKey | null = null;
@@ -413,6 +433,7 @@ export class MsePlayer {
     this.desiredQuality = null;
     this.reportedQuality = null;
     this.lastUncoveredFetch = null;
+    this.prefetchRetryAt = 0;
     this.mediaSourceDurationCap = 0;
     this.lastInitAppendedFor = null;
     const ranges = this.bufferedRanges();
@@ -430,6 +451,10 @@ export class MsePlayer {
     entry.quality = track.quality;
     entry.manifest = EMPTY_MANIFEST;
     entry.subscribeManifest = track.subscribeManifest;
+    entry.prefetch = track.prefetch;
+    entry.prefetched = new Set();
+    entry.prefetchable = true;
+    this.prefetchRetryAt = 0;
     this.lastUncoveredFetch = null;
     this.desiredQuality = { trackId: entry.id, quality: track.quality };
     this.upgradedStarts.clear();
@@ -456,6 +481,9 @@ export class MsePlayer {
       initBytes: null,
       subscribeManifest: track.subscribeManifest,
       unsubManifest: null,
+      prefetch: track.prefetch,
+      prefetched: new Set(),
+      prefetchable: true,
     };
   }
 
@@ -790,10 +818,18 @@ export class MsePlayer {
     }
 
     // 5. After a live tier switch, re-fetch buffered-ahead chunks of the switched track still at
-    // the old tier. Lowest priority — only reached once the forward window is fully buffered.
-    if (!this.desiredQuality) return;
+    // the old tier. Only reached once the forward window is fully buffered.
+    if (this.tryTierUpgradeFetch(t, fetchEnd, ranges)) return;
+
+    // 6. Idle prefetch into the persistent chunk cache — strictly lowest priority.
+    this.maybePrefetch();
+  }
+
+  /** Step 5 of `reconcile`: after a live tier switch, re-fetch one buffered-ahead chunk of the switched track that's still at the old tier. Returns whether a fetch was issued. */
+  private tryTierUpgradeFetch(t: number, fetchEnd: number, ranges: readonly Range[]): boolean {
+    if (!this.desiredQuality) return false;
     const target = this.entryById(this.desiredQuality.trackId);
-    if (!target || target.durationOffset === null) return;
+    if (!target || target.durationOffset === null) return false;
     const chunks = target.manifest.chunks;
     const localStart = Math.max(0, t - target.durationOffset);
     const localFetchEnd = fetchEnd - target.durationOffset;
@@ -810,14 +846,80 @@ export class MsePlayer {
       if (q !== undefined && q !== this.desiredQuality.quality) {
         this.upgradedStarts.add(concatKey);
         void this.fetchChunk(target, j);
-        return;
+        return true;
       }
     }
+    return false;
+  }
+
+  /** Step 6 of `reconcile` — idle prefetch. Walks `current` (playhead → end) then `next` (init + all chunks) for the first chunk not yet in the persistent cache and fetches it, one at a time, without appending — the cache, not the quota-capped SourceBuffer, is the reservoir that bridges coverage gaps. Waits until `PREFETCH_AFTER_SECONDS` of the current track have played so skipping around doesn't pull full tracks. When nothing is left to prefetch, resolves the successor early via `requestNextForPrefetch`. */
+  private maybePrefetch(): void {
+    if (this.prefetchPending !== null) return;
+    if (performance.now() < this.prefetchRetryAt) return;
+    if (!this.current?.prefetch) return;
+    if (this.currentPosition() < PREFETCH_AFTER_SECONDS) return;
+    const candidate = this.prefetchCandidate();
+    if (!candidate) {
+      this.requestNextForPrefetch();
+      return;
+    }
+    void this.prefetchChunk(candidate.entry, candidate.chunkIndex);
+  }
+
+  /** First not-yet-cached chunk in prefetch order: `current` from the playhead to its end (the already-played part is skipped — it costs data for a rare seek-back), then `next` in full. */
+  private prefetchCandidate(): { entry: TrackEntry; chunkIndex: number } | null {
+    for (const entry of this.liveEntries()) {
+      if (!entry.prefetch || !entry.prefetchable) continue;
+      const m = entry.manifest;
+      if (m.init && !entry.prefetched.has(-1)) return { entry, chunkIndex: -1 };
+      let from = 0;
+      if (entry === this.current && entry.durationOffset !== null) {
+        const idx = findChunkAtTime(m.chunks, this.audio.currentTime - entry.durationOffset);
+        from = idx >= 0 ? idx : m.chunks.length;
+      }
+      for (let j = from; j < m.chunks.length; j++) {
+        if (!entry.prefetched.has(j)) return { entry, chunkIndex: j };
+      }
+    }
+    return null;
+  }
+
+  /** Fetch one chunk (`chunkIndex === -1` = init) of `entry` purely to populate the chunk cache; the bytes are never appended. `fetchRange` serves from / stores to the cache itself — `stored` comes back false when the response's headers forbade storing, in which case the entry is marked unprefetchable rather than re-downloading bytes that will never persist. Failures back off `PREFETCH_RETRY_MS`. */
+  private async prefetchChunk(entry: TrackEntry, chunkIndex: number): Promise<void> {
+    const range = chunkIndex === -1 ? entry.manifest.init : entry.manifest.chunks[chunkIndex];
+    if (!range) return;
+    const ctrl = new AbortController();
+    this.prefetchPending = { trackId: entry.id, ctrl };
+    try {
+      const res = await this.fetchRange(entry.url, range.byteStart, range.byteEnd, ctrl.signal);
+      if (this.disposed || ctrl.signal.aborted) return;
+      if (!res) {
+        this.prefetchRetryAt = performance.now() + PREFETCH_RETRY_MS;
+        return;
+      }
+      if (res.stored) entry.prefetched.add(chunkIndex);
+      else entry.prefetchable = false;
+    } finally {
+      if (this.prefetchPending?.ctrl === ctrl) this.prefetchPending = null;
+      if (!this.disposed) this.tick();
+    }
+  }
+
+  /** Resolve the successor as soon as `current` is fully prefetched, rather than waiting for the playhead to reach the preload window — its chunks can then be prefetched too, and opening its manifest subscription makes the server start encoding it well before the boundary. Prefetch-ineligible tracks keep the just-in-time resolution. */
+  private requestNextForPrefetch(): void {
+    if (this.disposed || this.nextRequested || this.nextEnded) return;
+    if (!this.current || this.next) return;
+    if (!this.current.prefetch || !this.current.prefetchable) return;
+    if (!this.current.manifest.done) return;
+    this.nextRequested = true;
+    void this.invokeTrackNext();
   }
 
   private cancelAllPending(): void {
     for (const ctrl of this.pending.values()) ctrl.abort();
     this.pending.clear();
+    this.prefetchPending?.ctrl.abort();
+    this.prefetchPending = null;
   }
 
   private cancelPendingForTrack(trackId: string): void {
@@ -827,6 +929,10 @@ export class MsePlayer {
         ctrl.abort();
         this.pending.delete(key);
       }
+    }
+    if (this.prefetchPending?.trackId === trackId) {
+      this.prefetchPending.ctrl.abort();
+      this.prefetchPending = null;
     }
   }
 
@@ -848,13 +954,7 @@ export class MsePlayer {
     const ctrl = new AbortController();
     this.pending.set(key, ctrl);
     try {
-      const res = await this.fetchRange(
-        entry.url,
-        init.byteStart,
-        init.byteEnd,
-        entry.contentType,
-        ctrl.signal,
-      );
+      const res = await this.fetchRange(entry.url, init.byteStart, init.byteEnd, ctrl.signal);
       if (!res || this.disposed || ctrl.signal.aborted) return;
       entry.initBytes = res.data;
       this.appendQueue.unshift({
@@ -883,7 +983,6 @@ export class MsePlayer {
         entry.url,
         chunk.byteStart,
         chunk.byteEnd,
-        entry.contentType,
         ctrl.signal,
         this.options.onTransfer,
       );
@@ -903,20 +1002,16 @@ export class MsePlayer {
     }
   }
 
-  /** Issue a HTTP `Range` request and stream the response. Returns the body bytes and the `X-Quality` header. The IndexedDB chunk cache is consulted first — the browser's HTTP cache never stores these 206 responses, so re-use across replays and PWA launches has to be explicit. A cache hit fires no `onTransfer` samples (a disk read would feed the ABR controller an absurd rate); a network response the server marked immutable is stored for next time. Lossless deliveries bypass the cache entirely (see `isCacheableContentType`). When `onTransfer` is supplied (chunk fetches only — init segments skip it), fires periodic mid-flight rate samples once `TRANSFER_MIN_MS` of body has been read (so TCP slow-start doesn't distort the first reading), then a final sample with `chunkFinished = true`. */
+  /** Issue a HTTP `Range` request and stream the response. Returns the body bytes, the `X-Quality` header, and `stored` — whether the bytes came from or went into the chunk cache (the prefetch walk uses it to stop on uncacheable tracks). The IndexedDB cache is consulted first — the browser's HTTP cache never stores these 206 responses, so re-use across replays and PWA launches has to be explicit. A cache hit fires no `onTransfer` samples (a disk read would feed the ABR controller an absurd rate); a network response whose `Cache-Control` allows it (see `allowsChunkCache`) is stored for next time. When `onTransfer` is supplied (chunk fetches only — init segments skip it), fires periodic mid-flight rate samples once `TRANSFER_MIN_MS` of body has been read (so TCP slow-start doesn't distort the first reading), then a final sample with `chunkFinished = true`. */
   private async fetchRange(
     url: string,
     byteStart: number,
     byteEnd: number,
-    contentType: string,
     signal: AbortSignal,
     onTransfer?: (bitsPerSecond: number, chunkFinished: boolean) => void,
-  ): Promise<{ data: Uint8Array; quality: string | null } | null> {
-    const mayCache = isCacheableContentType(contentType);
-    if (mayCache) {
-      const cached = await readCachedChunk(url, byteStart, byteEnd);
-      if (cached) return cached;
-    }
+  ): Promise<{ data: Uint8Array; quality: string | null; stored: boolean } | null> {
+    const cached = await readCachedChunk(url, byteStart, byteEnd);
+    if (cached) return { ...cached, stored: true };
     try {
       const res = await fetch(url, {
         signal,
@@ -924,15 +1019,14 @@ export class MsePlayer {
       });
       if (!res.ok) return null;
       const quality = res.headers.get('X-Quality');
-      const cacheable =
-        mayCache && (res.headers.get('Cache-Control')?.includes('immutable') ?? false);
+      const cacheable = allowsChunkCache(res.headers);
       // Stream the body so we can time first-byte → last-byte (line speed) rather than including
       // the request's TTFB, which on this route is dominated by encode-wait, not the network.
       const reader = res.body?.getReader();
       if (!reader) {
         const data = new Uint8Array(await res.arrayBuffer());
         if (cacheable) void storeCachedChunk(url, byteStart, byteEnd, data, quality);
-        return { data, quality };
+        return { data, quality, stored: cacheable };
       }
       const parts: Uint8Array[] = [];
       let total = 0;
@@ -958,7 +1052,7 @@ export class MsePlayer {
       }
       const data = parts.length === 1 ? parts[0]! : concatChunks(parts, total);
       if (cacheable) void storeCachedChunk(url, byteStart, byteEnd, data, quality);
-      return { data, quality };
+      return { data, quality, stored: cacheable };
     } catch {
       return null;
     }
