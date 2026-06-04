@@ -3,7 +3,9 @@
  * Do not manually edit. Regenerate by running `npx grats`.
  */
 
-import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, GraphQLInt, specifiedDirectives, GraphQLObjectType, GraphQLList, GraphQLString, GraphQLBoolean, GraphQLID, GraphQLUnionType, GraphQLEnumType, GraphQLInputObjectType, GraphQLFloat } from "graphql";
+import type { GqlScalar } from "grats";
+import type { Upload as UploadInternal } from "./../upload.js";
+import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, GraphQLInt, specifiedDirectives, GraphQLObjectType, GraphQLList, GraphQLString, GraphQLBoolean, GraphQLID, GraphQLUnionType, GraphQLEnumType, GraphQLInputObjectType, GraphQLFloat, GraphQLScalarType } from "graphql";
 import { artistIndex as queryArtistIndexResolver, track as queryTrackResolver, tracks as queryTracksResolver } from "./../track-queries.js";
 import { isUpdateAvailable as queryIsUpdateAvailableResolver, ping as queryPingResolver, noop as mutationNoopResolver } from "./../root.js";
 import { libraryScan as queryLibraryScanResolver, libraryScanCancel as mutationLibraryScanCancelResolver, libraryScanStart as mutationLibraryScanStartResolver, libraryScanSubscription as subscriptionLibraryScanResolver } from "./../library-scan.js";
@@ -14,7 +16,12 @@ import { search as querySearchResolver } from "./../search.js";
 import { artworkDownload as mutationArtworkDownloadResolver } from "./../artwork-mutations.js";
 import { trackUpdate as mutationTrackUpdateResolver } from "./../track-mutations.js";
 import { trackManifestSubscription as subscriptionTrackManifestResolver } from "./../track-manifest.js";
-export function getSchema(): GraphQLSchema {
+export type SchemaConfig = {
+    scalars: {
+        Upload: GqlScalar<UploadInternal>;
+    };
+};
+export function getSchema(config: SchemaConfig): GraphQLSchema {
     const ArtistInitialType: GraphQLObjectType = new GraphQLObjectType({
         name: "ArtistInitial",
         description: "Where a first-letter bucket begins in the `tracks` ordering.",
@@ -994,6 +1001,11 @@ export function getSchema(): GraphQLSchema {
             };
         }
     });
+    const UploadType: GraphQLScalarType = new GraphQLScalarType({
+        description: "A file sent with the [GraphQL multipart request spec](https://github.com/jaydenseric/graphql-multipart-request-spec). The multipart hook in `app.ts` replaces the mapped variable with an instance carrying the streamed file; resolvers await its `promise` for the filename, MIME type and stream.",
+        name: "Upload",
+        ...config.scalars.Upload
+    });
     return new GraphQLSchema({
         directives: [...specifiedDirectives, new GraphQLDirective({
                 name: "constraint",
@@ -1011,7 +1023,7 @@ export function getSchema(): GraphQLSchema {
         query: QueryType,
         mutation: MutationType,
         subscription: SubscriptionType,
-        types: [QualityType, TrackArtworkType, TrackFormatType, AlbumType, AlbumConnectionType, AlbumEdgeType, ArtistType, ArtistConnectionType, ArtistEdgeType, ArtistInitialType, ArtistSynonymType, ArtworkType, ArtworkStatusType, DeliveryTierType, DurationType, LibraryScanType, MediaType, MutationType, PageInfoType, QueryType, SearchType, SubscriptionType, TrackType, TrackConnectionType, TrackDeliveryType, TrackEdgeType, TrackManifestType, TrackManifestChunkType, TrackManifestInitType, VoidType]
+        types: [UploadType, QualityType, TrackArtworkType, TrackFormatType, AlbumType, AlbumConnectionType, AlbumEdgeType, ArtistType, ArtistConnectionType, ArtistEdgeType, ArtistInitialType, ArtistSynonymType, ArtworkType, ArtworkStatusType, DeliveryTierType, DurationType, LibraryScanType, MediaType, MutationType, PageInfoType, QueryType, SearchType, SubscriptionType, TrackType, TrackConnectionType, TrackDeliveryType, TrackEdgeType, TrackManifestType, TrackManifestChunkType, TrackManifestInitType, VoidType]
     });
 }
 const typeNameMap = new Map();
