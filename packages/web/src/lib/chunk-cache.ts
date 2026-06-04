@@ -1,7 +1,9 @@
 /**
- * IndexedDB-backed cache for fetched audio chunk bytes, keyed by playback URL + byte range.
+ * IndexedDB-backed cache for fetched audio chunk bytes, keyed by playback URL + byte range, plus the finished manifests that index them, keyed by playback URL.
  *
  * The browser's HTTP cache can't do this natively: it never stores `206 Partial Content` responses from `fetch()`, and it can only answer a `Range` request by slicing a *complete* cached body — which never exists here, because the player only ever requests ranges. So chunk re-use across replays, seek-backs and PWA launches has to happen at this layer.
+ *
+ * Manifests ride along because cached chunks are unreachable without one — the byte ranges that key the chunks come from the manifest. A `done` manifest for a given URL is immutable (same finality argument as the bytes), so storing it lets a replay skip the manifest subscription entirely and lets a fully-prefetched track play with no network at all. Manifest records are a few KB and are never evicted.
  *
  * Storage is capped at `MAX_TOTAL_BYTES`; once over budget, entries are evicted lowest-value-first, where value is a tier-weighted age (`evictKey`): each quality step lets a chunk outlive same-aged lower-tier bytes by `TIER_EVICTION_BONUS_MS`. Low-tier copies left behind by an ABR upscale drain out first under pressure, but a fresh low-tier prefetch (the offline reservoir on a bad link) still outlives genuinely stale high-tier bytes. A running byte total is kept in a separate `meta` store and updated in the same transaction as every write, so concurrent tabs stay consistent. Every operation is failure-tolerant — an unavailable or broken IndexedDB (private browsing, quota, corruption) degrades to plain network fetches, never an error.
  */
@@ -21,9 +23,10 @@ type ChunkRecord = {
 };
 
 const DB_NAME = 'lofify-chunk-cache';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const CHUNK_STORE = 'chunks';
 const META_STORE = 'meta';
+const MANIFEST_STORE = 'manifests';
 const TOTAL_KEY = 'totalBytes';
 /** Byte budget for cached chunks — roughly 15–20 hours of audio at typical lossy tiers. */
 const MAX_TOTAL_BYTES = 250 * 1024 * 1024;
@@ -55,6 +58,7 @@ function openDb(): Promise<IDBDatabase | null> {
           db.createObjectStore(CHUNK_STORE, { keyPath: 'key' });
           db.createObjectStore(META_STORE);
         }
+        if (!db.objectStoreNames.contains(MANIFEST_STORE)) db.createObjectStore(MANIFEST_STORE);
         const chunks = req.transaction!.objectStore(CHUNK_STORE);
         if (!chunks.indexNames.contains('evictKey')) chunks.createIndex('evictKey', 'evictKey');
         if (e.oldVersion === 1) {
@@ -126,6 +130,31 @@ export async function listCachedRanges(
     return out;
   } catch {
     return [];
+  }
+}
+
+/** The stored manifest for `url`, or `null` on a miss (or any IndexedDB failure). The shape is whatever the player stored — this module only round-trips it. */
+export async function readCachedManifest(url: string): Promise<unknown | null> {
+  const db = await openDb();
+  if (!db) return null;
+  try {
+    const tx = db.transaction(MANIFEST_STORE, 'readonly');
+    const stored: unknown = await requested(tx.objectStore(MANIFEST_STORE).get(url));
+    return stored ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Store the finished manifest for `url`. Callers only pass `done` manifests — a done manifest for a given URL never changes, which is what makes a stored copy a full substitute for the live subscription. Best-effort like every other write here. */
+export async function storeCachedManifest(url: string, manifest: unknown): Promise<void> {
+  const db = await openDb();
+  if (!db) return;
+  try {
+    const tx = db.transaction(MANIFEST_STORE, 'readwrite');
+    await requested(tx.objectStore(MANIFEST_STORE).put(manifest, url));
+  } catch {
+    // Next replay just re-opens the manifest subscription.
   }
 }
 

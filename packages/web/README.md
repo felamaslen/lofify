@@ -178,6 +178,17 @@ which also makes the server start encoding it early. Prefetch is
 disabled in `Original` mode (large, often lossless deliveries the cache
 refuses anyway) and when the browser's `Save-Data` hint is on.
 
+Finished manifests are persisted alongside the chunks (also keyed by
+playback URL): a `done` manifest never changes for a given URL, so on
+replay the stored copy substitutes for the whole `trackManifest`
+subscription — one immediate emission, no SSE connection. Since the
+manifest is what holds the byte ranges that key the chunk cache, this
+is also what makes cached audio reachable with no network at all: a
+fully-prefetched track plays offline end-to-end. (Starting the app
+offline still needs previously-fetched library/delivery data in memory —
+query-cache persistence is the next step if full offline launch is
+wanted.)
+
 The progress bar shows the cache as a third layer: cached regions are
 drawn in the faintest primary tone beneath the buffered ranges, so the
 track reads as a safety gradient — faint (on disk, survives offline) →

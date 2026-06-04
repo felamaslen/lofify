@@ -15,6 +15,7 @@ import { artworkDisplayUrl, TrackArtworkDocument } from '../components/track-art
 import { TracksDocument } from '../components/track-list.tsx';
 import { getAudioElement } from '../lib/audio-element.ts';
 import { type Capabilities, capabilities, type LossyPreference } from '../lib/capabilities.ts';
+import { readCachedManifest, storeCachedManifest } from '../lib/chunk-cache.ts';
 import { setFaviconBadge } from '../lib/favicon.ts';
 import { graphql, type ResultOf, type VariablesOf } from '../lib/gql.ts';
 import { gqlRequest } from '../lib/gql-request.ts';
@@ -605,16 +606,17 @@ class Player {
   /** Assemble the `QueuedTrack` mse needs, bundling the per-track manifest-subscription factory the player owns. The factory captures `trackId` and reads `lossyPreference` live so a preference change between enqueue and a later live tier swap is picked up automatically. */
   private buildQueuedTrack(track: TrackNode, totalSeconds: number): QueuedTrack {
     const trackId = track.id;
+    const url = resolvePlaybackUrl(track.delivery.url);
     return {
       id: trackId,
-      url: resolvePlaybackUrl(track.delivery.url),
+      url,
       contentType: track.delivery.mimeType,
       quality: this.snapshot.requestedTier,
       totalSeconds,
       // Eager prefetch is for everyday adaptive listening: Original mode opts out (its deliveries
       // are large and often lossless, which the chunk cache refuses anyway), as does data saver.
       prefetch: this.snapshot.qualityMode !== 'ORIGINAL' && !saveDataEnabled(),
-      /** Open a `trackManifest` SSE subscription for `trackId` at `quality` and pipe cumulative snapshots into `onEmit`. The closure handles SSE delta merging (each emission carries only the chunks finalised since the previous one) and idempotent replay after a transparent reconnect. Returns the teardown mse will run on slot replacement / live swap / dispose. */
+      /** Deliver manifest snapshots for `trackId` at `quality` via `onEmit`. A stored manifest (kept once a track finishes encoding — immutable for a given URL, the same finality argument as the chunk bytes) substitutes for the whole subscription: one emission, no connection, fully offline-capable for prefetched tracks. Otherwise opens the `trackManifest` SSE subscription; the closure handles SSE delta merging (each emission carries only the chunks finalised since the previous one) and idempotent replay after a transparent reconnect, and stores the final snapshot when it reports `done`. Returns the teardown mse will run on slot replacement / live swap / dispose. */
       subscribeManifest: (quality, onEmit) => {
         const format = trackFormatFor(
           quality as Quality,
@@ -622,27 +624,42 @@ class Player {
           this.autoPassthrough(),
         );
         let chunks: ManifestChunk[] = [];
-        return subscribeToStream(
-          TrackManifestDocument,
-          { trackId, format },
-          {
-            next: (data) => {
-              const snap = data.trackManifest;
-              if (!snap) return;
-              if (snap.chunks.length > 0) {
-                const merged = chunks.slice();
-                for (const c of snap.chunks) {
-                  const tailEnd = merged.length > 0 ? merged[merged.length - 1]!.endSeconds : 0;
-                  if (c.endSeconds > tailEnd) merged.push(c);
+        let unsub: (() => void) | null = null;
+        let cancelled = false;
+        void readCachedManifest(url).then((stored) => {
+          if (cancelled) return;
+          if (stored) {
+            onEmit(stored as ManifestSnapshot);
+            return;
+          }
+          unsub = subscribeToStream(
+            TrackManifestDocument,
+            { trackId, format },
+            {
+              next: (data) => {
+                const snap = data.trackManifest;
+                if (!snap) return;
+                if (snap.chunks.length > 0) {
+                  const merged = chunks.slice();
+                  for (const c of snap.chunks) {
+                    const tailEnd = merged.length > 0 ? merged[merged.length - 1]!.endSeconds : 0;
+                    if (c.endSeconds > tailEnd) merged.push(c);
+                  }
+                  chunks = merged;
                 }
-                chunks = merged;
-              }
-              onEmit({ ...snap, chunks });
+                const full = { ...snap, chunks };
+                if (full.done) void storeCachedManifest(url, full);
+                onEmit(full);
+              },
+              error: () => {},
+              complete: () => {},
             },
-            error: () => {},
-            complete: () => {},
-          },
-        );
+          );
+        });
+        return () => {
+          cancelled = true;
+          unsub?.();
+        };
       },
     };
   }
