@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readdir, unlink, writeFile } from 'node:fs/promises';
+import { unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { and, eq, type SQL, sql } from 'drizzle-orm';
@@ -96,19 +96,10 @@ export async function storeUploadedArtwork(track: DbTrack, bytes: Buffer): Promi
 
   await linkAlbumTracks(row.id, key);
 
+  // Best-effort: an orphaned file is wasted disk, not an error. Renders under the asset cache are keyed by the (now changed) source URL, so they orphan harmlessly too.
   const stale = previous[0]?.file;
   if (stale && stale !== file) {
-    await removeImageAndDerivatives(stale);
+    await unlink(path.join(artworkDir(), stale)).catch(() => undefined);
   }
   return row;
-}
-
-/** Remove a stored image and any rendered variants (named `<basename>.<size>.<format>` beside it). Best-effort — an orphaned file is wasted disk, not an error. */
-async function removeImageAndDerivatives(basename: string): Promise<void> {
-  const entries = await readdir(artworkDir()).catch(() => [] as string[]);
-  await Promise.all(
-    entries
-      .filter((name) => name === basename || name.startsWith(`${basename}.`))
-      .map((name) => unlink(path.join(artworkDir(), name)).catch(() => undefined)),
-  );
 }

@@ -20,8 +20,8 @@ export class Artwork {
 
   /** @gqlField */
   media(): Media {
-    // The v= path option is a cache-buster: artwork URLs are served immutable, and updatedAt moves whenever the row's image is replaced or re-downloaded.
-    return Image.fromApiPath(`/artwork/v=${this.row.updatedAt.getTime()}/${this.row.id}`);
+    // updatedAt versions the image: it moves whenever the row's image is replaced or re-downloaded, so previews bust their immutable caches while the original URL stays stable.
+    return Image.fromApiPath(`/artwork/${this.row.id}`, String(this.row.updatedAt.getTime()));
   }
 }
 

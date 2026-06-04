@@ -9,6 +9,11 @@ A file sent with the [GraphQL multipart request spec](https://github.com/jaydens
 """
 scalar Upload
 
+"""Pre-defined rendered sizes for media previews."""
+enum MediaSize {
+  SQUARE_500
+}
+
 """
 Coarse playback quality. `MIN` / `LOW` / `MEDIUM` / `HIGH` ask for a transcode at an ascending bitrate; `MAX` delivers the best representation of the source the client can play, copying without re-encoding whenever possible.
 """
@@ -163,6 +168,10 @@ type Duration {
 
 """A renderable image resource."""
 type Image implements Media {
+  """
+  A processed render of this image: the original URL behind the API's `/asset/<options>/` processing route.
+  """
+  preview(size: MediaSize!): Image!
   """Absolute URL of the original resource."""
   url: String!
 }

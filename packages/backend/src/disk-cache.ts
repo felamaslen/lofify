@@ -20,6 +20,11 @@ export function artworkDir(): string {
   return path.join(diskCacheRoot(), 'artwork');
 }
 
+/** Directory holding rendered asset variants (`<sha256 of options + source URL>.<ext>`), produced by the `/asset` route. */
+export function assetDir(): string {
+  return path.join(diskCacheRoot(), 'asset');
+}
+
 /**
  * Creates the disk-cache directories and probe-writes the root. Throws when the cache is not writable, so a misconfigured deployment crashes at startup instead of limping along unable to transcode or store artwork.
  */
@@ -27,6 +32,7 @@ export async function ensureDiskCacheWritable(): Promise<void> {
   const root = diskCacheRoot();
   await mkdir(transcodeDir(), { recursive: true });
   await mkdir(artworkDir(), { recursive: true });
+  await mkdir(assetDir(), { recursive: true });
   // Per-process probe name: parallel processes (e.g. vitest workers) share the root and would race a fixed name.
   const probe = path.join(root, `.write-probe-${process.pid}`);
   await writeFile(probe, '');
