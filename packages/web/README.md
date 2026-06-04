@@ -208,6 +208,11 @@ retry. Either way the hook calls `Mutation.artworkDownload` and polls
 `Track.artwork` every 2s until the row resolves, sharing one TanStack
 Query key per track so no two consumers poll the same track twice.
 
+Everything rendered (tiles and the Media Session cover alike) uses
+`media.preview(size: SQUARE_500).src` — the immutably-cached AVIF
+square from the API's `/asset` route. The original `media.url` is
+served no-store and is never used for display.
+
 Artwork can also be set by hand: dropping an image file onto the tile
 (in any state — replacing an existing cover included) uploads it via
 `Mutation.trackUpdate`'s `artwork` argument as a GraphQL multipart

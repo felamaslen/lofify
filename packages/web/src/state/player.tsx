@@ -11,7 +11,7 @@ import {
 } from 'react';
 
 import { PlaybackBarDocument } from '../components/playback-bar.tsx';
-import { TrackArtworkDocument } from '../components/track-artwork.tsx';
+import { artworkDisplayUrl, TrackArtworkDocument } from '../components/track-artwork.tsx';
 import { TracksDocument } from '../components/track-list.tsx';
 import { getAudioElement } from '../lib/audio-element.ts';
 import { type Capabilities, capabilities, type LossyPreference } from '../lib/capabilities.ts';
@@ -153,9 +153,9 @@ export function resolvePlaybackUrl(url: string): string {
   return `${backendOrigin()}${url}`;
 }
 
-/** Media Session artwork list for a (relative) cover URL, falling back to the app icon. */
+/** Media Session artwork list for a cover preview URL, falling back to the app icon. */
 function mediaArtworkFor(url: string | null): { src: string; sizes?: string; type?: string }[] {
-  return url ? [{ src: resolvePlaybackUrl(url), type: 'image/jpeg' }] : MEDIA_ARTWORK;
+  return url ? [{ src: url, sizes: '500x500', type: 'image/avif' }] : MEDIA_ARTWORK;
 }
 
 function loadStoredMode(): QualityMode {
@@ -405,8 +405,7 @@ class Player {
   private updateMediaMetadata(track: TrackNode): void {
     if (!hasMediaSession()) return;
     const meta = readFragment(PlaybackBarDocument, track);
-    const art = readFragment(TrackArtworkDocument, meta).artwork;
-    const url = art?.__typename === 'Artwork' ? art.media.url : null;
+    const url = artworkDisplayUrl(readFragment(TrackArtworkDocument, meta).artwork);
     this.appliedArtworkUrl = url;
     navigator.mediaSession.metadata = new MediaMetadata({
       title: meta.title ?? 'Untitled',

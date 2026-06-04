@@ -9,7 +9,12 @@ import { usePlayer } from '../state/player.tsx';
 import { useVisualiser } from '../state/visualiser.tsx';
 import { PlaybackFormatBadge } from './playback-format-badge.tsx';
 import { SettingsDialog } from './settings-dialog.tsx';
-import { ArtworkTile, TrackArtworkDocument, useTrackArtwork } from './track-artwork.tsx';
+import {
+  artworkDisplayUrl,
+  ArtworkTile,
+  TrackArtworkDocument,
+  useTrackArtwork,
+} from './track-artwork.tsx';
 import { Button } from './ui/button.tsx';
 import { Slider } from './ui/slider.tsx';
 
@@ -35,7 +40,7 @@ function BarArtwork({ track }: { track: FragmentOf<typeof TrackArtworkDocument> 
   const { artwork, download, upload, uploading, error } = useTrackArtwork(id, initial);
   const { setMediaArtwork } = usePlayer();
 
-  const coverUrl = artwork?.__typename === 'Artwork' ? artwork.media.url : null;
+  const coverUrl = artworkDisplayUrl(artwork);
   useEffect(() => {
     setMediaArtwork(id, coverUrl);
   }, [id, coverUrl, setMediaArtwork]);

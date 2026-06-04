@@ -5,7 +5,6 @@ import { type DragEvent, useEffect, useRef, useState } from 'react';
 import { graphql, readFragment, type ResultOf } from '../lib/gql.ts';
 import { gqlRequest, gqlUpload } from '../lib/gql-request.ts';
 import { cn } from '../lib/utils.ts';
-import { resolvePlaybackUrl } from '../state/player.tsx';
 
 export const TrackArtworkDocument = graphql(`
   fragment TrackArtwork on Track {
@@ -16,7 +15,11 @@ export const TrackArtworkDocument = graphql(`
         album
         albumArtist
         media {
-          url
+          ... on Image {
+            preview(size: SQUARE_500) {
+              src
+            }
+          }
         }
       }
       ... on ArtworkStatus {
@@ -46,7 +49,11 @@ const ArtworkDownloadDocument = graphql(`
         album
         albumArtist
         media {
-          url
+          ... on Image {
+            preview(size: SQUARE_500) {
+              src
+            }
+          }
         }
       }
       ... on ArtworkStatus {
@@ -69,6 +76,14 @@ const TrackArtworkUploadDocument = graphql(
 );
 
 type TrackArtworkValue = ResultOf<typeof TrackArtworkDocument>['artwork'];
+
+/**
+ * The URL to render for a track's artwork: the immutably-cached 500px preview. The original (`media.url`) is served no-store — it exists for downloads/full-size use, never for display.
+ */
+export function artworkDisplayUrl(artwork: TrackArtworkValue | null | undefined): string | null {
+  if (artwork?.__typename !== 'Artwork') return null;
+  return artwork.media.preview.src;
+}
 
 const POLL_INTERVAL_MS = 2000;
 
@@ -207,7 +222,7 @@ export function ArtworkTile({
   } else if (artwork?.__typename === 'Artwork') {
     inner = (
       <img
-        src={resolvePlaybackUrl(artwork.media.url)}
+        src={artworkDisplayUrl(artwork) ?? undefined}
         alt={`Cover of ${artwork.album} by ${artwork.albumArtist}`}
         loading="lazy"
         title="Drop an image to replace the album art"
