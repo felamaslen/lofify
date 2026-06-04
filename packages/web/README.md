@@ -208,6 +208,12 @@ retry. Either way the hook calls `Mutation.artworkDownload` and polls
 `Track.artwork` every 2s until the row resolves, sharing one TanStack
 Query key per track so no two consumers poll the same track twice.
 
+Artwork can also be set by hand: dropping an image file onto the tile
+(in any state — replacing an existing cover included) uploads it via
+`Mutation.trackUpdate`'s `artwork` argument as a GraphQL multipart
+request (`gqlUpload` in `lib/gql-request.ts`), and the album's art
+swaps to the dropped image.
+
 It surfaces in two places. The playback bar shows a 40px thumbnail next
 to the playing track's title (seeded by the fragment riding the
 player's track fetch, so the common case costs no extra request) and

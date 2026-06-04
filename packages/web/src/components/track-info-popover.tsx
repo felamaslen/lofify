@@ -35,15 +35,19 @@ function formatDate(iso: string): string {
 
 /** Cover preview at the top of the popover. Fetched on open rather than carried by the list fragment, so the artwork resolver isn't fanned out to every visible row; the query key is shared with the playback bar's. */
 function PopoverArtwork({ trackId }: { trackId: string }) {
-  const { artwork, loading, download, downloadError } = useTrackArtwork(trackId, undefined, {
-    fetchOnMount: true,
-  });
+  const { artwork, loading, download, upload, uploading, error } = useTrackArtwork(
+    trackId,
+    undefined,
+    { fetchOnMount: true },
+  );
   return (
     <ArtworkTile
       artwork={artwork}
       loading={loading}
       download={download}
-      downloadError={downloadError}
+      upload={upload}
+      uploading={uploading}
+      error={error}
       className="aspect-square w-full"
       iconClassName="size-6"
     />

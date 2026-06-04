@@ -5,6 +5,16 @@
 directive @constraint(min: Int!, max: Int!) on ARGUMENT_DEFINITION
 
 """
+A file sent with the [GraphQL multipart request spec](https://github.com/jaydenseric/graphql-multipart-request-spec). The multipart hook in `app.ts` replaces the mapped variable with an instance carrying the streamed file; resolvers await its `promise` for the filename, MIME type and stream.
+"""
+scalar Upload
+
+"""Pre-defined rendered sizes for media previews."""
+enum MediaSize {
+  SQUARE_500
+}
+
+"""
 Coarse playback quality. `MIN` / `LOW` / `MEDIUM` / `HIGH` ask for a transcode at an ascending bitrate; `MAX` delivers the best representation of the source the client can play, copying without re-encoding whenever possible.
 """
 enum Quality {
@@ -19,6 +29,12 @@ enum Quality {
 Album art for a track: the downloaded image, or the state of a download that has not produced one.
 """
 union TrackArtwork = Artwork | ArtworkStatus
+
+"""A renderable media resource."""
+interface Media {
+  """Absolute URL of the original resource."""
+  url: String!
+}
 
 """
 How the client wants the track delivered. The client advertises what it can decode as two preference-ordered MIME lists: `losslessFormats` (e.g. `audio/mp4; codecs="flac"`) and `lossyFormats` (e.g. `audio/webm; codecs="opus"`). `lossyFormats` must be non-empty.
@@ -150,6 +166,24 @@ type Duration {
   seconds: Int!
 }
 
+"""A renderable image resource."""
+type Image implements Media {
+  """
+  A processed render of this image, shaped for an `<img>` element: the original URL behind the API's `/asset/<options>/` processing route.
+  """
+  preview(size: MediaSize!): ImageSource!
+  """Absolute URL of the original resource."""
+  url: String!
+}
+
+"""
+A render of an image at one logical display size, shaped for an `<img>` element.
+"""
+type ImageSource {
+  """URL of the render at the logical size. Use as the `src` attribute."""
+  src: String!
+}
+
 """Snapshot of an ongoing or completed library scan."""
 type LibraryScan {
   """
@@ -167,12 +201,6 @@ type LibraryScan {
   isCompleted: Boolean!
   """Files successfully parsed and upserted so far."""
   scannedTotal: Int!
-}
-
-"""A renderable media resource."""
-type Media {
-  """URL of the resource, relative to the API origin."""
-  url: String!
 }
 
 type Mutation {
@@ -213,7 +241,20 @@ type Mutation {
   
   Throws when no track with the given id exists.
   """
-  trackUpdate(album: String, albumArtist: String, artist: String, discNumber: Int, id: ID!, title: String, trackNumber: Int, year: String): Track!
+  trackUpdate(
+    album: String
+    albumArtist: String
+    artist: String
+    """
+    Image file (jpeg, png or webp, multipart upload) to set as the cover of the track's whole album. Null leaves the artwork untouched.
+    """
+    artwork: Upload
+    discNumber: Int
+    id: ID!
+    title: String
+    trackNumber: Int
+    year: String
+  ): Track!
 }
 
 """Boundary metadata for a `TrackConnection`."""

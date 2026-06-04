@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ImageDown, Loader2, TriangleAlert } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { type DragEvent, useEffect, useRef, useState } from 'react';
 
 import { graphql, readFragment, type ResultOf } from '../lib/gql.ts';
-import { gqlRequest } from '../lib/gql-request.ts';
+import { gqlRequest, gqlUpload } from '../lib/gql-request.ts';
 import { cn } from '../lib/utils.ts';
 import { resolvePlaybackUrl } from '../state/player.tsx';
 
@@ -56,6 +56,17 @@ const ArtworkDownloadDocument = graphql(`
     }
   }
 `);
+
+const TrackArtworkUploadDocument = graphql(
+  `
+    mutation TrackArtworkUpload($id: ID!, $artwork: Upload) {
+      trackUpdate(id: $id, artwork: $artwork) {
+        ...TrackArtwork
+      }
+    }
+  `,
+  [TrackArtworkDocument],
+);
 
 type TrackArtworkValue = ResultOf<typeof TrackArtworkDocument>['artwork'];
 
@@ -112,6 +123,18 @@ export function useTrackArtwork(
   });
   const { mutate } = mutation;
 
+  const uploadMutation = useMutation({
+    mutationFn: (file: File) =>
+      gqlUpload(TrackArtworkUploadDocument, { id: trackId, artwork: file }),
+    onSuccess: (data) => {
+      setRequested({
+        forId: trackId,
+        value: readFragment(TrackArtworkDocument, data.trackUpdate).artwork,
+      });
+      void queryClient.invalidateQueries({ queryKey: ['track-artwork', trackId] });
+    },
+  });
+
   // The auto-request. The ref stops it re-firing for the same track (StrictMode remounts, an
   // errored attempt leaving artwork null); the server-side upsert makes concurrent fires from the
   // bar and the popover harmless.
@@ -123,80 +146,113 @@ export function useTrackArtwork(
     mutate();
   }, [neverRequested, trackId, mutate]);
 
+  const error = uploadMutation.error ?? mutation.error;
   return {
     artwork,
     loading,
     download: () => mutate(),
-    downloadError: mutation.error instanceof Error ? mutation.error.message : null,
+    upload: (file: File) => uploadMutation.mutate(file),
+    uploading: uploadMutation.isPending,
+    error: error instanceof Error ? error.message : null,
   };
 }
 
 /**
- * Square artwork tile: the cover once downloaded, a spinner while one is fetched, and a download/retry affordance otherwise. Size and rounding come from `className`.
+ * Square artwork tile: the cover once downloaded, a spinner while one is fetched or uploaded, and a download/retry affordance otherwise. Size and rounding come from `className`. Dropping an image file onto the tile — in any state — uploads it as the album's artwork.
  */
 export function ArtworkTile({
   artwork,
   loading = false,
   download,
-  downloadError,
+  upload,
+  uploading = false,
+  error,
   className,
   iconClassName = 'size-4',
 }: {
   artwork: TrackArtworkValue | null;
   loading?: boolean;
   download: () => void;
-  downloadError: string | null;
+  upload: (file: File) => void;
+  uploading?: boolean;
+  error: string | null;
   className?: string;
   iconClassName?: string;
 }) {
-  if (artwork?.__typename === 'Artwork') {
-    return (
-      <img
-        src={resolvePlaybackUrl(artwork.media.url)}
-        alt={`Cover of ${artwork.album} by ${artwork.albumArtist}`}
-        loading="lazy"
-        className={cn(
-          'shrink-0 rounded-md object-cover ring-1 ring-border animate-in fade-in',
-          className,
-        )}
-      />
-    );
-  }
+  const [dragOver, setDragOver] = useState(false);
 
-  if (loading || isInProgress(artwork)) {
-    return (
+  const onDragOver = (e: DragEvent<HTMLDivElement>) => {
+    if (!e.dataTransfer.types.includes('Files')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    setDragOver(true);
+  };
+  const onDrop = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setDragOver(false);
+    const file = Array.from(e.dataTransfer.files).find((f) => f.type.startsWith('image/'));
+    if (file) upload(file);
+  };
+
+  let inner;
+  if (loading || uploading || isInProgress(artwork)) {
+    inner = (
       <div
-        className={cn(
-          'flex shrink-0 items-center justify-center rounded-md bg-muted/40 ring-1 ring-border',
-          className,
-        )}
+        className="flex size-full items-center justify-center rounded-md bg-muted/40 ring-1 ring-border"
         aria-label="Fetching album art"
       >
         <Loader2 className={cn('animate-spin text-muted-foreground/70', iconClassName)} />
       </div>
     );
+  } else if (artwork?.__typename === 'Artwork') {
+    inner = (
+      <img
+        src={resolvePlaybackUrl(artwork.media.url)}
+        alt={`Cover of ${artwork.album} by ${artwork.albumArtist}`}
+        loading="lazy"
+        title="Drop an image to replace the album art"
+        className="size-full rounded-md object-cover ring-1 ring-border animate-in fade-in"
+      />
+    );
+  } else {
+    const failed = artwork?.__typename === 'ArtworkStatus' || error != null;
+    const message = error ?? (artwork?.__typename === 'ArtworkStatus' ? artwork.message : null);
+    inner = (
+      <button
+        type="button"
+        onClick={download}
+        title={
+          message
+            ? `${message} — click to retry, or drop an image`
+            : 'Download album art, or drop an image'
+        }
+        aria-label={failed ? 'Retry album art download' : 'Download album art'}
+        className={cn(
+          'group flex size-full items-center justify-center rounded-md border border-dashed border-border text-muted-foreground/50 transition-colors hover:border-solid hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+          failed && 'text-destructive-foreground/70 hover:text-destructive-foreground',
+        )}
+      >
+        {failed ? (
+          <TriangleAlert className={iconClassName} />
+        ) : (
+          <ImageDown className={iconClassName} />
+        )}
+      </button>
+    );
   }
 
-  const failed = artwork?.__typename === 'ArtworkStatus' || downloadError != null;
-  const message =
-    downloadError ?? (artwork?.__typename === 'ArtworkStatus' ? artwork.message : null);
   return (
-    <button
-      type="button"
-      onClick={download}
-      title={message ? `${message} — click to retry` : 'Download album art'}
-      aria-label={failed ? 'Retry album art download' : 'Download album art'}
+    <div
       className={cn(
-        'group flex shrink-0 items-center justify-center rounded-md border border-dashed border-border text-muted-foreground/50 transition-colors hover:border-solid hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-        failed && 'text-destructive-foreground/70 hover:text-destructive-foreground',
+        'relative shrink-0 rounded-md',
+        dragOver && 'ring-2 ring-ring ring-offset-2 ring-offset-background',
         className,
       )}
+      onDragOver={onDragOver}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={onDrop}
     >
-      {failed ? (
-        <TriangleAlert className={iconClassName} />
-      ) : (
-        <ImageDown className={iconClassName} />
-      )}
-    </button>
+      {inner}
+    </div>
   );
 }
