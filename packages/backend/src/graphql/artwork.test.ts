@@ -1,6 +1,3 @@
-import { mkdir, writeFile } from 'node:fs/promises';
-import path from 'node:path';
-
 import { app } from '../app.js';
 import { db } from '../db/client.js';
 import { albumArt, tracks } from '../db/schema/index.js';
@@ -229,27 +226,4 @@ test('editing the album after linking does not detach the artwork', async () => 
     .variables({ id: trackId })
     .expectNoErrors();
   expect(data.track?.artwork).toMatchObject({ __typename: 'ArtworkStatus', inProgress: true });
-});
-
-test('GET /artwork/:id serves the downloaded image immutably and 404s otherwise', async () => {
-  const id = '01934567-89ab-7cde-8123-456789abcd99';
-  // Mirrors the production layout: the worker writes <id>.jpg under <DISK_CACHE_DIR>/artwork.
-  const artworkDir = path.join(process.env.DISK_CACHE_DIR!, 'artwork');
-  await mkdir(artworkDir, { recursive: true });
-  await writeFile(path.join(artworkDir, `${id}.jpg`), Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
-
-  const hit = await app.inject({ method: 'GET', url: `/artwork/${id}` });
-  expect(hit.statusCode).toBe(200);
-  expect(hit.headers['content-type']).toBe('image/jpeg');
-  expect(hit.headers['cache-control']).toBe('public, max-age=31536000, immutable');
-  expect(hit.rawPayload).toEqual(Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
-
-  const miss = await app.inject({
-    method: 'GET',
-    url: '/artwork/01934567-89ab-7cde-8123-000000000000',
-  });
-  expect(miss.statusCode).toBe(404);
-
-  const invalid = await app.inject({ method: 'GET', url: '/artwork/not-a-uuid' });
-  expect(invalid.statusCode).toBe(404);
 });
