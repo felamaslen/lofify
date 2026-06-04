@@ -294,9 +294,11 @@ to toggle, shift-click to extend a range. Right-clicking opens a context
 menu with **Edit tags**, which opens a dialog over the selection. Editing a
 single track exposes every tag; with multiple tracks selected the dialog
 restricts to the album-shared tags (artist, album, CD, year) and leaves any
-blank field unchanged. Saving issues one `trackUpdate` mutation per selected
-track and refetches the list. Clearing a field on a single track reverts it
-to the tag scanned from the file.
+blank field unchanged. The form is built on TanStack Form: per-field
+touched state drives both the `(multiple values)` placeholder and which
+fields a multi-edit submits. Saving issues one `trackUpdate` mutation per
+selected track and refetches the list. Clearing a field on a single track
+reverts it to the tag scanned from the file.
 
 When every selected track shares one artist, the dialog also lists that
 artist's search **synonyms** with inline add/rename/remove. These apply
