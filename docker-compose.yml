@@ -41,6 +41,7 @@ services:
       TRANSCODE_MAX_PARALLEL: ${TRANSCODE_MAX_PARALLEL:-4}
       DISK_CACHE_DIR: /disk-cache
       DISK_CACHE_MAX_BYTES: 1073741824
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:4000}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-lgtm:4318
       OTEL_SERVICE_NAME: lofify-backend
     ports:

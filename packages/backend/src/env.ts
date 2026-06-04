@@ -41,6 +41,9 @@ const Schema = z.object({
     .positive()
     .default(10 * 1024 * 1024),
 
+  /** Public base URL of the API (e.g. `https://music.example.com`), used to build absolute `Media.url` values. */
+  PUBLIC_URL: z.string().url(),
+
   /** Cron expression for the periodic cache sweep. Empty disables the schedule (the post-transcode and ENOSPC sweeps still run). Has no effect unless `DISK_CACHE_MAX_BYTES` is set. */
   DISK_CACHE_SWEEP_CRON: z.string().default('*/15 * * * *'),
 
@@ -67,3 +70,8 @@ export type Env = typeof env;
 export const libraryPaths: string[] = env.LIBRARY_PATH.split(',')
   .map((s) => s.trim())
   .filter(Boolean);
+
+/** Resolve an API-served path (e.g. `/artwork/<file>`) against `PUBLIC_URL`, yielding the absolute URL clients use. */
+export function publicUrl(path: string): string {
+  return new URL(path, env.PUBLIC_URL).toString();
+}

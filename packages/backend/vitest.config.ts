@@ -35,6 +35,7 @@ export default defineConfig({
       TRANSCODE_TMPDIR: transcodeTmpdir,
       TRANSCODE_BAKE_DIR: transcodeBakeDir,
       DISK_CACHE_DIR: diskCacheDir,
+      PUBLIC_URL: 'http://lofify.test',
     },
   },
 });
