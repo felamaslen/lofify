@@ -211,6 +211,16 @@ tier actually playing during an on-the-fly bitrate switch. `HEAD`
 returns `Content-Type` + `Accept-Ranges` (and `X-Quality`), plus
 `Content-Length` once the encode is complete.
 
+Cacheability follows finality of the served bytes, not the encode's
+progress: the `.bin` is append-only and the signed URL is deterministic
+with no expiry, so a **closed**-range response (`bytes=START-END`) is
+`public, max-age=31536000, immutable` even mid-encode — the route only
+replies once the file covers the range, so those bytes can never change.
+Responses whose body depends on the still-growing total — full bodies,
+open-ended ranges (`bytes=START-`), HEAD — are `no-store` until the
+encode is done. The web player relies on the `immutable` marker to decide
+which chunks to keep in its IndexedDB chunk cache.
+
 **Format resolution** (`resolve.ts`) maps a client `TrackFormat` —
 preference-ordered `losslessFormats` / `lossyFormats` MIME lists, a
 `quality`, and an optional `autoPassthrough` flag — to that concrete target,

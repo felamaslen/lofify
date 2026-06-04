@@ -19,10 +19,12 @@ import { parseOptionSegments } from './options.js';
 import { contentTypeFor } from './resolve.js';
 import { verifySignature } from './sign.js';
 
-// A still-encoding entry's bytes (and its total length) keep growing, so its responses must never
-// be cached — a stored partial would be replayed as if complete. Once the encode is done the `.bin`
-// is final; the signed URL is deterministic over `(options, id)` with no expiry, so the bytes for a
-// given URL are stable and safe to cache aggressively.
+// The `.bin` is append-only and the signed URL is deterministic over `(options, id)` with no
+// expiry, so bytes already written never change. A closed-range response is therefore final from
+// the moment it's served — `serveRange` only replies once the file covers the range — and safe to
+// cache aggressively even mid-encode. Responses that depend on the entry's still-growing total
+// (full bodies, open-ended ranges, HEAD lengths) must not be cached until the encode is done — a
+// stored partial would be replayed as if complete.
 const CACHE_WHILE_ENCODING = 'no-store';
 const CACHE_WHEN_DONE = 'public, max-age=31536000, immutable';
 
@@ -110,7 +112,12 @@ async function serveRange(
   reply.header('Content-Type', contentType);
   reply.header('Content-Range', `bytes ${range.start}-${end}/${done ? size : '*'}`);
   reply.header('Content-Length', String(end - range.start + 1));
-  reply.header('Cache-Control', done ? CACHE_WHEN_DONE : CACHE_WHILE_ENCODING);
+  // A closed range's bytes are final even mid-encode (see the policy note above); an open-ended
+  // range's body would grow if re-requested before the encode finishes.
+  reply.header(
+    'Cache-Control',
+    done || range.end !== null ? CACHE_WHEN_DONE : CACHE_WHILE_ENCODING,
+  );
   return reply.send(createReadStream(entry.binPath, { start: range.start, end }));
 }
 
