@@ -213,13 +213,18 @@ Everything rendered (tiles and the Media Session cover alike) uses
 square from the API's `/asset` route. The original `media.url` is
 served no-store and is never used for display.
 
-Artwork can also be set by hand: dropping an image file onto the tile
-(in any state — replacing an existing cover included) uploads it via
+Artwork can also be set by hand: dropping an image onto the tile (in
+any state — replacing an existing cover included) uploads it via
 `Mutation.trackUpdate`'s `artwork` argument as a GraphQL multipart
 request (`gqlUpload` in `lib/gql-request.ts`), and the album's art
-swaps to the dropped image. A manually set cover shows a bin button on
-hover in the info popover; clicking it (`Mutation.artworkClear`)
-removes the image and requeues an automatic download.
+swaps to the dropped image. An image dragged from another browser tab
+arrives as a URL rather than a file; the server downloads it
+(`trackUpdate`'s `artworkUrl` argument — client-side fetching would be
+blocked by CORS on most image hosts) and stores it exactly like an
+upload, with the same size cap and magic-byte sniffing. A manually set
+cover shows a bin button on hover in the info popover; clicking it
+(`Mutation.artworkClear`) removes the image and requeues an automatic
+download.
 
 It surfaces in two places. The playback bar shows a 40px thumbnail next
 to the playing track's title (seeded by the fragment riding the

@@ -77,6 +77,17 @@ const TrackArtworkUploadDocument = graphql(
   [TrackArtworkDocument],
 );
 
+const TrackArtworkFromUrlDocument = graphql(
+  `
+    mutation TrackArtworkFromUrl($id: ID!, $artworkUrl: String) {
+      trackUpdate(id: $id, artworkUrl: $artworkUrl) {
+        ...TrackArtwork
+      }
+    }
+  `,
+  [TrackArtworkDocument],
+);
+
 const ArtworkClearDocument = graphql(`
   mutation ArtworkClear($trackId: ID!) {
     artworkClear(trackId: $trackId) {
@@ -176,6 +187,20 @@ export function useTrackArtwork(
     },
   });
 
+  // Images dragged from another browser tab arrive as a URL, not a file; the server downloads
+  // it (most image hosts block cross-origin reads on the client) and stores it like an upload.
+  const urlMutation = useMutation({
+    mutationFn: (url: string) =>
+      gqlRequest(TrackArtworkFromUrlDocument, { id: trackId, artworkUrl: url }),
+    onSuccess: (data) => {
+      setRequested({
+        forId: trackId,
+        value: readFragment(TrackArtworkDocument, data.trackUpdate).artwork,
+      });
+      void queryClient.invalidateQueries({ queryKey: ['track-artwork', trackId] });
+    },
+  });
+
   // Clearing flips the row back to PENDING, so its result seeds the poll the same way a download request does.
   const clearMutation = useMutation({
     mutationFn: () => gqlRequest(ArtworkClearDocument, { trackId }),
@@ -196,26 +221,28 @@ export function useTrackArtwork(
     mutate();
   }, [neverRequested, trackId, mutate]);
 
-  const error = clearMutation.error ?? uploadMutation.error ?? mutation.error;
+  const error = clearMutation.error ?? urlMutation.error ?? uploadMutation.error ?? mutation.error;
   return {
     artwork,
     loading,
     download: () => mutate(),
     upload: (file: File) => uploadMutation.mutate(file),
-    uploading: uploadMutation.isPending || clearMutation.isPending,
+    uploadFromUrl: (url: string) => urlMutation.mutate(url),
+    uploading: uploadMutation.isPending || urlMutation.isPending || clearMutation.isPending,
     clear: () => clearMutation.mutate(),
     error: error instanceof Error ? error.message : null,
   };
 }
 
 /**
- * Square artwork tile: the cover once downloaded, a spinner while one is fetched or uploaded, and a download/retry affordance otherwise. Size and rounding come from `className`. Dropping an image file onto the tile — in any state — uploads it as the album's artwork. Pass `clear` to offer a hover button on manually uploaded covers that removes them and requeues an automatic download.
+ * Square artwork tile: the cover once downloaded, a spinner while one is fetched or uploaded, and a download/retry affordance otherwise. Size and rounding come from `className`. Dropping an image onto the tile — in any state — sets it as the album's artwork: a file uploads directly, and an image dragged from another browser tab (a URL) is downloaded client-side first. Pass `clear` to offer a hover button on manually uploaded covers that removes them and requeues an automatic download.
  */
 export function ArtworkTile({
   artwork,
   loading = false,
   download,
   upload,
+  uploadFromUrl,
   uploading = false,
   clear,
   error,
@@ -226,6 +253,7 @@ export function ArtworkTile({
   loading?: boolean;
   download: () => void;
   upload: (file: File) => void;
+  uploadFromUrl: (url: string) => void;
   uploading?: boolean;
   clear?: () => void;
   error: string | null;
@@ -235,7 +263,8 @@ export function ArtworkTile({
   const [dragOver, setDragOver] = useState(false);
 
   const onDragOver = (e: DragEvent<HTMLDivElement>) => {
-    if (!e.dataTransfer.types.includes('Files')) return;
+    const types = e.dataTransfer.types;
+    if (!types.includes('Files') && !types.includes('text/uri-list')) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'copy';
     setDragOver(true);
@@ -244,7 +273,17 @@ export function ArtworkTile({
     e.preventDefault();
     setDragOver(false);
     const file = Array.from(e.dataTransfer.files).find((f) => f.type.startsWith('image/'));
-    if (file) upload(file);
+    if (file) {
+      upload(file);
+      return;
+    }
+    // A drag from another browser tab carries the image's URL rather than a file.
+    const uri = e.dataTransfer
+      .getData('text/uri-list')
+      .split('\n')
+      .map((line) => line.trim())
+      .find((line) => line && !line.startsWith('#'));
+    if (uri) uploadFromUrl(uri);
   };
 
   let inner;

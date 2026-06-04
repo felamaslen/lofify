@@ -37,7 +37,10 @@ export const PlaybackBarDocument = graphql(
 /** Cover thumbnail for the playing track. Keeps the Media Session artwork in step as a download resolves — `setMediaArtwork` ignores stale and redundant calls, so the effect can fire freely. */
 function BarArtwork({ track }: { track: FragmentOf<typeof TrackArtworkDocument> }) {
   const { id, artwork: initial } = readFragment(TrackArtworkDocument, track);
-  const { artwork, download, upload, uploading, error } = useTrackArtwork(id, initial);
+  const { artwork, download, upload, uploadFromUrl, uploading, error } = useTrackArtwork(
+    id,
+    initial,
+  );
   const { setMediaArtwork } = usePlayer();
 
   const coverUrl = artworkDisplayUrl(artwork);
@@ -50,6 +53,7 @@ function BarArtwork({ track }: { track: FragmentOf<typeof TrackArtworkDocument> 
       artwork={artwork}
       download={download}
       upload={upload}
+      uploadFromUrl={uploadFromUrl}
       uploading={uploading}
       error={error}
       className="size-10"
