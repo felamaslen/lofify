@@ -213,6 +213,12 @@ Everything rendered (tiles and the Media Session cover alike) uses
 square from the API's `/asset` route. The original `media.url` is
 served no-store and is never used for display.
 
+While a track with a cover plays, the favicon becomes the cover, with
+the app icon as a badge in the lower-right corner (`lib/favicon.ts`
+composites them on a canvas and swaps the `<link rel="icon">` to a
+data URL; stopping playback restores the original icon). Artwork loads
+with `crossOrigin: anonymous` so the canvas stays exportable.
+
 Artwork can also be set by hand: dropping an image onto the tile (in
 any state — replacing an existing cover included) uploads it via
 `Mutation.trackUpdate`'s `artwork` argument as a GraphQL multipart

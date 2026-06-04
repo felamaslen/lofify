@@ -15,6 +15,7 @@ import { artworkDisplayUrl, TrackArtworkDocument } from '../components/track-art
 import { TracksDocument } from '../components/track-list.tsx';
 import { getAudioElement } from '../lib/audio-element.ts';
 import { type Capabilities, capabilities, type LossyPreference } from '../lib/capabilities.ts';
+import { setFaviconBadge } from '../lib/favicon.ts';
 import { graphql, type ResultOf, type VariablesOf } from '../lib/gql.ts';
 import { gqlRequest } from '../lib/gql-request.ts';
 import { type CreatePlayerOptions, MsePlayer, type QueuedTrack } from '../lib/mse.ts';
@@ -339,6 +340,8 @@ class Player {
     this.detachers.length = 0;
     this.mse?.dispose();
     this.mse = null;
+    this.appliedArtworkUrl = null;
+    void setFaviconBadge(null);
     if (hasMediaSession()) {
       navigator.mediaSession.playbackState = 'none';
       navigator.mediaSession.metadata = null;
@@ -398,15 +401,16 @@ class Player {
     if (hasMediaSession()) navigator.mediaSession.playbackState = state;
   }
 
-  /** The artwork URL currently published to the Media Session; `null` means the app-icon fallback. Lets `setMediaArtwork` skip redundant metadata rebuilds. */
+  /** The artwork URL currently published to the Media Session and the favicon badge; `null` means the app-icon fallback. Lets `setMediaArtwork` skip redundant rebuilds. */
   private appliedArtworkUrl: string | null = null;
 
-  /** Publish the current track's title/artist/album (and cover, when downloaded) to the OS. */
+  /** Publish the current track's title/artist/album (and cover, when downloaded) to the OS, and badge the favicon with the cover. */
   private updateMediaMetadata(track: TrackNode): void {
-    if (!hasMediaSession()) return;
     const meta = readFragment(PlaybackBarDocument, track);
     const url = artworkDisplayUrl(readFragment(TrackArtworkDocument, meta).artwork);
     this.appliedArtworkUrl = url;
+    void setFaviconBadge(url);
+    if (!hasMediaSession()) return;
     navigator.mediaSession.metadata = new MediaMetadata({
       title: meta.title ?? 'Untitled',
       artist: meta.artist ?? 'Unknown artist',
@@ -415,13 +419,15 @@ class Player {
     });
   }
 
-  /** Swap the Media Session artwork for the playing track when its cover resolves after load — the playback bar's poll calls this as a download completes. Stale calls (another track now playing) and no-ops (same URL already applied) are ignored. */
+  /** Swap the Media Session artwork and favicon badge for the playing track when its cover resolves after load — the playback bar's poll calls this as a download completes. Stale calls (another track now playing) and no-ops (same URL already applied) are ignored. */
   setMediaArtwork(trackId: string, url: string | null): void {
-    if (!hasMediaSession()) return;
     if (this.snapshot.current?.id !== trackId) return;
-    const metadata = navigator.mediaSession.metadata;
-    if (!metadata || this.appliedArtworkUrl === url) return;
+    if (this.appliedArtworkUrl === url) return;
     this.appliedArtworkUrl = url;
+    void setFaviconBadge(url);
+    if (!hasMediaSession()) return;
+    const metadata = navigator.mediaSession.metadata;
+    if (!metadata) return;
     navigator.mediaSession.metadata = new MediaMetadata({
       title: metadata.title,
       artist: metadata.artist,
