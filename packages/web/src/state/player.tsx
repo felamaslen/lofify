@@ -121,9 +121,9 @@ const FORMAT_VALUES: readonly LossyPreference[] = ['OPUS', 'MP3'];
 // would lag), so we track the current observation and lean on the cooldown + hysteresis to stay
 // stable rather than averaging the responsiveness away.
 /** Step up only when the connection can pull this many times the current tier's bitrate. */
-const UP_FACTOR = 2;
+const UP_FACTOR = 3;
 /** Step down when throughput drops below this multiple of the current tier's bitrate. */
-const DOWN_FACTOR = 1.3;
+const DOWN_FACTOR = 2;
 /** Step up only when this much is buffered ahead, so a brief spike doesn't over-commit. */
 const BUFFER_HIGH_SECONDS = 20;
 /** Minimum gap between tier switches. */
@@ -164,6 +164,12 @@ function loadStoredMode(): QualityMode {
   const stored = window.localStorage.getItem(MODE_STORAGE_KEY);
   if (stored === 'ADAPTIVE' || stored === 'ORIGINAL' || stored === 'SMART') return stored;
   return 'SMART';
+}
+
+/** Whether the browser signals the user wants reduced data usage (the `Save-Data` client hint). Read live per check so flipping the OS/browser data saver applies from the next enqueued track. */
+function saveDataEnabled(): boolean {
+  const conn = (navigator as { connection?: { saveData?: boolean } }).connection;
+  return conn?.saveData === true;
 }
 
 /** The tier Adaptive starts a track at: where the last session left off (cold start `MEDIUM`). Table-free — only the chosen tier is remembered, so there's no bandwidth-to-tier mapping to maintain. */
@@ -241,6 +247,8 @@ type PlayerSnapshot = {
   isPlaying: boolean;
   positionSeconds: number;
   bufferedRanges: BufferedRange[];
+  /** Track-local ranges of the current track held in the persistent chunk cache — the regions that survive a coverage gap. Drawn as the faintest layer of the progress bar. */
+  cachedRanges: BufferedRange[];
   /** Seconds of the current track the server has finished encoding. */
   readySeconds: number;
   qualityMode: QualityMode;
@@ -281,6 +289,7 @@ class Player {
       isPlaying: false,
       positionSeconds: 0,
       bufferedRanges: [],
+      cachedRanges: [],
       readySeconds: 0,
       qualityMode: loadStoredMode(),
       requestedTier: initialActiveTier(),
@@ -371,6 +380,7 @@ class Player {
     const onBuffered = () =>
       this.set({
         bufferedRanges: this.readBuffered(),
+        cachedRanges: this.readCached(),
         readySeconds: this.mse?.currentTrackReadySeconds() ?? 0,
       });
     this.on('progress', onBuffered);
@@ -382,6 +392,11 @@ class Player {
   /** Read the buffered ranges for the current track in its local timeline, for the progress bar. */
   private readBuffered(): BufferedRange[] {
     return this.mse?.currentBuffered() ?? [];
+  }
+
+  /** Read the persistently-cached ranges for the current track in its local timeline, for the progress bar's cached layer. */
+  private readCached(): BufferedRange[] {
+    return this.mse?.currentCached() ?? [];
   }
 
   /** Register the OS media-control handlers once. These are what make a backgrounded PWA keep playing and surface lock-screen / notification controls — without them mobile platforms (iOS especially) pause hidden web audio. Idempotent: the handlers close over `this`, so re-registering is harmless. */
@@ -547,6 +562,7 @@ class Player {
       current: track,
       positionSeconds: startAt,
       bufferedRanges: [],
+      cachedRanges: [],
       readySeconds: 0,
       delivery: track.delivery,
       playingQuality: null,
@@ -582,6 +598,7 @@ class Player {
       onTransfer: (bps, chunkFinished) => this.onTransfer(bps, chunkFinished),
       onTrackChange: (trackId) => this.handleTrackChange(trackId),
       onReadyChange: () => this.set({ readySeconds: this.mse?.currentTrackReadySeconds() ?? 0 }),
+      onCached: () => this.set({ cachedRanges: this.readCached() }),
     };
   }
 
@@ -594,6 +611,9 @@ class Player {
       contentType: track.delivery.mimeType,
       quality: this.snapshot.requestedTier,
       totalSeconds,
+      // Eager prefetch is for everyday adaptive listening: Original mode opts out (its deliveries
+      // are large and often lossless, which the chunk cache refuses anyway), as does data saver.
+      prefetch: this.snapshot.qualityMode !== 'ORIGINAL' && !saveDataEnabled(),
       /** Open a `trackManifest` SSE subscription for `trackId` at `quality` and pipe cumulative snapshots into `onEmit`. The closure handles SSE delta merging (each emission carries only the chunks finalised since the previous one) and idempotent replay after a transparent reconnect. Returns the teardown mse will run on slot replacement / live swap / dispose. */
       subscribeManifest: (quality, onEmit) => {
         const format = trackFormatFor(
@@ -640,6 +660,7 @@ class Player {
       delivery: track.delivery,
       positionSeconds: position,
       bufferedRanges: this.readBuffered(),
+      cachedRanges: this.readCached(),
       readySeconds: this.mse?.currentTrackReadySeconds() ?? 0,
       playingQuality: null,
     });
@@ -674,6 +695,7 @@ class Player {
       delivery: next.delivery,
       positionSeconds: startAt,
       bufferedRanges: [],
+      cachedRanges: [],
       readySeconds: 0,
       playingQuality: null,
     });
@@ -695,6 +717,7 @@ class Player {
     // empty — either way mse holds the right values now).
     this.set({
       bufferedRanges: this.readBuffered(),
+      cachedRanges: this.readCached(),
       readySeconds: this.mse.currentTrackReadySeconds(),
       positionSeconds: this.mse.currentPosition(),
     });

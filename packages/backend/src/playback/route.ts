@@ -19,10 +19,12 @@ import { parseOptionSegments } from './options.js';
 import { contentTypeFor } from './resolve.js';
 import { verifySignature } from './sign.js';
 
-// A still-encoding entry's bytes (and its total length) keep growing, so its responses must never
-// be cached — a stored partial would be replayed as if complete. Once the encode is done the `.bin`
-// is final; the signed URL is deterministic over `(options, id)` with no expiry, so the bytes for a
-// given URL are stable and safe to cache aggressively.
+// The `.bin` is append-only and the signed URL is deterministic over `(options, id)` with no
+// expiry, so bytes already written never change. A closed-range response is therefore final from
+// the moment it's served — `serveRange` only replies once the file covers the range — and safe to
+// cache aggressively even mid-encode. Responses that depend on the entry's still-growing total
+// (full bodies, open-ended ranges, HEAD lengths) must not be cached until the encode is done — a
+// stored partial would be replayed as if complete.
 const CACHE_WHILE_ENCODING = 'no-store';
 const CACHE_WHEN_DONE = 'public, max-age=31536000, immutable';
 
@@ -110,7 +112,12 @@ async function serveRange(
   reply.header('Content-Type', contentType);
   reply.header('Content-Range', `bytes ${range.start}-${end}/${done ? size : '*'}`);
   reply.header('Content-Length', String(end - range.start + 1));
-  reply.header('Cache-Control', done ? CACHE_WHEN_DONE : CACHE_WHILE_ENCODING);
+  // A closed range's bytes are final even mid-encode (see the policy note above); an open-ended
+  // range's body would grow if re-requested before the encode finishes.
+  reply.header(
+    'Cache-Control',
+    done || range.end !== null ? CACHE_WHEN_DONE : CACHE_WHILE_ENCODING,
+  );
   return reply.send(createReadStream(entry.binPath, { start: range.start, end }));
 }
 
@@ -175,6 +182,12 @@ export async function registerPlaybackRoute(app: FastifyInstance): Promise<void>
 
     const contentType = contentTypeFor(target);
     reply.header('Accept-Ranges', 'bytes');
+    // Whether the web player may store these bytes in its IndexedDB chunk cache. Deliberately
+    // separate from `Cache-Control`, which governs HTTP caches: every final response stays
+    // `public` so a CDN can edge-cache it, but lossless deliveries opt out of client storage —
+    // at lossless bitrates a handful of albums would churn the player's whole cache budget.
+    // FLAC is the only lossless format the server emits (see `resolve.ts`).
+    reply.header('X-Client-Cache', target.format.codec === 'flac' ? '0' : '1');
     // The resolved quality of these bytes. Lets the player report the tier actually playing at the
     // playhead (which lags the requested tier during an on-the-fly switch, as the buffer drains).
     reply.header('X-Quality', target.quality);

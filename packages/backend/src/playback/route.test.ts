@@ -203,7 +203,7 @@ test('every response varies on Range so caches do not cross-serve byte slices', 
   expect(head.headers['vary']).toBe('Range');
 }, 30_000);
 
-test('fully-transcoded responses are cacheable, in-progress ones are not', async () => {
+test('closed-range responses are always cacheable; open-ended and HEAD wait for the encode', async () => {
   const id = await seedTrack({
     file: SAMPLE_FLAC,
     format: 'flac',
@@ -235,10 +235,18 @@ test('fully-transcoded responses are cacheable, in-progress ones are not', async
   });
 
   try {
+    // A closed range's bytes are final the moment they're served (the route waits until the .bin
+    // covers them, and the file is append-only), so it's cacheable even mid-encode.
     const slice = await app.inject({ method: 'GET', url, headers: { range: 'bytes=0-49' } });
     expect(slice.statusCode).toBe(206);
     expect(slice.headers['content-range']).toMatch(/\/\*$/); // total still unknown
-    expect(slice.headers['cache-control']).toBe('no-store');
+    expect(slice.headers['cache-control']).toBe('public, max-age=31536000, immutable');
+    expect(slice.headers['x-client-cache']).toBe('1'); // lossy → player may store it
+
+    // An open-ended range's body would grow if re-requested before the encode finishes.
+    const open = await app.inject({ method: 'GET', url, headers: { range: 'bytes=0-' } });
+    expect(open.statusCode).toBe(206);
+    expect(open.headers['cache-control']).toBe('no-store');
 
     const head = await app.inject({ method: 'HEAD', url });
     expect(head.headers['content-length']).toBeUndefined();
@@ -273,6 +281,13 @@ test('flac target on a flac source delivers flac-in-mp4 (passthrough)', async ()
   const res = await app.inject({ method: 'GET', url });
   expect(res.statusCode).toBe(200);
   expect(res.headers['content-type']).toBe('audio/mp4; codecs="flac"');
+
+  // Lossless responses stay fully HTTP-cacheable (CDN edge caching), but `X-Client-Cache: 0`
+  // tells the web player not to store the bytes in its IndexedDB chunk cache.
+  const slice = await app.inject({ method: 'GET', url, headers: { range: 'bytes=0-49' } });
+  expect(slice.statusCode).toBe(206);
+  expect(slice.headers['cache-control']).toBe('public, max-age=31536000, immutable');
+  expect(slice.headers['x-client-cache']).toBe('0');
 }, 30_000);
 
 test('flac target on a lossless-non-flac source re-encodes to flac-in-mp4', async () => {

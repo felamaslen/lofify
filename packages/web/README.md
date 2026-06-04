@@ -122,7 +122,9 @@ codec, distinguishing a copy (no re-encode) from a transcode, with
 `description` revealed by a `Hint` (hover tooltip on pointer devices, tap
 popover on touchscreens). A leading icon names the active quality policy
 (`Gauge` for Adaptive, `Wand2` for Smart, `Disc3` for Original), so
-the badge says both _what_ is playing and _why_. When `delivery.isMultiLossy`
+the badge says both _what_ is playing and _why_; clicking it opens a
+quick-switch popover for changing mode in place, without a trip to the
+settings dialog. When `delivery.isMultiLossy`
 is set — a lossy source re-encoded to a lossy output — a small amber warning
 triangle is overlaid on the policy icon's bottom-right corner, flagging the extra
 generation of compression loss. MSE failures or unreachable endpoints raise a
@@ -138,6 +140,65 @@ passthrough copy is exempt: the server serves it as `MAX` while the request
 carried a ladder tier, so the two never converge and that's the resting
 state, not a switch. (The backend must expose `X-Quality` via CORS
 `exposedHeaders` for cross-origin reads.)
+
+Fetched chunk bytes are cached in IndexedDB (`lib/chunk-cache.ts`), so
+replays, seek-backs and fresh PWA launches don't re-download audio. The
+browser's HTTP cache can't do this natively — it never stores the route's
+`206 Partial Content` responses, and it can only answer a `Range` request
+by slicing a complete cached body, which never exists because the player
+only ever fetches ranges. Entries are keyed by signed URL + byte range
+(so each tier caches separately) and the cache is capped at 250 MB.
+Eviction is by tier-weighted age, not pure age: each quality step lets
+a chunk outlive same-aged lower-tier bytes by four days, so the
+low-tier copies an ABR upscale leaves behind drain out first under
+pressure, while a fresh low-tier prefetch (the offline reservoir on a
+bad link) still outlives genuinely stale high-tier bytes. Storability
+is decided server-side: a response
+is stored only when it carries both `Cache-Control: immutable` (the
+bytes are final) and `X-Client-Cache: 1` (the server's opt-in to client
+storage, kept separate from `Cache-Control` so HTTP/CDN cacheability is
+unaffected). Lossless deliveries send `X-Client-Cache: 0` — at lossless
+bitrates a handful of albums would churn the whole budget, evicting far
+more replayable lossy audio than they're worth — so the player never
+sniffs codecs. A cache hit produces no ABR transfer sample — a
+disk read would register as near-infinite bandwidth — so adaptation only
+reacts to real network fetches.
+
+On top of the cache sits **eager prefetch**, built to bridge gaps in
+mobile coverage (tunnels, trains): whenever the forward buffer window is
+full and nothing else is in flight, the player pulls the rest of the
+current track (playhead → end) and then the whole next track into the
+chunk cache, one chunk at a time, without appending — the cache, not the
+quota-capped `SourceBuffer`, is the offline reservoir. Prefetch waits
+until 6 s of the current track have played (skipping around doesn't pull
+full tracks) and backs off a few seconds after a failed fetch (a dead
+radio isn't hammered). Once the current track is fully prefetched, the
+successor is resolved immediately rather than 20 s before the boundary,
+which also makes the server start encoding it early. Prefetch is
+disabled in `Original` mode (large, often lossless deliveries the cache
+refuses anyway) and when the browser's `Save-Data` hint is on.
+
+The progress bar shows the cache as a third layer: cached regions are
+drawn in the faintest primary tone beneath the buffered ranges, so the
+track reads as a safety gradient — faint (on disk, survives offline) →
+medium (buffered, plays instantly) → full (played). When a track seats,
+the player runs one keys-only IndexedDB query for everything cached at
+that URL and matches it against the manifest, so regions cached by an
+earlier session light up immediately; fetches and prefetches keep the
+layer growing from there.
+
+Prefetch couples to ABR asymmetrically, mirroring the controller's own
+split. **Completed** prefetch downloads report a final transfer sample:
+while prefetch keeps ahead, window fetches all hit the cache and sample
+nothing, so prefetch is the only continuous bandwidth signal left for
+upscaling — every fast prefetch chunk doubles as a free bandwidth probe.
+**In-flight** prefetch rates are never reported: a tunnel mid-prefetch
+must not trigger a downscale into a tier whose bytes were never cached
+while a fully-cached tier sits unused (a fetch that dies in a tunnel
+never completes, so it never reports). And when a playback fetch misses
+the cache and needs the network, the in-flight prefetch is aborted
+first, so the urgent fetch gets the whole pipe and its downscale
+samples aren't diluted by a parallel transfer.
 
 ## Visualiser
 

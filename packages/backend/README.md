@@ -211,6 +211,22 @@ tier actually playing during an on-the-fly bitrate switch. `HEAD`
 returns `Content-Type` + `Accept-Ranges` (and `X-Quality`), plus
 `Content-Length` once the encode is complete.
 
+Cacheability follows finality of the served bytes, not the encode's
+progress: the `.bin` is append-only and the signed URL is deterministic
+with no expiry, so a **closed**-range response (`bytes=START-END`) is
+`public, max-age=31536000, immutable` even mid-encode — the route only
+replies once the file covers the range, so those bytes can never
+change. Responses whose body depends on the still-growing total — full
+bodies, open-ended ranges (`bytes=START-`), HEAD — are `no-store` until
+the encode is done. Every final response is `public`, so a CDN in front
+edge-caches everything. Separately from HTTP caching, the
+`X-Client-Cache` header (exposed via CORS alongside `X-Quality`) tells
+the web player whether it may store the bytes in its IndexedDB chunk
+cache: `1` for lossy deliveries, `0` for lossless (FLAC) ones, which
+would churn the player's cache budget. The player stores a chunk only
+when it sees `immutable` plus `X-Client-Cache: 1`, so the storability
+decision lives entirely server-side.
+
 **Format resolution** (`resolve.ts`) maps a client `TrackFormat` —
 preference-ordered `losslessFormats` / `lossyFormats` MIME lists, a
 `quality`, and an optional `autoPassthrough` flag — to that concrete target,

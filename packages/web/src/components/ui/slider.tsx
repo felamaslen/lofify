@@ -6,12 +6,17 @@ import { cn } from '../../lib/utils.ts';
 type SliderProps = React.ComponentPropsWithoutRef<typeof SliderPrimitive.Root> & {
   /** Ranges drawn slightly darker behind the active range — e.g. "I've downloaded these seconds". Same units as `min`/`max`. */
   bufferedRanges?: ReadonlyArray<{ start: number; end: number }>;
+  /** Ranges drawn as the faintest layer, beneath `bufferedRanges` — e.g. "these seconds are cached on disk and survive offline". Together the three intensities read as a safety gradient: cached < buffered < played. Same units as `min`/`max`. */
+  cachedRanges?: ReadonlyArray<{ start: number; end: number }>;
   /** Start of a "pending / not yet available" region drawn as diagonal stripes from this value to `max`. Used to indicate the un-encoded tail of a transcoded track. Same units as `min`/`max`. */
   pendingStart?: number;
 };
 
 export const Slider = React.forwardRef<React.ElementRef<typeof SliderPrimitive.Root>, SliderProps>(
-  ({ className, bufferedRanges, pendingStart, min = 0, max = 100, ...props }, ref) => {
+  (
+    { className, bufferedRanges, cachedRanges, pendingStart, min = 0, max = 100, ...props },
+    ref,
+  ) => {
     const lo = min as number;
     const hi = max as number;
     const span = hi - lo || 1;
@@ -38,6 +43,16 @@ export const Slider = React.forwardRef<React.ElementRef<typeof SliderPrimitive.R
               }}
             />
           )}
+          {cachedRanges?.map((r, i) => (
+            <div
+              key={i}
+              className="absolute h-full bg-primary/15 cursor-pointer"
+              style={{
+                left: `${pct(r.start)}%`,
+                width: `${(((r.end - r.start) / span) * 100).toFixed(3)}%`,
+              }}
+            />
+          ))}
           {bufferedRanges?.map((r, i) => (
             <div
               key={i}

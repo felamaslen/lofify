@@ -74,6 +74,7 @@ export function PlaybackBar() {
     isPlaying,
     positionSeconds,
     bufferedRanges,
+    cachedRanges,
     readySeconds,
     togglePlay,
     next,
@@ -96,7 +97,7 @@ export function PlaybackBar() {
   const total = meta?.duration.seconds ?? 0;
   const sliderValue = useMemo(() => [Math.min(positionSeconds, total)], [positionSeconds, total]);
   // The un-encoded tail shrinks as the subscription advances. Clamp so the stripe never spills past the slider; treat `readySeconds === 0` as "we haven't heard from the server yet" → no overlay (avoids flashing a full-track stripe between mount and the first subscription event).
-  const pendingStart = readySeconds > 0 && readySeconds < total ? readySeconds : null;
+  const pendingStart = readySeconds > 0 && readySeconds < total ? Math.ceil(readySeconds) : null;
 
   const barRef = useRef<HTMLDivElement>(null);
   const [hover, setHover] = useState<{ x: number; time: number } | null>(null);
@@ -189,6 +190,7 @@ export function PlaybackBar() {
               max={total || 1}
               step={1}
               bufferedRanges={bufferedRanges}
+              cachedRanges={cachedRanges}
               {...(pendingStart != null ? { pendingStart } : {})}
               onValueChange={(v) => {
                 if (v[0] === undefined) return;
