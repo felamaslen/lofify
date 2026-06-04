@@ -894,6 +894,10 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
                             description: "Image file (jpeg, png or webp, multipart upload) to set as the cover of the track's whole album. Null leaves the artwork untouched.",
                             type: UploadType
                         },
+                        artworkUrl: {
+                            description: "http(s) URL of an image (jpeg, png or webp, \u2264 the upload size limit) to download and set as the cover of the track's whole album \u2014 e.g. one dragged from another browser tab. Mutually exclusive with `artwork`; null leaves the artwork untouched.",
+                            type: GraphQLString
+                        },
                         discNumber: {
                             type: GraphQLInt
                         },
@@ -911,7 +915,7 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
                         }
                     },
                     resolve(_source, args) {
-                        return mutationTrackUpdateResolver(args.id, args.title, args.trackNumber, args.discNumber, args.artist, args.albumArtist, args.album, args.year, args.artwork);
+                        return mutationTrackUpdateResolver(args.id, args.title, args.trackNumber, args.discNumber, args.artist, args.albumArtist, args.album, args.year, args.artwork, args.artworkUrl);
                     }
                 }
             };

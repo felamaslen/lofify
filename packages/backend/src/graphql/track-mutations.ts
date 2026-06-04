@@ -3,6 +3,7 @@ import type { Readable } from 'node:stream';
 import { eq } from 'drizzle-orm';
 import type { ID, Int } from 'grats';
 
+import { fetchRemoteImage } from '../artwork/remote.js';
 import { storeUploadedArtwork } from '../artwork/store.js';
 import { db } from '../db/client.js';
 import { tracks as tracksTable } from '../db/schema/index.js';
@@ -30,7 +31,12 @@ export async function trackUpdate(
   year?: string | null,
   /** Image file (jpeg, png or webp, multipart upload) to set as the cover of the track's whole album. Null leaves the artwork untouched. */
   artwork?: Upload | null,
+  /** http(s) URL of an image (jpeg, png or webp, ≤ the upload size limit) to download and set as the cover of the track's whole album — e.g. one dragged from another browser tab. Mutually exclusive with `artwork`; null leaves the artwork untouched. */
+  artworkUrl?: string | null,
 ): Promise<Track> {
+  if (artwork != null && artworkUrl != null) {
+    throw new Error('Pass either artwork or artworkUrl, not both.');
+  }
   const set: Record<string, string | number | null | Date> = {};
   if (title !== undefined) set.titleOverride = title;
   if (trackNumber !== undefined) set.trackNumberOverride = trackNumber;
@@ -67,11 +73,13 @@ export async function trackUpdate(
   }
 
   // After the tag updates, so the artwork is keyed on the effective values this mutation set.
-  if (artwork != null) {
+  if (artwork != null || artworkUrl != null) {
     const rows = await db.select().from(tracksTable).where(eq(tracksTable.id, id)).limit(1);
     if (!rows[0]) throw new Error('Unknown track.');
-    const file = await artwork.promise;
-    const bytes = await streamToBuffer(file.createReadStream());
+    const bytes =
+      artwork != null
+        ? await streamToBuffer((await artwork.promise).createReadStream())
+        : await fetchRemoteImage(artworkUrl!);
     await storeUploadedArtwork(rows[0], bytes);
   }
 

@@ -259,6 +259,10 @@ type Mutation {
     Image file (jpeg, png or webp, multipart upload) to set as the cover of the track's whole album. Null leaves the artwork untouched.
     """
     artwork: Upload
+    """
+    http(s) URL of an image (jpeg, png or webp, ≤ the upload size limit) to download and set as the cover of the track's whole album — e.g. one dragged from another browser tab. Mutually exclusive with `artwork`; null leaves the artwork untouched.
+    """
+    artworkUrl: String
     discNumber: Int
     id: ID!
     title: String
