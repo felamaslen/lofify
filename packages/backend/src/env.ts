@@ -34,6 +34,13 @@ const Schema = z.object({
   /** Soft byte budget for the on-disk playback cache. When set, completed entries are swept least-recently-accessed-first once total usage exceeds this value. Unset disables sweeping, leaving the cache unbounded. */
   DISK_CACHE_MAX_BYTES: z.coerce.number().int().positive().optional(),
 
+  /** Maximum size of a file sent with a GraphQL multipart request (e.g. `trackUpdate`'s artwork upload). Defaults to 10 MiB — generous for an album cover. */
+  UPLOAD_MAX_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(10 * 1024 * 1024),
+
   /** Cron expression for the periodic cache sweep. Empty disables the schedule (the post-transcode and ENOSPC sweeps still run). Has no effect unless `DISK_CACHE_MAX_BYTES` is set. */
   DISK_CACHE_SWEEP_CRON: z.string().default('*/15 * * * *'),
 
