@@ -147,8 +147,13 @@ browser's HTTP cache can't do this natively — it never stores the route's
 `206 Partial Content` responses, and it can only answer a `Range` request
 by slicing a complete cached body, which never exists because the player
 only ever fetches ranges. Entries are keyed by signed URL + byte range
-(so each tier caches separately) and the cache is capped at 250 MB with
-oldest-first eviction. Storability is decided server-side: a response
+(so each tier caches separately) and the cache is capped at 250 MB.
+Eviction is by tier-weighted age, not pure age: each quality step lets
+a chunk outlive same-aged lower-tier bytes by four days, so the
+low-tier copies an ABR upscale leaves behind drain out first under
+pressure, while a fresh low-tier prefetch (the offline reservoir on a
+bad link) still outlives genuinely stale high-tier bytes. Storability
+is decided server-side: a response
 is stored only when it carries both `Cache-Control: immutable` (the
 bytes are final) and `X-Client-Cache: 1` (the server's opt-in to client
 storage, kept separate from `Cache-Control` so HTTP/CDN cacheability is
