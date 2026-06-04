@@ -12,12 +12,16 @@ export class Artwork {
     public album: string,
     /** Album artist the image was found for. @gqlField */
     public albumArtist: string,
-    private id: string,
+    private row: {
+      id: string;
+      updatedAt: Date;
+    },
   ) {}
 
   /** @gqlField */
   media(): Media {
-    return Image.fromApiPath(`/artwork/${this.id}`);
+    // The v= path option is a cache-buster: artwork URLs are served immutable, and updatedAt moves whenever the row's image is replaced or re-downloaded.
+    return Image.fromApiPath(`/artwork/v=${this.row.updatedAt.getTime()}/${this.row.id}`);
   }
 }
 
@@ -49,7 +53,7 @@ export type TrackArtwork = Artwork | ArtworkStatus;
 export function toTrackArtwork(row: AlbumArt): TrackArtwork {
   switch (row.status) {
     case 'SUCCEEDED':
-      return new Artwork(row.album, row.albumArtist, row.id);
+      return new Artwork(row.album, row.albumArtist, row);
     case 'FAILED':
       return new ArtworkStatus(false, row.error ?? 'Artwork download failed.');
     default:

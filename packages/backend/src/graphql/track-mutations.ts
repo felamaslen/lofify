@@ -1,10 +1,14 @@
+import type { Readable } from 'node:stream';
+
 import { eq } from 'drizzle-orm';
 import type { ID, Int } from 'grats';
 
+import { storeUploadedArtwork } from '../artwork/store.js';
 import { db } from '../db/client.js';
 import { tracks as tracksTable } from '../db/schema/index.js';
 import { dedupKeyOf, recomputeDedupGroups } from '../dedup/recompute.js';
 import { toGqlTrack, type Track } from './track.js';
+import type { Upload } from './upload.js';
 
 /**
  * Override one or more tags on a single track. Each supplied tag is stored as an override that takes precedence over the value read from the file on disk and survives rescans — the scanner never touches it.
@@ -24,6 +28,8 @@ export async function trackUpdate(
   albumArtist?: string | null,
   album?: string | null,
   year?: string | null,
+  /** Image file (jpeg, png or webp, multipart upload) to set as the cover of the track's whole album. Null leaves the artwork untouched. */
+  artwork?: Upload | null,
 ): Promise<Track> {
   const set: Record<string, string | number | null | Date> = {};
   if (title !== undefined) set.titleOverride = title;
@@ -60,8 +66,26 @@ export async function trackUpdate(
     await recomputeDedupGroups([before[0] ? dedupKeyOf(before[0]) : null, dedupKeyOf(after[0])]);
   }
 
+  // After the tag updates, so the artwork is keyed on the effective values this mutation set.
+  if (artwork != null) {
+    const rows = await db.select().from(tracksTable).where(eq(tracksTable.id, id)).limit(1);
+    if (!rows[0]) throw new Error('Unknown track.');
+    const file = await artwork.promise;
+    const bytes = await streamToBuffer(file.createReadStream());
+    await storeUploadedArtwork(rows[0], bytes);
+  }
+
   const rows = await db.select().from(tracksTable).where(eq(tracksTable.id, id)).limit(1);
   const row = rows[0];
   if (!row) throw new Error('Unknown track.');
   return toGqlTrack(row);
+}
+
+/** Collect an upload stream into memory. Size is already bounded by the multipart processor's `maxFileSize`. */
+async function streamToBuffer(stream: Readable): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
 }

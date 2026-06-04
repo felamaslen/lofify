@@ -224,7 +224,20 @@ type Mutation {
   
   Throws when no track with the given id exists.
   """
-  trackUpdate(album: String, albumArtist: String, artist: String, discNumber: Int, id: ID!, title: String, trackNumber: Int, year: String): Track!
+  trackUpdate(
+    album: String
+    albumArtist: String
+    artist: String
+    """
+    Image file (jpeg, png or webp, multipart upload) to set as the cover of the track's whole album. Null leaves the artwork untouched.
+    """
+    artwork: Upload
+    discNumber: Int
+    id: ID!
+    title: String
+    trackNumber: Int
+    year: String
+  ): Track!
 }
 
 """Boundary metadata for a `TrackConnection`."""

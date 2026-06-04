@@ -1,3 +1,5 @@
+import sharp from 'sharp';
+
 import { app } from '../app.js';
 import { db } from '../db/client.js';
 import { albumArt, tracks } from '../db/schema/index.js';
@@ -24,6 +26,7 @@ function trackValues(id: string, file: string) {
     sizeBytes: 1024,
     durationSeconds: 60,
     sourceMtime: new Date(0),
+    updatedAt: new Date(),
   };
 }
 
@@ -127,23 +130,30 @@ test('Track.artwork is null until artworkDownload is called, then pending for ev
 });
 
 test('Track.artwork resolves to Artwork with a media URL once the download succeeds', async () => {
+  vi.setSystemTime(new Date('2026-04-18T14:39:01+0100'));
   await seedAlbum();
   await gqlRequest(app).mutate(ArtworkDownloadMutation).variables({ trackId }).expectNoErrors();
 
   const [row] = await db
     .update(albumArt)
-    .set({ status: 'SUCCEEDED', file: 'placeholder.jpg' })
+    .set({
+      status: 'SUCCEEDED',
+      file: 'placeholder.jpg',
+      updatedAt: new Date(),
+    })
     .returning();
 
   const { data } = await gqlRequest(app)
     .query(TrackArtworkQuery)
     .variables({ id: trackId })
     .expectNoErrors();
-  expect(data.track?.artwork).toEqual({
+  expect(data.track?.artwork).toStrictEqual({
     __typename: 'Artwork',
     album: 'The Album',
     albumArtist: 'Album Artist',
-    media: { url: `http://lofify.test/artwork/${row!.id}` },
+    media: {
+      url: 'http://lofify.test/artwork/v=1776519541000/' + row!.id,
+    },
   });
 });
 
@@ -226,4 +236,120 @@ test('editing the album after linking does not detach the artwork', async () => 
     .variables({ id: trackId })
     .expectNoErrors();
   expect(data.track?.artwork).toMatchObject({ __typename: 'ArtworkStatus', inProgress: true });
+});
+
+// A real 1x1 PNG: the upload path sniffs magic bytes, so the fixture must be a valid image.
+const PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+  'base64',
+);
+
+/** Hand-rolled GraphQL multipart request (https://github.com/jaydenseric/graphql-multipart-request-spec) driving `trackUpdate` with an `artwork` upload. */
+function uploadArtwork(id: string, image: Buffer) {
+  const boundary = 'lofify-test-boundary';
+  const query = `mutation TrackArtworkUpload($id: ID!, $artwork: Upload) {
+    trackUpdate(id: $id, artwork: $artwork) {
+      artwork { __typename ... on Artwork { album albumArtist media { url } } }
+    }
+  }`;
+  const operations = JSON.stringify({ query, variables: { id, artwork: null } });
+  const map = JSON.stringify({ '0': ['variables.artwork'] });
+  const part = (headers: string, body: Buffer | string) =>
+    Buffer.concat([
+      Buffer.from(`--${boundary}\r\n${headers}\r\n\r\n`),
+      Buffer.from(body),
+      Buffer.from('\r\n'),
+    ]);
+  const payload = Buffer.concat([
+    part('content-disposition: form-data; name="operations"', operations),
+    part('content-disposition: form-data; name="map"', map),
+    part(
+      'content-disposition: form-data; name="0"; filename="art.png"\r\ncontent-type: image/png',
+      image,
+    ),
+    Buffer.from(`--${boundary}--\r\n`),
+  ]);
+  return app.inject({
+    method: 'POST',
+    url: '/graphql',
+    payload,
+    headers: {
+      'content-type': `multipart/form-data; boundary=${boundary}`,
+      // Apollo's CSRF prevention blocks multipart requests without a preflight-triggering header.
+      'x-apollo-operation-name': 'TrackArtworkUpload',
+    },
+  });
+}
+
+test('trackUpdate with an artwork upload stores the image and links the whole album', async () => {
+  await seedAlbum();
+
+  const res = await uploadArtwork(trackId, PNG);
+  expect(res.statusCode).toBe(200);
+  const body = res.json();
+  expect(body.errors).toBeUndefined();
+  const artwork = body.data.trackUpdate.artwork;
+  expect(artwork).toMatchObject({
+    __typename: 'Artwork',
+    album: 'The Album',
+    albumArtist: 'Album Artist',
+  });
+  expect(artwork.media.url).toMatch(/^http:\/\/lofify\.test\/artwork\/v=\d+\/[0-9a-f-]{36}$/);
+
+  const served = await app.inject({ method: 'GET', url: new URL(artwork.media.url).pathname });
+  expect(served.statusCode).toBe(200);
+  expect(served.headers['content-type']).toBe('image/png');
+  expect(served.rawPayload).toEqual(PNG);
+
+  const { data: sibling } = await gqlRequest(app)
+    .query(TrackArtworkQuery)
+    .variables({ id: siblingId })
+    .expectNoErrors();
+  expect(sibling.track?.artwork).toMatchObject({
+    __typename: 'Artwork',
+    media: { url: artwork.media.url },
+  });
+});
+
+test('replacing artwork busts the URL and serves the new image', async () => {
+  await seedAlbum();
+  const replacement = await sharp({
+    create: { width: 4, height: 4, channels: 3, background: '#0c0' },
+  })
+    .png()
+    .toBuffer();
+
+  const first = (await uploadArtwork(trackId, PNG)).json().data.trackUpdate.artwork;
+  const second = (await uploadArtwork(trackId, replacement)).json().data.trackUpdate.artwork;
+  // Same row, same id — the v= option is what changes, so immutable caches refetch.
+  expect(second.media.url).not.toBe(first.media.url);
+  expect(new URL(second.media.url).pathname.split('/').at(-1)).toBe(
+    new URL(first.media.url).pathname.split('/').at(-1),
+  );
+
+  const rows = await db.select().from(albumArt);
+  expect(rows).toHaveLength(1);
+
+  const served = await app.inject({ method: 'GET', url: new URL(second.media.url).pathname });
+  expect(served.rawPayload).toEqual(replacement);
+});
+
+test('artwork uploads that are not real images are rejected', async () => {
+  await seedAlbum();
+
+  const garbage = await uploadArtwork(trackId, Buffer.from('not an image'));
+  const body = garbage.json();
+  expect(body.errors?.[0]?.message).toMatch(/unsupported image format/i);
+});
+
+test('artwork uploads for unknown or album-less tracks are rejected', async () => {
+  const unknown = await uploadArtwork('01934567-89ab-7cde-8123-000000000000', PNG);
+  expect(unknown.json().errors?.[0]?.message).toMatch(/Unknown track/);
+
+  await db.insert(tracks).values({
+    ...trackValues(trackId, '/library/untagged.mp3'),
+    artist: 'Some Artist',
+  });
+  const noAlbum = await uploadArtwork(trackId, PNG);
+  expect(noAlbum.json().errors?.[0]?.message).toMatch(/no album/);
 });

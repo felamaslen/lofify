@@ -5,7 +5,7 @@
 
 import type { GqlScalar } from "grats";
 import type { Upload as UploadInternal } from "./../upload.js";
-import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, GraphQLInt, specifiedDirectives, GraphQLObjectType, GraphQLList, GraphQLString, GraphQLBoolean, GraphQLID, GraphQLUnionType, GraphQLInterfaceType, GraphQLEnumType, GraphQLInputObjectType, GraphQLFloat, GraphQLScalarType } from "graphql";
+import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, GraphQLInt, specifiedDirectives, GraphQLObjectType, GraphQLList, GraphQLString, GraphQLBoolean, GraphQLID, GraphQLUnionType, GraphQLInterfaceType, GraphQLEnumType, GraphQLInputObjectType, GraphQLScalarType, GraphQLFloat } from "graphql";
 import { artistIndex as queryArtistIndexResolver, track as queryTrackResolver, tracks as queryTracksResolver } from "./../track-queries.js";
 import { isUpdateAvailable as queryIsUpdateAvailableResolver, ping as queryPingResolver, noop as mutationNoopResolver } from "./../root.js";
 import { libraryScan as queryLibraryScanResolver, libraryScanCancel as mutationLibraryScanCancelResolver, libraryScanStart as mutationLibraryScanStartResolver, libraryScanSubscription as subscriptionLibraryScanResolver } from "./../library-scan.js";
@@ -751,6 +751,11 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
             };
         }
     });
+    const UploadType: GraphQLScalarType = new GraphQLScalarType({
+        description: "A file sent with the [GraphQL multipart request spec](https://github.com/jaydenseric/graphql-multipart-request-spec). The multipart hook in `app.ts` replaces the mapped variable with an instance carrying the streamed file; resolvers await its `promise` for the filename, MIME type and stream.",
+        name: "Upload",
+        ...config.scalars.Upload
+    });
     const MutationType: GraphQLObjectType = new GraphQLObjectType({
         name: "Mutation",
         fields() {
@@ -867,6 +872,10 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
                         artist: {
                             type: GraphQLString
                         },
+                        artwork: {
+                            description: "Image file (jpeg, png or webp, multipart upload) to set as the cover of the track's whole album. Null leaves the artwork untouched.",
+                            type: UploadType
+                        },
                         discNumber: {
                             type: GraphQLInt
                         },
@@ -884,7 +893,7 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
                         }
                     },
                     resolve(_source, args) {
-                        return mutationTrackUpdateResolver(args.id, args.title, args.trackNumber, args.discNumber, args.artist, args.albumArtist, args.album, args.year);
+                        return mutationTrackUpdateResolver(args.id, args.title, args.trackNumber, args.discNumber, args.artist, args.albumArtist, args.album, args.year, args.artwork);
                     }
                 }
             };
@@ -1002,11 +1011,6 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
                 }
             };
         }
-    });
-    const UploadType: GraphQLScalarType = new GraphQLScalarType({
-        description: "A file sent with the [GraphQL multipart request spec](https://github.com/jaydenseric/graphql-multipart-request-spec). The multipart hook in `app.ts` replaces the mapped variable with an instance carrying the streamed file; resolvers await its `promise` for the filename, MIME type and stream.",
-        name: "Upload",
-        ...config.scalars.Upload
     });
     const ImageType: GraphQLObjectType = new GraphQLObjectType({
         name: "Image",
