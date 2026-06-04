@@ -25,6 +25,12 @@ Album art for a track: the downloaded image, or the state of a download that has
 """
 union TrackArtwork = Artwork | ArtworkStatus
 
+"""A renderable media resource."""
+interface Media {
+  """Absolute URL of the original resource."""
+  url: String!
+}
+
 """
 How the client wants the track delivered. The client advertises what it can decode as two preference-ordered MIME lists: `losslessFormats` (e.g. `audio/mp4; codecs="flac"`) and `lossyFormats` (e.g. `audio/webm; codecs="opus"`). `lossyFormats` must be non-empty.
 
@@ -155,6 +161,12 @@ type Duration {
   seconds: Int!
 }
 
+"""A renderable image resource."""
+type Image implements Media {
+  """Absolute URL of the original resource."""
+  url: String!
+}
+
 """Snapshot of an ongoing or completed library scan."""
 type LibraryScan {
   """
@@ -172,12 +184,6 @@ type LibraryScan {
   isCompleted: Boolean!
   """Files successfully parsed and upserted so far."""
   scannedTotal: Int!
-}
-
-"""A renderable media resource."""
-type Media {
-  """URL of the resource, relative to the API origin."""
-  url: String!
 }
 
 type Mutation {

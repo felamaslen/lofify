@@ -1,18 +1,5 @@
 import type { AlbumArt } from '../db/schema/index.js';
-
-/**
- * A renderable media resource.
- *
- * @gqlType
- */
-export class Media {
-  constructor(url: string) {
-    this.url = url;
-  }
-
-  /** URL of the resource, relative to the API origin. @gqlField */
-  url: string;
-}
+import { Image, type Media } from './media.js';
 
 /**
  * A successfully downloaded album-art image.
@@ -20,20 +7,18 @@ export class Media {
  * @gqlType
  */
 export class Artwork {
-  constructor(album: string, albumArtist: string, media: Media) {
-    this.album = album;
-    this.albumArtist = albumArtist;
-    this.media = media;
-  }
-
-  /** Album the image was found for. @gqlField */
-  album: string;
-
-  /** Album artist the image was found for. @gqlField */
-  albumArtist: string;
+  constructor(
+    /** Album the image was found for. @gqlField */
+    public album: string,
+    /** Album artist the image was found for. @gqlField */
+    public albumArtist: string,
+    private id: string,
+  ) {}
 
   /** @gqlField */
-  media: Media;
+  media(): Media {
+    return Image.fromApiPath(`/artwork/${this.id}`);
+  }
 }
 
 /**
@@ -64,7 +49,7 @@ export type TrackArtwork = Artwork | ArtworkStatus;
 export function toTrackArtwork(row: AlbumArt): TrackArtwork {
   switch (row.status) {
     case 'SUCCEEDED':
-      return new Artwork(row.album, row.albumArtist, new Media(`/artwork/${row.id}`));
+      return new Artwork(row.album, row.albumArtist, row.id);
     case 'FAILED':
       return new ArtworkStatus(false, row.error ?? 'Artwork download failed.');
     default:

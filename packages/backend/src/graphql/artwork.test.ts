@@ -143,7 +143,7 @@ test('Track.artwork resolves to Artwork with a media URL once the download succe
     __typename: 'Artwork',
     album: 'The Album',
     albumArtist: 'Album Artist',
-    media: { url: `/artwork/${row!.id}` },
+    media: { url: `http://lofify.test/artwork/${row!.id}` },
   });
 });
 

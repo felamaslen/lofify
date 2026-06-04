@@ -5,11 +5,12 @@
 
 import type { GqlScalar } from "grats";
 import type { Upload as UploadInternal } from "./../upload.js";
-import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, GraphQLInt, specifiedDirectives, GraphQLObjectType, GraphQLList, GraphQLString, GraphQLBoolean, GraphQLID, GraphQLUnionType, GraphQLEnumType, GraphQLInputObjectType, GraphQLFloat, GraphQLScalarType } from "graphql";
+import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, GraphQLInt, specifiedDirectives, GraphQLObjectType, GraphQLList, GraphQLString, GraphQLBoolean, GraphQLID, GraphQLUnionType, GraphQLInterfaceType, GraphQLEnumType, GraphQLInputObjectType, GraphQLFloat, GraphQLScalarType } from "graphql";
 import { artistIndex as queryArtistIndexResolver, track as queryTrackResolver, tracks as queryTracksResolver } from "./../track-queries.js";
 import { isUpdateAvailable as queryIsUpdateAvailableResolver, ping as queryPingResolver, noop as mutationNoopResolver } from "./../root.js";
 import { libraryScan as queryLibraryScanResolver, libraryScanCancel as mutationLibraryScanCancelResolver, libraryScanStart as mutationLibraryScanStartResolver, libraryScanSubscription as subscriptionLibraryScanResolver } from "./../library-scan.js";
 import { artistSynonyms as trackArtistSynonymsResolver, artistSynonymCreate as mutationArtistSynonymCreateResolver, artistSynonymDelete as mutationArtistSynonymDeleteResolver, artistSynonymUpdate as mutationArtistSynonymUpdateResolver } from "./../artist-synonyms.js";
+import { Image as ImageClass } from "./../media.js";
 import { Artwork as ArtworkClass, ArtworkStatus as ArtworkStatusClass } from "./../artwork.js";
 import { artwork as trackArtworkResolver, delivery as trackDeliveryResolver, duplicates as trackDuplicatesResolver, path as trackPathResolver, url as trackUrlResolver } from "./../track.js";
 import { search as querySearchResolver } from "./../search.js";
@@ -176,18 +177,19 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
             };
         }
     });
-    const MediaType: GraphQLObjectType = new GraphQLObjectType({
-        name: "Media",
+    const MediaType: GraphQLInterfaceType = new GraphQLInterfaceType({
         description: "A renderable media resource.",
+        name: "Media",
         fields() {
             return {
                 url: {
-                    description: "URL of the resource, relative to the API origin.",
+                    description: "Absolute URL of the original resource.",
                     name: "url",
                     type: new GraphQLNonNull(GraphQLString)
                 }
             };
-        }
+        },
+        resolveType
     });
     const ArtworkType: GraphQLObjectType = new GraphQLObjectType({
         name: "Artwork",
@@ -1006,6 +1008,22 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
         name: "Upload",
         ...config.scalars.Upload
     });
+    const ImageType: GraphQLObjectType = new GraphQLObjectType({
+        name: "Image",
+        description: "A renderable image resource.",
+        fields() {
+            return {
+                url: {
+                    description: "Absolute URL of the original resource.",
+                    name: "url",
+                    type: new GraphQLNonNull(GraphQLString)
+                }
+            };
+        },
+        interfaces() {
+            return [MediaType];
+        }
+    });
     return new GraphQLSchema({
         directives: [...specifiedDirectives, new GraphQLDirective({
                 name: "constraint",
@@ -1023,12 +1041,13 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
         query: QueryType,
         mutation: MutationType,
         subscription: SubscriptionType,
-        types: [UploadType, QualityType, TrackArtworkType, TrackFormatType, AlbumType, AlbumConnectionType, AlbumEdgeType, ArtistType, ArtistConnectionType, ArtistEdgeType, ArtistInitialType, ArtistSynonymType, ArtworkType, ArtworkStatusType, DeliveryTierType, DurationType, LibraryScanType, MediaType, MutationType, PageInfoType, QueryType, SearchType, SubscriptionType, TrackType, TrackConnectionType, TrackDeliveryType, TrackEdgeType, TrackManifestType, TrackManifestChunkType, TrackManifestInitType, VoidType]
+        types: [UploadType, QualityType, TrackArtworkType, MediaType, TrackFormatType, AlbumType, AlbumConnectionType, AlbumEdgeType, ArtistType, ArtistConnectionType, ArtistEdgeType, ArtistInitialType, ArtistSynonymType, ArtworkType, ArtworkStatusType, DeliveryTierType, DurationType, ImageType, LibraryScanType, MutationType, PageInfoType, QueryType, SearchType, SubscriptionType, TrackType, TrackConnectionType, TrackDeliveryType, TrackEdgeType, TrackManifestType, TrackManifestChunkType, TrackManifestInitType, VoidType]
     });
 }
 const typeNameMap = new Map();
 typeNameMap.set(ArtworkClass, "Artwork");
 typeNameMap.set(ArtworkStatusClass, "ArtworkStatus");
+typeNameMap.set(ImageClass, "Image");
 function resolveType(obj: any): string {
     if (typeof obj.__typename === "string") {
         return obj.__typename;
