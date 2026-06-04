@@ -13,7 +13,9 @@
  *
  * Preload of the successor is mse-driven: the caller passes a `trackNext` thunk to `init`, and mse invokes it when the playhead is within `NEXT_TRACK_PRELOAD_SECONDS` of `current`'s end. If it returns `null` (end of library) or a codec the browser can't decode at all, `MediaSource.endOfStream()` fires after `current`'s tail and the caller's `ended` handler can step.
  *
- * Eager prefetch bridges coverage gaps (tunnels, trains): once the forward window is fully buffered and nothing else is in flight, the player pulls the rest of `current` (playhead → end) and then all of `next` into the persistent chunk cache, one chunk at a time, without appending — the cache, not the quota-capped SourceBuffer, is the offline reservoir. It starts only after `PREFETCH_AFTER_SECONDS` of the current track have played (so skipping around doesn't pull full tracks) and only for tracks whose `QueuedTrack.prefetch` flag allows it (the caller's policy: quality mode, data-saver). Once `current` is fully prefetched, `trackNext` is resolved immediately rather than at the preload window, so the successor prefetches too and the server starts encoding it early. Prefetch fetches deliberately report no `onTransfer` samples: a tunnel mid-prefetch must not trigger a downscale into a tier whose bytes were never cached while a fully-cached tier sits unused.
+ * Eager prefetch bridges coverage gaps (tunnels, trains): once the forward window is fully buffered and nothing else is in flight, the player pulls the rest of `current` (playhead → end) and then all of `next` into the persistent chunk cache, one chunk at a time, without appending — the cache, not the quota-capped SourceBuffer, is the offline reservoir. It starts only after `PREFETCH_AFTER_SECONDS` of the current track have played (so skipping around doesn't pull full tracks) and only for tracks whose `QueuedTrack.prefetch` flag allows it (the caller's policy: quality mode, data-saver). Once `current` is fully prefetched, `trackNext` is resolved immediately rather than at the preload window, so the successor prefetches too and the server starts encoding it early.
+ *
+ * Prefetch couples to ABR asymmetrically, mirroring the controller's own up/down split. *Completed* prefetch fetches report a final `onTransfer` sample — while prefetch keeps ahead of the playhead, window fetches all hit the cache and produce no samples, so prefetch is the only continuous bandwidth signal left for upscaling. *In-flight* prefetch rates are deliberately never reported: a tunnel mid-prefetch must not trigger a downscale into a tier whose bytes were never cached while a fully-cached tier sits unused (a fetch that dies in a tunnel never completes, so it never reports). And when an urgent playback fetch misses the cache and needs the network, the in-flight prefetch is aborted first, so the urgent fetch gets the whole pipe and its downscale samples aren't contaminated by a concurrent transfer.
  *
  * `ManifestSnapshot` and `ManifestChunk` are derived from the `TrackManifest` subscription document in `state/player.tsx`, so the player consumes the exact GraphQL response shape with no in-between conversion.
  */
@@ -884,14 +886,29 @@ export class MsePlayer {
     return null;
   }
 
-  /** Fetch one chunk (`chunkIndex === -1` = init) of `entry` purely to populate the chunk cache; the bytes are never appended. `fetchRange` serves from / stores to the cache itself — `stored` comes back false when the response's headers forbade storing, in which case the entry is marked unprefetchable rather than re-downloading bytes that will never persist. Failures back off `PREFETCH_RETRY_MS`. */
+  /** Fetch one chunk (`chunkIndex === -1` = init) of `entry` purely to populate the chunk cache; the bytes are never appended. `fetchRange` serves from / stores to the cache itself — `stored` comes back false when the response's headers forbade storing, in which case the entry is marked unprefetchable rather than re-downloading bytes that will never persist. Failures back off `PREFETCH_RETRY_MS`. Only the *completed* transfer rate is reported to the caller — see the module doc for why in-flight prefetch rates must never drive a downscale. */
   private async prefetchChunk(entry: TrackEntry, chunkIndex: number): Promise<void> {
     const range = chunkIndex === -1 ? entry.manifest.init : entry.manifest.chunks[chunkIndex];
     if (!range) return;
     const ctrl = new AbortController();
     this.prefetchPending = { trackId: entry.id, ctrl };
+    // Media chunks only, like the playback path — an init segment is a few KB and its rate sample
+    // would be all noise.
+    const reportCompleted =
+      chunkIndex >= 0
+        ? (bps: number, chunkFinished: boolean): void => {
+            if (chunkFinished) this.options.onTransfer?.(bps, true);
+          }
+        : undefined;
     try {
-      const res = await this.fetchRange(entry.url, range.byteStart, range.byteEnd, ctrl.signal);
+      const res = await this.fetchRange(
+        entry.url,
+        range.byteStart,
+        range.byteEnd,
+        ctrl.signal,
+        reportCompleted,
+        false,
+      );
       if (this.disposed || ctrl.signal.aborted) return;
       if (!res) {
         this.prefetchRetryAt = performance.now() + PREFETCH_RETRY_MS;
@@ -918,8 +935,7 @@ export class MsePlayer {
   private cancelAllPending(): void {
     for (const ctrl of this.pending.values()) ctrl.abort();
     this.pending.clear();
-    this.prefetchPending?.ctrl.abort();
-    this.prefetchPending = null;
+    this.cancelPrefetch();
   }
 
   private cancelPendingForTrack(trackId: string): void {
@@ -930,10 +946,13 @@ export class MsePlayer {
         this.pending.delete(key);
       }
     }
-    if (this.prefetchPending?.trackId === trackId) {
-      this.prefetchPending.ctrl.abort();
-      this.prefetchPending = null;
-    }
+    if (this.prefetchPending?.trackId === trackId) this.cancelPrefetch();
+  }
+
+  /** Abort the in-flight prefetch, if any. Also called when an urgent playback fetch is about to use the network: the urgent fetch gets the whole pipe (and uncontaminated ABR samples); the prefetch chunk simply retries on a later idle tick. */
+  private cancelPrefetch(): void {
+    this.prefetchPending?.ctrl.abort();
+    this.prefetchPending = null;
   }
 
   /** Fetch (or re-use cached) init bytes for `entry`, push them to the front of the append queue, and drain. Cached bytes survive a buffer wipe so the post-wipe re-append doesn't need a network round-trip. */
@@ -1009,9 +1028,15 @@ export class MsePlayer {
     byteEnd: number,
     signal: AbortSignal,
     onTransfer?: (bitsPerSecond: number, chunkFinished: boolean) => void,
+    /** Playback fetches (the default) abort the in-flight prefetch on a cache miss; the prefetch path passes `false`. */
+    urgent = true,
   ): Promise<{ data: Uint8Array; quality: string | null; stored: boolean } | null> {
     const cached = await readCachedChunk(url, byteStart, byteEnd);
     if (cached) return { ...cached, stored: true };
+    // Cache miss on a playback fetch → the network is needed *now*. Clear the prefetch out of the
+    // way so this fetch gets the full pipe and its ABR samples aren't diluted by a parallel
+    // transfer. (Prefetch itself passes `urgent = false`.)
+    if (urgent) this.cancelPrefetch();
     try {
       const res = await fetch(url, {
         signal,

@@ -166,15 +166,25 @@ current track (playhead → end) and then the whole next track into the
 chunk cache, one chunk at a time, without appending — the cache, not the
 quota-capped `SourceBuffer`, is the offline reservoir. Prefetch waits
 until 6 s of the current track have played (skipping around doesn't pull
-full tracks), backs off a few seconds after a failed fetch (a dead radio
-isn't hammered), and reports no ABR samples — so a tunnel mid-prefetch
-can't trigger a downscale into a tier whose bytes were never cached
-while a fully-cached tier sits unused. Once the current track is fully
-prefetched, the successor is resolved immediately rather than 20 s
-before the boundary, which also makes the server start encoding it
-early. Prefetch is disabled in `Original` mode (large, often lossless
-deliveries the cache refuses anyway) and when the browser's `Save-Data`
-hint is on.
+full tracks) and backs off a few seconds after a failed fetch (a dead
+radio isn't hammered). Once the current track is fully prefetched, the
+successor is resolved immediately rather than 20 s before the boundary,
+which also makes the server start encoding it early. Prefetch is
+disabled in `Original` mode (large, often lossless deliveries the cache
+refuses anyway) and when the browser's `Save-Data` hint is on.
+
+Prefetch couples to ABR asymmetrically, mirroring the controller's own
+split. **Completed** prefetch downloads report a final transfer sample:
+while prefetch keeps ahead, window fetches all hit the cache and sample
+nothing, so prefetch is the only continuous bandwidth signal left for
+upscaling — every fast prefetch chunk doubles as a free bandwidth probe.
+**In-flight** prefetch rates are never reported: a tunnel mid-prefetch
+must not trigger a downscale into a tier whose bytes were never cached
+while a fully-cached tier sits unused (a fetch that dies in a tunnel
+never completes, so it never reports). And when a playback fetch misses
+the cache and needs the network, the in-flight prefetch is aborted
+first, so the urgent fetch gets the whole pipe and its downscale
+samples aren't diluted by a parallel transfer.
 
 ## Visualiser
 
