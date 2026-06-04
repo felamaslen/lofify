@@ -37,9 +37,9 @@ async function buildApp(): Promise<FastifyInstance> {
   await app.register(fastifyCors, {
     origin: allow.includes('*') ? true : allow,
     credentials: true,
-    // The player reads X-Quality off each playback range response; browsers hide non-safelisted
-    // response headers from fetch() unless they're explicitly exposed.
-    exposedHeaders: ['X-Quality'],
+    // The player reads X-Quality and X-Client-Cache off each playback range response; browsers
+    // hide non-safelisted response headers from fetch() unless they're explicitly exposed.
+    exposedHeaders: ['X-Quality', 'X-Client-Cache'],
   });
 
   app.get('/healthz', async () => ({ status: 'ok' }));

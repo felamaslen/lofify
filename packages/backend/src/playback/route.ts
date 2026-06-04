@@ -182,6 +182,12 @@ export async function registerPlaybackRoute(app: FastifyInstance): Promise<void>
 
     const contentType = contentTypeFor(target);
     reply.header('Accept-Ranges', 'bytes');
+    // Whether the web player may store these bytes in its IndexedDB chunk cache. Deliberately
+    // separate from `Cache-Control`, which governs HTTP caches: every final response stays
+    // `public` so a CDN can edge-cache it, but lossless deliveries opt out of client storage —
+    // at lossless bitrates a handful of albums would churn the player's whole cache budget.
+    // FLAC is the only lossless format the server emits (see `resolve.ts`).
+    reply.header('X-Client-Cache', target.format.codec === 'flac' ? '0' : '1');
     // The resolved quality of these bytes. Lets the player report the tier actually playing at the
     // playhead (which lags the requested tier during an on-the-fly switch, as the buffer drains).
     reply.header('X-Quality', target.quality);

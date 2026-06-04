@@ -241,6 +241,7 @@ test('closed-range responses are always cacheable; open-ended and HEAD wait for 
     expect(slice.statusCode).toBe(206);
     expect(slice.headers['content-range']).toMatch(/\/\*$/); // total still unknown
     expect(slice.headers['cache-control']).toBe('public, max-age=31536000, immutable');
+    expect(slice.headers['x-client-cache']).toBe('1'); // lossy → player may store it
 
     // An open-ended range's body would grow if re-requested before the encode finishes.
     const open = await app.inject({ method: 'GET', url, headers: { range: 'bytes=0-' } });
@@ -280,6 +281,13 @@ test('flac target on a flac source delivers flac-in-mp4 (passthrough)', async ()
   const res = await app.inject({ method: 'GET', url });
   expect(res.statusCode).toBe(200);
   expect(res.headers['content-type']).toBe('audio/mp4; codecs="flac"');
+
+  // Lossless responses stay fully HTTP-cacheable (CDN edge caching), but `X-Client-Cache: 0`
+  // tells the web player not to store the bytes in its IndexedDB chunk cache.
+  const slice = await app.inject({ method: 'GET', url, headers: { range: 'bytes=0-49' } });
+  expect(slice.statusCode).toBe(206);
+  expect(slice.headers['cache-control']).toBe('public, max-age=31536000, immutable');
+  expect(slice.headers['x-client-cache']).toBe('0');
 }, 30_000);
 
 test('flac target on a lossless-non-flac source re-encodes to flac-in-mp4', async () => {
