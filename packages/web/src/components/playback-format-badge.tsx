@@ -1,5 +1,6 @@
 import {
   AlertTriangle,
+  Check,
   ChevronDown,
   ChevronsDown,
   ChevronsUp,
@@ -11,22 +12,84 @@ import {
   Wand2,
 } from 'lucide-react';
 import type { ComponentType, SVGProps } from 'react';
+import { useState } from 'react';
 
+import { cn } from '../lib/utils.ts';
 import { type Delivery, type Quality, type QualityMode, usePlayer } from '../state/player.tsx';
 import { Hint } from './ui/hint.tsx';
+import { Popover, PopoverContent, PopoverTrigger } from './ui/popover.tsx';
 
 type IconComponent = ComponentType<SVGProps<SVGSVGElement>>;
 
 // The active quality policy, shown as a leading icon so the badge says both *what* is playing and
-// *why* (the mode that chose it).
-const MODE_INDICATOR: Record<QualityMode, { Icon: IconComponent; tooltip: string }> = {
-  ADAPTIVE: { Icon: Gauge, tooltip: 'Adaptive — bitrate follows your connection speed.' },
+// *why* (the mode that chose it). Clicking the icon opens the quick switcher, whose rows reuse the
+// same icon + blurb.
+const MODE_INDICATOR: Record<QualityMode, { Icon: IconComponent; label: string; blurb: string }> = {
+  ADAPTIVE: { Icon: Gauge, label: 'Adaptive', blurb: 'Bitrate follows your connection speed.' },
   SMART: {
     Icon: Wand2,
-    tooltip: 'Smart — lossy sources play untouched; lossless sources adapt to your connection.',
+    blurb: 'Lossy sources play untouched; lossless sources adapt to your connection.',
+    label: 'Smart',
   },
-  ORIGINAL: { Icon: Disc3, tooltip: 'Original — the best representation of the source.' },
+  ORIGINAL: { Icon: Disc3, label: 'Original', blurb: 'The best representation of the source.' },
 };
+
+const MODE_ORDER: readonly QualityMode[] = ['ADAPTIVE', 'SMART', 'ORIGINAL'];
+
+/** The policy icon as a popover trigger: one click/tap away from switching quality mode, without a trip to the settings dialog. The active row carries a tick; selecting closes the popover immediately (a mode change may reload the track, so there's nothing left to do in it). */
+function ModeQuickSwitch({ qualityMode }: { qualityMode: QualityMode }) {
+  const { setQualityMode } = usePlayer();
+  const [open, setOpen] = useState(false);
+  const mode = MODE_INDICATOR[qualityMode];
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label={`Quality mode: ${mode.label}. Change quality mode`}
+          className="inline-flex rounded text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <mode.Icon className="size-3.5" aria-hidden />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent side="top" align="start" className="w-64 p-1">
+        {MODE_ORDER.map((value) => {
+          const { Icon, label, blurb } = MODE_INDICATOR[value];
+          const active = value === qualityMode;
+          return (
+            <button
+              key={value}
+              type="button"
+              onClick={() => {
+                setQualityMode(value);
+                setOpen(false);
+              }}
+              className={cn(
+                'flex w-full items-start gap-2.5 rounded-sm px-2.5 py-2 text-left transition-colors hover:bg-accent',
+                active && 'bg-accent/50',
+              )}
+            >
+              <Icon
+                className={cn(
+                  'mt-px size-3.5 shrink-0',
+                  active ? 'text-primary' : 'text-muted-foreground',
+                )}
+                aria-hidden
+              />
+              <span className="grid gap-0.5">
+                <span className="inline-flex items-center gap-1 text-xs font-medium leading-none">
+                  {label}
+                  {active && <Check className="size-3 text-primary" aria-hidden />}
+                </span>
+                <span className="text-[11px] leading-snug text-muted-foreground">{blurb}</span>
+              </span>
+            </button>
+          );
+        })}
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 type BadgeShape = {
   Icon: IconComponent;
@@ -74,7 +137,6 @@ const MULTI_LOSSY_WARNING =
 export function PlaybackFormatBadge() {
   const { current, qualityMode, requestedTier, playingQuality, delivery } = usePlayer();
   if (!current || !delivery) return null;
-  const mode = MODE_INDICATOR[qualityMode];
   // Show the tier actually under the playhead; fall back to the requested tier until the first chunk
   // reports back. Fade while they disagree — i.e. an on-the-fly switch whose buffer hasn't drained.
   // Not for a passthrough copy: there the server overrides the requested ladder tier with `MAX`, so
@@ -86,15 +148,7 @@ export function PlaybackFormatBadge() {
   return (
     <span className="inline-flex shrink-0 items-center gap-1.5">
       <span className="relative inline-flex">
-        <Hint content={mode.tooltip}>
-          <button
-            type="button"
-            aria-label={mode.tooltip}
-            className="inline-flex text-muted-foreground"
-          >
-            <mode.Icon className="size-3.5" aria-hidden />
-          </button>
-        </Hint>
+        <ModeQuickSwitch qualityMode={qualityMode} />
         {delivery.isMultiLossy && (
           <Hint content={MULTI_LOSSY_WARNING}>
             {/* A small overlay in the icon's corner, like a notification badge, with an opaque

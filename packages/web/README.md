@@ -122,7 +122,9 @@ codec, distinguishing a copy (no re-encode) from a transcode, with
 `description` revealed by a `Hint` (hover tooltip on pointer devices, tap
 popover on touchscreens). A leading icon names the active quality policy
 (`Gauge` for Adaptive, `Wand2` for Smart, `Disc3` for Original), so
-the badge says both _what_ is playing and _why_. When `delivery.isMultiLossy`
+the badge says both _what_ is playing and _why_; clicking it opens a
+quick-switch popover for changing mode in place, without a trip to the
+settings dialog. When `delivery.isMultiLossy`
 is set — a lossy source re-encoded to a lossy output — a small amber warning
 triangle is overlaid on the policy icon's bottom-right corner, flagging the extra
 generation of compression loss. MSE failures or unreachable endpoints raise a
