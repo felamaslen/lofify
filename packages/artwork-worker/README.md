@@ -27,8 +27,10 @@ This is a Cargo project, not a pnpm workspace package; build it with
 4. A successful download lands in
    `$DISK_CACHE_DIR/artwork/<id>.jpg` and resolves the row to
    `SUCCEEDED`; a `NotFound` result, error or timeout resolves it to
-   `FAILED` with the reason recorded for the UI. Failed rows are
-   retried only when the user asks (`Mutation.artworkDownload`).
+   `FAILED` with the reason recorded for the UI. Either resolution
+   clears `isManual` — the row's image (or lack of one) is automatic
+   from then on. Failed rows are retried only when the user asks
+   (`Mutation.artworkDownload`).
 
 ## Env
 
