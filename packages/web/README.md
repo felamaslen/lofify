@@ -139,6 +139,18 @@ carried a ladder tier, so the two never converge and that's the resting
 state, not a switch. (The backend must expose `X-Quality` via CORS
 `exposedHeaders` for cross-origin reads.)
 
+Fetched chunk bytes are cached in IndexedDB (`lib/chunk-cache.ts`), so
+replays, seek-backs and fresh PWA launches don't re-download audio. The
+browser's HTTP cache can't do this natively — it never stores the route's
+`206 Partial Content` responses, and it can only answer a `Range` request
+by slicing a complete cached body, which never exists because the player
+only ever fetches ranges. Entries are keyed by signed URL + byte range
+(so each tier caches separately), only responses the server marks
+`immutable` are stored, and the cache is capped at 250 MB with
+oldest-first eviction. A cache hit produces no ABR transfer sample — a
+disk read would register as near-infinite bandwidth — so adaptation only
+reacts to real network fetches.
+
 ## Visualiser
 
 A waveform button (`AudioLines`) sits in the playback bar's transport row,
