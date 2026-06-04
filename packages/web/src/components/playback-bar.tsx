@@ -74,6 +74,7 @@ export function PlaybackBar() {
     isPlaying,
     positionSeconds,
     bufferedRanges,
+    cachedRanges,
     readySeconds,
     togglePlay,
     next,
@@ -189,6 +190,7 @@ export function PlaybackBar() {
               max={total || 1}
               step={1}
               bufferedRanges={bufferedRanges}
+              cachedRanges={cachedRanges}
               {...(pendingStart != null ? { pendingStart } : {})}
               onValueChange={(v) => {
                 if (v[0] === undefined) return;

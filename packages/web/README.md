@@ -173,6 +173,15 @@ which also makes the server start encoding it early. Prefetch is
 disabled in `Original` mode (large, often lossless deliveries the cache
 refuses anyway) and when the browser's `Save-Data` hint is on.
 
+The progress bar shows the cache as a third layer: cached regions are
+drawn in the faintest primary tone beneath the buffered ranges, so the
+track reads as a safety gradient — faint (on disk, survives offline) →
+medium (buffered, plays instantly) → full (played). When a track seats,
+the player runs one keys-only IndexedDB query for everything cached at
+that URL and matches it against the manifest, so regions cached by an
+earlier session light up immediately; fetches and prefetches keep the
+layer growing from there.
+
 Prefetch couples to ABR asymmetrically, mirroring the controller's own
 split. **Completed** prefetch downloads report a final transfer sample:
 while prefetch keeps ahead, window fetches all hit the cache and sample

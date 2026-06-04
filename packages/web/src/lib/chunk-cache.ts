@@ -75,6 +75,31 @@ function chunkKey(url: string, byteStart: number, byteEnd: number): string {
   return `${url}#${byteStart}-${byteEnd}`;
 }
 
+/** Byte ranges (`[byteStart, byteEnd)`) of every chunk stored for `url`, via one keys-only query — no chunk bodies are read. All of a URL's keys share the `${url}#` prefix, so a single key-range scan covers the whole track at that tier. Lets the player light up its cached-regions layer the moment a track loads, instead of discovering entries one by one. */
+export async function listCachedRanges(
+  url: string,
+): Promise<{ byteStart: number; byteEnd: number }[]> {
+  const db = await openDb();
+  if (!db) return [];
+  try {
+    const tx = db.transaction(CHUNK_STORE, 'readonly');
+    const prefix = `${url}#`;
+    // U+FFFF sorts above every code unit a key suffix can contain, so the bound spans all
+    // `${url}#…` keys.
+    const keys = (await requested(
+      tx.objectStore(CHUNK_STORE).getAllKeys(IDBKeyRange.bound(prefix, `${prefix}\uffff`)),
+    )) as string[];
+    const out: { byteStart: number; byteEnd: number }[] = [];
+    for (const key of keys) {
+      const m = /#(\d+)-(\d+)$/.exec(key);
+      if (m) out.push({ byteStart: Number(m[1]), byteEnd: Number(m[2]) });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
 /** Cached bytes for `[byteStart, byteEnd)` of `url`, or `null` on a miss (or any IndexedDB failure). */
 export async function readCachedChunk(
   url: string,

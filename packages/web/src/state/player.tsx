@@ -247,6 +247,8 @@ type PlayerSnapshot = {
   isPlaying: boolean;
   positionSeconds: number;
   bufferedRanges: BufferedRange[];
+  /** Track-local ranges of the current track held in the persistent chunk cache — the regions that survive a coverage gap. Drawn as the faintest layer of the progress bar. */
+  cachedRanges: BufferedRange[];
   /** Seconds of the current track the server has finished encoding. */
   readySeconds: number;
   qualityMode: QualityMode;
@@ -287,6 +289,7 @@ class Player {
       isPlaying: false,
       positionSeconds: 0,
       bufferedRanges: [],
+      cachedRanges: [],
       readySeconds: 0,
       qualityMode: loadStoredMode(),
       requestedTier: initialActiveTier(),
@@ -377,6 +380,7 @@ class Player {
     const onBuffered = () =>
       this.set({
         bufferedRanges: this.readBuffered(),
+        cachedRanges: this.readCached(),
         readySeconds: this.mse?.currentTrackReadySeconds() ?? 0,
       });
     this.on('progress', onBuffered);
@@ -388,6 +392,11 @@ class Player {
   /** Read the buffered ranges for the current track in its local timeline, for the progress bar. */
   private readBuffered(): BufferedRange[] {
     return this.mse?.currentBuffered() ?? [];
+  }
+
+  /** Read the persistently-cached ranges for the current track in its local timeline, for the progress bar's cached layer. */
+  private readCached(): BufferedRange[] {
+    return this.mse?.currentCached() ?? [];
   }
 
   /** Register the OS media-control handlers once. These are what make a backgrounded PWA keep playing and surface lock-screen / notification controls — without them mobile platforms (iOS especially) pause hidden web audio. Idempotent: the handlers close over `this`, so re-registering is harmless. */
@@ -553,6 +562,7 @@ class Player {
       current: track,
       positionSeconds: startAt,
       bufferedRanges: [],
+      cachedRanges: [],
       readySeconds: 0,
       delivery: track.delivery,
       playingQuality: null,
@@ -588,6 +598,7 @@ class Player {
       onTransfer: (bps, chunkFinished) => this.onTransfer(bps, chunkFinished),
       onTrackChange: (trackId) => this.handleTrackChange(trackId),
       onReadyChange: () => this.set({ readySeconds: this.mse?.currentTrackReadySeconds() ?? 0 }),
+      onCached: () => this.set({ cachedRanges: this.readCached() }),
     };
   }
 
@@ -649,6 +660,7 @@ class Player {
       delivery: track.delivery,
       positionSeconds: position,
       bufferedRanges: this.readBuffered(),
+      cachedRanges: this.readCached(),
       readySeconds: this.mse?.currentTrackReadySeconds() ?? 0,
       playingQuality: null,
     });
@@ -683,6 +695,7 @@ class Player {
       delivery: next.delivery,
       positionSeconds: startAt,
       bufferedRanges: [],
+      cachedRanges: [],
       readySeconds: 0,
       playingQuality: null,
     });
@@ -704,6 +717,7 @@ class Player {
     // empty — either way mse holds the right values now).
     this.set({
       bufferedRanges: this.readBuffered(),
+      cachedRanges: this.readCached(),
       readySeconds: this.mse.currentTrackReadySeconds(),
       positionSeconds: this.mse.currentPosition(),
     });

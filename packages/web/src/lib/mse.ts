@@ -21,7 +21,7 @@
  */
 
 import type { ManifestChunk, ManifestSnapshot } from '../state/player.tsx';
-import { readCachedChunk, storeCachedChunk } from './chunk-cache.ts';
+import { listCachedRanges, readCachedChunk, storeCachedChunk } from './chunk-cache.ts';
 
 /** Trim buffered audio more than this many seconds behind the playhead. */
 const BEHIND_WINDOW = 30;
@@ -84,6 +84,8 @@ export type CreatePlayerOptions = {
   onTrackChange?: (trackId: string) => void;
   /** Called whenever the current track's manifest emits — i.e. whenever `currentTrackReadySeconds()` / `currentTrackEncodedEnd()` may have advanced. Manifest growth doesn't ride on any audio-element event, so the caller can't otherwise know when to re-poll the buffer indicator UI. */
   onReadyChange?: () => void;
+  /** Called when the set of persistently-cached chunks for the playing track grows (a prefetch or playback fetch landed in the chunk cache). Like manifest growth this rides on no audio-element event; the caller reads the regions back via `currentCached()`. */
+  onCached?: () => void;
 };
 
 /** First chunk index whose range covers `time`, or -1 if `time` is at/after the last chunk's end. */
@@ -145,6 +147,8 @@ type TrackEntry = {
   prefetch: boolean;
   /** Chunk indices verified to be in the persistent chunk cache at this entry's URL (`-1` = init). In-memory memo so the prefetch walk doesn't re-query IndexedDB per tick; reset on a live tier swap (the cache is keyed by URL). */
   prefetched: Set<number>;
+  /** Byte-range keys (`"start-end"`) found in the persistent cache for this entry's URL by the bulk lookup that runs when the entry seats, so chunks cached by an earlier session light up immediately. Matched (and consumed) against the manifest on every emission; `null` until the lookup lands. */
+  cacheSeed: Set<string> | null;
   /** Flips false when a prefetch response's headers forbade storing (the server said no — e.g. an unexpectedly lossless delivery). Stops the prefetch walk re-downloading bytes that will never persist. */
   prefetchable: boolean;
 };
@@ -359,6 +363,23 @@ export class MsePlayer {
     return out;
   }
 
+  /** Track-local second ranges of the current track whose bytes sit in the persistent chunk cache, merged into contiguous spans. Populated by the bulk cache lookup that runs when the track seats (`loadCacheSeed`) plus every chunk fetched or prefetched since. Empty when nothing is loaded. */
+  currentCached(): Range[] {
+    const entry = this.current;
+    if (!entry) return [];
+    const chunks = entry.manifest.chunks;
+    const out: Range[] = [];
+    for (let i = 0; i < chunks.length; i++) {
+      if (!entry.prefetched.has(i)) continue;
+      const start = chunkStartSeconds(chunks, i);
+      const end = chunks[i]!.endSeconds;
+      const last = out[out.length - 1];
+      if (last && start <= last.end + PLAYHEAD_EPS) last.end = end;
+      else out.push({ start, end });
+    }
+    return out;
+  }
+
   /** Seconds of the current track the server has finished encoding so far, in track-local time. Equals `currentTrackEncodedEnd()` once the manifest reports `done`. 0 when nothing is loaded. */
   currentTrackReadySeconds(): number {
     const entry = this.current;
@@ -456,6 +477,7 @@ export class MsePlayer {
     entry.prefetch = track.prefetch;
     entry.prefetched = new Set();
     entry.prefetchable = true;
+    entry.cacheSeed = null;
     this.prefetchRetryAt = 0;
     this.lastUncoveredFetch = null;
     this.desiredQuality = { trackId: entry.id, quality: track.quality };
@@ -486,6 +508,7 @@ export class MsePlayer {
       prefetch: track.prefetch,
       prefetched: new Set(),
       prefetchable: true,
+      cacheSeed: null,
     };
   }
 
@@ -514,10 +537,41 @@ export class MsePlayer {
 
   private subscribeEntry(entry: TrackEntry): void {
     this.unsubscribeEntry(entry);
+    void this.loadCacheSeed(entry);
     const id = entry.id;
     entry.unsubManifest = entry.subscribeManifest(entry.quality, (m) => {
       this.applyManifest(id, m);
     });
+  }
+
+  /** Bulk-load which of `entry`'s byte ranges already sit in the persistent cache (one keys-only IndexedDB query), so chunks cached by an earlier session show as cached the moment the track starts rather than waiting for the prefetch walk to touch them one by one. Re-run on a live tier swap (`subscribeEntry`), since the swap changes the URL the cache is keyed by. */
+  private async loadCacheSeed(entry: TrackEntry): Promise<void> {
+    const url = entry.url;
+    const ranges = await listCachedRanges(url);
+    // A live tier swap may have re-pointed the entry while the query was in flight.
+    if (this.disposed || entry.url !== url) return;
+    entry.cacheSeed = new Set(ranges.map((r) => `${r.byteStart}-${r.byteEnd}`));
+    this.applyCacheSeed(entry);
+    this.tick();
+  }
+
+  /** Mark manifest chunks whose byte ranges appear in the entry's cache seed, consuming matches so the seed only shrinks. Called when the seed lands and on every manifest emission — a mid-encode manifest grows after the seed arrives. Fires a single `onCached` for the whole batch (per-chunk callbacks would re-render the progress bar once per chunk). */
+  private applyCacheSeed(entry: TrackEntry): void {
+    const seed = entry.cacheSeed;
+    if (!seed || seed.size === 0) return;
+    const init = entry.manifest.init;
+    if (init && seed.delete(`${init.byteStart}-${init.byteEnd}`)) entry.prefetched.add(-1);
+    let added = false;
+    const chunks = entry.manifest.chunks;
+    for (let i = 0; i < chunks.length; i++) {
+      if (entry.prefetched.has(i)) continue;
+      const c = chunks[i]!;
+      if (seed.delete(`${c.byteStart}-${c.byteEnd}`)) {
+        entry.prefetched.add(i);
+        added = true;
+      }
+    }
+    if (added && entry === this.current) this.options.onCached?.();
   }
 
   private unsubscribeEntry(entry: TrackEntry): void {
@@ -537,6 +591,7 @@ export class MsePlayer {
     if (!entry) return;
     const wasDone = entry.manifest.done;
     entry.manifest = m;
+    this.applyCacheSeed(entry);
     if (m.done && !wasDone) this.resolveNextOffset();
     this.extendMediaSourceDuration();
     if (entry === this.current) this.options.onReadyChange?.();
@@ -914,12 +969,19 @@ export class MsePlayer {
         this.prefetchRetryAt = performance.now() + PREFETCH_RETRY_MS;
         return;
       }
-      if (res.stored) entry.prefetched.add(chunkIndex);
+      if (res.stored) this.markCached(entry, chunkIndex);
       else entry.prefetchable = false;
     } finally {
       if (this.prefetchPending?.ctrl === ctrl) this.prefetchPending = null;
       if (!this.disposed) this.tick();
     }
+  }
+
+  /** Record that `entry`'s chunk is in the persistent cache and, when it's the playing track's media (not init), tell the caller so the progress bar's cached layer can refresh. */
+  private markCached(entry: TrackEntry, chunkIndex: number): void {
+    if (entry.prefetched.has(chunkIndex)) return;
+    entry.prefetched.add(chunkIndex);
+    if (chunkIndex >= 0 && entry === this.current) this.options.onCached?.();
   }
 
   /** Resolve the successor as soon as `current` is fully prefetched, rather than waiting for the playhead to reach the preload window — its chunks can then be prefetched too, and opening its manifest subscription makes the server start encoding it well before the boundary. Prefetch-ineligible tracks keep the just-in-time resolution. */
@@ -975,6 +1037,7 @@ export class MsePlayer {
     try {
       const res = await this.fetchRange(entry.url, init.byteStart, init.byteEnd, ctrl.signal);
       if (!res || this.disposed || ctrl.signal.aborted) return;
+      if (res.stored) this.markCached(entry, -1);
       entry.initBytes = res.data;
       this.appendQueue.unshift({
         trackId: entry.id,
@@ -1006,6 +1069,7 @@ export class MsePlayer {
         this.options.onTransfer,
       );
       if (!res || this.disposed || ctrl.signal.aborted) return;
+      if (res.stored) this.markCached(entry, chunkIndex);
       if (res.quality) {
         this.qualityByStart.set(Math.round(absStart), res.quality);
       }
