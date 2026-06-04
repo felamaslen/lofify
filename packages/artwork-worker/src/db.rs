@@ -46,10 +46,11 @@ pub async fn claim_next(pool: &PgPool) -> sqlx::Result<Option<Job>> {
     }))
 }
 
+/// Resolve a claimed row. Guarded on the row still being IN_PROGRESS: a manual upload may have set it SUCCEEDED while the download ran, and the user's image must not be stomped by ours.
 #[tracing::instrument(name = "db.mark_succeeded", skip_all)]
 pub async fn mark_succeeded(pool: &PgPool, id: Uuid, file: &str) -> sqlx::Result<()> {
     sqlx::query(
-        r#"UPDATE "AlbumArt" SET status = 'SUCCEEDED', file = $2, error = null, "updatedAt" = now() WHERE id = $1"#,
+        r#"UPDATE "AlbumArt" SET status = 'SUCCEEDED', file = $2, error = null, "updatedAt" = now() WHERE id = $1 AND status = 'IN_PROGRESS'"#,
     )
     .bind(id)
     .bind(file)
@@ -58,10 +59,11 @@ pub async fn mark_succeeded(pool: &PgPool, id: Uuid, file: &str) -> sqlx::Result
     Ok(())
 }
 
+/// Fail a claimed row, with the same IN_PROGRESS guard as `mark_succeeded` — a failed download must not overwrite art uploaded while it ran.
 #[tracing::instrument(name = "db.mark_failed", skip_all)]
 pub async fn mark_failed(pool: &PgPool, id: Uuid, error: &str) -> sqlx::Result<()> {
     sqlx::query(
-        r#"UPDATE "AlbumArt" SET status = 'FAILED', error = $2, "updatedAt" = now() WHERE id = $1"#,
+        r#"UPDATE "AlbumArt" SET status = 'FAILED', error = $2, "updatedAt" = now() WHERE id = $1 AND status = 'IN_PROGRESS'"#,
     )
     .bind(id)
     .bind(error)
