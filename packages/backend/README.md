@@ -10,6 +10,9 @@ src/
   app.ts        buildApp(): Fastify with /healthz, /graphql,
                 /graphql/stream. No listener bound — used by tests.
   config.ts     Static code-level constants (chunk duration, etc.).
+  disk-cache.ts Disk-cache root layout (transcode/ + artwork/ under
+                DISK_CACHE_DIR), startup writability check, and the
+                one-time legacy-entry move into transcode/.
   graphql/      GraphQL schema (grats source) and resolvers.
   db/           Drizzle schema, migrations, and shared pg pool.
   scanner/      Library scan + chokidar watcher (in-process). A scan
@@ -20,6 +23,8 @@ src/
   playback/     `/play/...` HTTP route, HMAC-signed URLs, unified
                 per-entry encoded cache (.bin + .idx live-tail), and
                 ffmpeg encoder.
+  artwork/      `/artwork/:id` HTTP route serving downloaded album-art
+                images from the disk cache.
   test/         Vitest behavioural tests driven by fastify.inject.
 ```
 
@@ -77,7 +82,8 @@ the resolver runs.
 ## Tag overrides
 
 Each editable tag on `Tracks` (`title`, `trackNumber`, `discNumber`,
-`artist`, `album`, `year`) has a nullable `*Override` sibling column.
+`artist`, `albumArtist`, `album`, `year`) has a nullable `*Override`
+sibling column.
 `Mutation.trackUpdate(id, ...)` writes the supplied tags to those
 override columns; omit an argument to leave its override untouched, or
 pass an explicit `null` to clear it. The scanner only writes the base
@@ -149,6 +155,30 @@ effective artist. `Mutation.artistSynonym{Create,Update,Delete}` manage
 them; create/update reject blank or colliding pairs, delete is
 idempotent.
 
+## Album art
+
+Album art is downloaded on demand, once per album. `Mutation.
+artworkDownload(trackId)` upserts an `AlbumArt` row keyed on the
+track's effective album artist (falling back to its artist) and album —
+re-reading the file's album-artist tag first when the row predates the
+`albumArtist` column — and links every track of that album to the row
+via `Tracks.albumArtId`. The FK is what ties a track to its art, so
+later tag edits never detach it; the `(albumArtist, album)` pair on the
+row is only a snapshot of the search terms.
+
+Rows move `PENDING → IN_PROGRESS → SUCCEEDED | FAILED`. An insert or
+reset to PENDING fires a `pg_notify` on the `album_art_pending` channel
+(trigger `AlbumArt_pending_notify`, declared via `pgCustomSQL` in the
+schema) which wakes the artwork worker (`packages/artwork-worker`); the
+worker also poll-sweeps, so a missed notification only delays the
+download. Successful images land in `DISK_CACHE_DIR/artwork/<id>.jpg`
+and are served by `GET /artwork/:id`.
+
+`Track.artwork` resolves the linked row into a `TrackArtwork` union:
+`Artwork` (the image) or `ArtworkStatus` (`inProgress`, or a failure
+`message` when `inProgress` is false — retry by calling
+`artworkDownload` again). Null means art was never requested.
+
 ## Endpoints
 
 - `GET /healthz` — liveness probe; returns `{ "status": "ok" }`.
@@ -157,6 +187,10 @@ idempotent.
   [`graphql-sse`](https://github.com/enisdenjo/graphql-sse)
   (distinct-connections mode). Send a `subscription` operation with
   `Accept: text/event-stream`.
+- `GET /artwork/:id` — downloaded album-art image for an `AlbumArt`
+  row, served from `DISK_CACHE_DIR/artwork/<id>.jpg` with an immutable
+  cache header (a new download is a new row, hence a new URL). 404 for
+  ids with no image yet.
 
 ### Playback
 
@@ -190,7 +224,7 @@ copying without re-encoding whenever possible:
 | `MIN`–`HIGH` + `autoPassthrough` | lossy (codec playable) | **copy** the source verbatim at its original quality — resolves exactly as the `MAX` lossy row, rather than transcoding to the tier (Smart's no-double-lossy upgrade); lossless sources and unplayable lossy codecs ignore the flag and transcode |
 
 Each target maps to one cache entry under
-`DISK_CACHE_DIR/<trackId>-<sourceMtimeMs>/<targetKey>.{bin,idx}`
+`DISK_CACHE_DIR/transcode/<trackId>-<sourceMtimeMs>/<targetKey>.{bin,idx}`
 (`targetKey` includes the container, so `mp4/opus` and `webm/opus` don't
 collide). The `.bin` is what the route streams from; the `.idx` is a
 live-updating JSON manifest (chunk byte ranges + cumulative
@@ -262,8 +296,10 @@ true` snapshot and complete.
 | `CORS_ALLOW_ORIGINS`             | `http://localhost:5173,http://127.0.0.1:5173` | Comma-separated allowlist of browser origins. `*` allows any.                                                                                                                                                 |
 | `PLAYBACK_SIGNING_SECRET`        | `dev-secret`                                  | HMAC key used to sign and verify `/play` URLs.                                                                                                                                                                |
 | `TRANSCODE_MAX_PARALLEL`         | `12`                                          | Maximum concurrent ffmpeg encode processes.                                                                                                                                                                   |
-| `DISK_CACHE_DIR`                 | `${os.tmpdir()}/lofify-cache`                 | Persistent root for cache entries (`<trackId>-<mtimeMs>/<targetKey>.{bin,idx}`). Survives restarts; point at durable storage in production.                                                                   |
+| `DISK_CACHE_DIR`                 | `${os.tmpdir()}/lofify-cache`                 | Persistent root of the on-disk cache: playback entries under `transcode/`, album art under `artwork/`. Survives restarts; point at durable storage in production. Startup crashes if it is not writable.      |
 | `DISK_CACHE_MAX_BYTES`           | _(unset)_                                     | Soft byte budget for the on-disk cache. When set, completed entries are swept least-recently-accessed-first once usage exceeds it. Unset leaves the cache unbounded.                                          |
+| `UPLOAD_MAX_BYTES`               | `10485760`                                    | Maximum size of a file sent with a GraphQL multipart request (e.g. `trackUpdate`'s artwork upload).                                                                                                           |
+| `PUBLIC_URL`                     | _(required)_                                  | Public base URL of the API (e.g. `https://music.example.com`), used to build absolute `Media.url` values.                                                                                                     |
 | `DISK_CACHE_SWEEP_CRON`          | `*/15 * * * *`                                | Cron expression for the periodic cache sweep. Empty disables the schedule (the post-transcode and ENOSPC sweeps still run). No effect unless `DISK_CACHE_MAX_BYTES` is set.                                   |
 | `DISK_CACHE_SWEEP_GRACE_SECONDS` | `300`                                         | Grace window during which a recently-accessed entry is never evicted, even when over budget — protects entries an in-flight playback session still depends on. Must exceed 60s.                               |
 | `WEB_DIST_PATH`                  | `packages/web/dist`                           | Built web client served as an SPA catch-all when present.                                                                                                                                                     |

@@ -8,7 +8,11 @@ import fastifyCors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { createHandler as createSseHandler } from 'graphql-sse/lib/use/fastify';
+import processRequest from 'graphql-upload/processRequest.mjs';
 
+import { registerArtworkRoute } from './artwork/route.js';
+import { registerAssetRoute } from './asset/route.js';
+import { ensureDiskCacheWritable, migrateDiskCacheLayout } from './disk-cache.js';
 import { env, libraryPaths } from './env.js';
 import { buildSchema } from './graphql/index.js';
 import { defaultCache } from './playback/cache.js';
@@ -22,6 +26,9 @@ const SCHEMA_SDL_PATH = fileURLToPath(
 );
 
 async function buildApp(): Promise<FastifyInstance> {
+  await ensureDiskCacheWritable();
+  await migrateDiskCacheLayout();
+
   const app = Fastify({ logger: false });
 
   const allow = env.CORS_ALLOW_ORIGINS.split(',')
@@ -44,6 +51,19 @@ async function buildApp(): Promise<FastifyInstance> {
   });
   await apollo.start();
 
+  // GraphQL multipart requests (file uploads, e.g. trackUpdate's artwork). The no-op parser
+  // leaves the stream unconsumed so processRequest can read it; the hook swaps the body for the
+  // parsed operations with `Upload` instances wired into the mapped variables.
+  app.addContentTypeParser('multipart/form-data', (_req, _payload, done) => done(null));
+  app.addHook('preValidation', async (req, reply) => {
+    if (!req.url.startsWith('/graphql')) return;
+    if (!req.headers['content-type']?.startsWith('multipart/form-data')) return;
+    req.body = await processRequest(req.raw, reply.raw, {
+      maxFileSize: env.UPLOAD_MAX_BYTES,
+      maxFiles: 1,
+    });
+  });
+
   await app.register(fastifyApollo(apollo), { path: '/graphql' });
 
   app.get('/graphql/schema.graphql', async (_req, reply) => {
@@ -58,6 +78,8 @@ async function buildApp(): Promise<FastifyInstance> {
   });
 
   await registerPlaybackRoute(app);
+  await registerArtworkRoute(app);
+  await registerAssetRoute(app);
 
   const webDistPath = env.WEB_DIST_PATH
     ? env.WEB_DIST_PATH
@@ -68,6 +90,8 @@ async function buildApp(): Promise<FastifyInstance> {
       const isApi =
         req.url.startsWith('/graphql') ||
         req.url.startsWith('/play') ||
+        req.url.startsWith('/artwork') ||
+        req.url.startsWith('/asset') ||
         req.url.startsWith('/healthz');
       if (req.method !== 'GET' || isApi) {
         reply.code(404).send({ error: 'not found' });

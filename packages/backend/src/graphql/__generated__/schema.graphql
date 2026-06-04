@@ -5,6 +5,16 @@
 directive @constraint(min: Int!, max: Int!) on ARGUMENT_DEFINITION
 
 """
+A file sent with the [GraphQL multipart request spec](https://github.com/jaydenseric/graphql-multipart-request-spec). The multipart hook in `app.ts` replaces the mapped variable with an instance carrying the streamed file; resolvers await its `promise` for the filename, MIME type and stream.
+"""
+scalar Upload
+
+"""Pre-defined rendered sizes for media previews."""
+enum MediaSize {
+  SQUARE_500
+}
+
+"""
 Coarse playback quality. `MIN` / `LOW` / `MEDIUM` / `HIGH` ask for a transcode at an ascending bitrate; `MAX` delivers the best representation of the source the client can play, copying without re-encoding whenever possible.
 """
 enum Quality {
@@ -13,6 +23,17 @@ enum Quality {
   MAX
   MEDIUM
   MIN
+}
+
+"""
+Album art for a track: the downloaded image, or the state of a download that has not produced one.
+"""
+union TrackArtwork = Artwork | ArtworkStatus
+
+"""A renderable media resource."""
+interface Media {
+  """Absolute URL of the original resource."""
+  url: String!
 }
 
 """
@@ -108,6 +129,31 @@ type ArtistSynonym {
   synonym: String!
 }
 
+"""A successfully downloaded album-art image."""
+type Artwork {
+  """Album the image was found for."""
+  album: String!
+  """Album artist the image was found for."""
+  albumArtist: String!
+  """
+  Whether the image was uploaded by hand rather than fetched automatically. Manual images can be cleared with `artworkClear`, requeueing an automatic download.
+  """
+  isManual: Boolean!
+  media: Media!
+}
+
+"""
+The state of an album-art download that has not (yet) produced an image.
+"""
+type ArtworkStatus {
+  """
+  Whether the download is queued or running. False means it failed and may be retried with `artworkDownload`.
+  """
+  inProgress: Boolean!
+  """Why the download failed, or an empty string while it is in progress."""
+  message: String!
+}
+
 """The expected bitrate of one adaptive quality tier for a track."""
 type DeliveryTier {
   """Nominal transcode bitrate in kbps."""
@@ -122,6 +168,24 @@ type Duration {
   """
   formatted: String!
   seconds: Int!
+}
+
+"""A renderable image resource."""
+type Image implements Media {
+  """
+  A processed render of this image, shaped for an `<img>` element: the original URL behind the API's `/asset/<options>/` processing route.
+  """
+  preview(size: MediaSize!): ImageSource!
+  """Absolute URL of the original resource."""
+  url: String!
+}
+
+"""
+A render of an image at one logical display size, shaped for an `<img>` element.
+"""
+type ImageSource {
+  """URL of the render at the logical size. Use as the `src` attribute."""
+  src: String!
 }
 
 """Snapshot of an ongoing or completed library scan."""
@@ -157,6 +221,18 @@ type Mutation {
   """
   artistSynonymUpdate(artist: String!, newSynonym: String!, synonym: String!): ArtistSynonym!
   """
+  Clear a manually uploaded cover from a track's album — the undo for a wrong upload. The image is removed and the album is requeued for an automatic download; poll `Track.artwork` for the result.
+  
+  Throws when the track does not exist, has no artwork, or its artwork was not manually set.
+  """
+  artworkClear(trackId: ID!): TrackArtwork!
+  """
+  Request album art for a track's album. Upserts an `AlbumArt` row keyed on the track's effective album artist (falling back to its artist) and album — creating it PENDING, resetting a FAILED row to PENDING for a retry, and leaving an in-progress or succeeded row untouched — then links every track of the album to the row. The artwork worker processes PENDING rows asynchronously; poll `Track.artwork` for the result.
+  
+  Throws when the track does not exist or has no album or artist to search by.
+  """
+  artworkDownload(trackId: ID!): TrackArtwork!
+  """
   Requests cancellation of the named in-progress scan. No-op when the scan is unknown or already completed.
   """
   libraryScanCancel(id: ID!): Void!
@@ -175,7 +251,24 @@ type Mutation {
   
   Throws when no track with the given id exists.
   """
-  trackUpdate(album: String, artist: String, discNumber: Int, id: ID!, title: String, trackNumber: Int, year: String): Track!
+  trackUpdate(
+    album: String
+    albumArtist: String
+    artist: String
+    """
+    Image file (jpeg, png or webp, multipart upload) to set as the cover of the track's whole album. Null leaves the artwork untouched.
+    """
+    artwork: Upload
+    """
+    http(s) URL of an image (jpeg, png or webp, ≤ the upload size limit) to download and set as the cover of the track's whole album — e.g. one dragged from another browser tab. Mutually exclusive with `artwork`; null leaves the artwork untouched.
+    """
+    artworkUrl: String
+    discNumber: Int
+    id: ID!
+    title: String
+    trackNumber: Int
+    year: String
+  ): Track!
 }
 
 """Boundary metadata for a `TrackConnection`."""
@@ -296,11 +389,19 @@ type Subscription {
 """A single audio file in the library."""
 type Track {
   album: String
+  """
+  Artist credited for the whole album (e.g. "Various Artists" on a compilation). Null when the track carries no album-artist tag.
+  """
+  albumArtist: String
   artist: String
   """
   Alternative names registered for this track's effective artist, alphabetically. Empty when the track has no artist or none are registered.
   """
   artistSynonyms: [String!]!
+  """
+  Album art for this track's album: the image once downloaded, otherwise the download's status. Null when art has never been requested — request it with `Mutation.artworkDownload`.
+  """
+  artwork: TrackArtwork
   """
   Source bit depth in bits per sample, or null for lossy sources that have none.
   """

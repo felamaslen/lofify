@@ -10,8 +10,9 @@ change.
 
 ```
 packages/
-  backend/   TypeScript monolith: GraphQL API, playback, scanner, db schema
-  web/       Vite + React + TanStack Router web client (installable PWA)
+  backend/         TypeScript monolith: GraphQL API, playback, scanner, db schema
+  web/             Vite + React + TanStack Router web client (installable PWA)
+  artwork-worker/  Rust service downloading album covers for the AlbumArt queue
 ```
 
 The scanner lives inside `packages/backend` — it is not a separate
@@ -90,21 +91,27 @@ cp .env.example .env.production   # then edit secrets
 scripts/deploy.sh --host my-server --nfs-host 10.0.0.2 --nfs-path /srv/dockercache
 ```
 
-`scripts/deploy.sh` builds and pushes `felamaslen/lofify:latest`, copies
+`scripts/deploy.sh` builds and pushes `felamaslen/lofify:latest` and
+`felamaslen/lofify-artwork-worker:latest`, copies
 `docker-compose.prod.yml` to `{directory}/docker-compose.yml` on the
 remote (default `/opt/lofify`), and copies `.env.production` to
 `{directory}/.env`. Backend listens on host port `4002`. Postgres data
 persists at `{directory}/var/db`. `.env.production` is git-ignored.
 
-The playback cache is an NFS-backed Docker volume. `--nfs-host` and
+The disk cache is an NFS-backed Docker volume. `--nfs-host` and
 `--nfs-path` (both required) name the NFS server and exported directory;
 the deploy splices them into the compose file before copying. Docker
 creates the volume from those options on first `up` — to repoint it at a
 different server later, remove the `playback-cache` volume on the remote
 (`docker volume rm <project>_playback-cache`) before redeploying. The
-share root is mounted at `/playback-cache`; the backend writes into the
-`lofify` subdirectory (`DISK_CACHE_DIR`), which it creates on first
-use, so the export can be shared with other consumers.
+volume keeps its historical `playback-cache` name so existing data
+survives upgrades; the share root is mounted at `/disk-cache`, and the
+backend writes into the `lofify` subdirectory (`DISK_CACHE_DIR`), which
+it creates on first use, so the export can be shared with other
+consumers. Within `DISK_CACHE_DIR`, transcoded playback entries live
+under `transcode/` and downloaded album art under `artwork/`; on first
+boot after an upgrade the backend moves any legacy entries from the
+cache root into `transcode/`.
 
 ## Root scripts
 

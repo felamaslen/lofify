@@ -28,11 +28,21 @@ const Schema = z.object({
   /** Maximum number of concurrent ffmpeg encode processes. */
   TRANSCODE_MAX_PARALLEL: z.coerce.number().int().positive().default(12),
 
-  /** Persistent directory where the unified per-entry cache writes `<trackId>-<mtimeMs>/<targetKey>.{bin,idx}`. Survives process restarts; the `.idx` sidecar is the durable manifest. Defaults to `${os.tmpdir()}/lofify-cache`. */
+  /** Persistent root of the on-disk cache. Playback entries live under `transcode/<trackId>-<mtimeMs>/<targetKey>.{bin,idx}` (the `.idx` sidecar is the durable manifest) and downloaded album art under `artwork/<albumArtId>.jpg`. Survives process restarts. Defaults to `${os.tmpdir()}/lofify-cache`. */
   DISK_CACHE_DIR: z.string().optional(),
 
   /** Soft byte budget for the on-disk playback cache. When set, completed entries are swept least-recently-accessed-first once total usage exceeds this value. Unset disables sweeping, leaving the cache unbounded. */
   DISK_CACHE_MAX_BYTES: z.coerce.number().int().positive().optional(),
+
+  /** Maximum size of a file sent with a GraphQL multipart request (e.g. `trackUpdate`'s artwork upload). Defaults to 10 MiB — generous for an album cover. */
+  UPLOAD_MAX_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(10 * 1024 * 1024),
+
+  /** Public base URL of the API (e.g. `https://music.example.com`), used to build absolute `Media.url` values. */
+  PUBLIC_URL: z.string().url(),
 
   /** Cron expression for the periodic cache sweep. Empty disables the schedule (the post-transcode and ENOSPC sweeps still run). Has no effect unless `DISK_CACHE_MAX_BYTES` is set. */
   DISK_CACHE_SWEEP_CRON: z.string().default('*/15 * * * *'),
@@ -60,3 +70,8 @@ export type Env = typeof env;
 export const libraryPaths: string[] = env.LIBRARY_PATH.split(',')
   .map((s) => s.trim())
   .filter(Boolean);
+
+/** Resolve an API-served path (e.g. `/artwork/<file>`) against `PUBLIC_URL`, yielding the absolute URL clients use. */
+export function publicUrl(path: string): string {
+  return new URL(path, env.PUBLIC_URL).toString();
+}

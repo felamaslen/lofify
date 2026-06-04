@@ -11,9 +11,11 @@ import {
 } from 'react';
 
 import { PlaybackBarDocument } from '../components/playback-bar.tsx';
+import { artworkDisplayUrl, TrackArtworkDocument } from '../components/track-artwork.tsx';
 import { TracksDocument } from '../components/track-list.tsx';
 import { getAudioElement } from '../lib/audio-element.ts';
 import { type Capabilities, capabilities, type LossyPreference } from '../lib/capabilities.ts';
+import { setFaviconBadge } from '../lib/favicon.ts';
 import { graphql, type ResultOf, type VariablesOf } from '../lib/gql.ts';
 import { gqlRequest } from '../lib/gql-request.ts';
 import { type CreatePlayerOptions, MsePlayer, type QueuedTrack } from '../lib/mse.ts';
@@ -129,7 +131,7 @@ const SWITCH_COOLDOWN_MS = 5000;
 
 const GRAPHQL_URL = import.meta.env.VITE_GRAPHQL_URL ?? '/graphql';
 
-/** Lock-screen / notification artwork for the Media Session. The app icon stands in until the schema carries per-track cover art. */
+/** Fallback lock-screen / notification artwork for the Media Session: the app icon, used when a track has no downloaded cover. */
 const MEDIA_ARTWORK = [
   { src: '/icon-192.png', sizes: '192x192', type: 'image/png' },
   { src: '/icon-512.png', sizes: '512x512', type: 'image/png' },
@@ -150,6 +152,11 @@ function backendOrigin(): string {
 export function resolvePlaybackUrl(url: string): string {
   if (/^https?:/i.test(url)) return url;
   return `${backendOrigin()}${url}`;
+}
+
+/** Media Session artwork list for a cover preview URL, falling back to the app icon. */
+function mediaArtworkFor(url: string | null): { src: string; sizes?: string; type?: string }[] {
+  return url ? [{ src: url, sizes: '500x500', type: 'image/avif' }] : MEDIA_ARTWORK;
 }
 
 function loadStoredMode(): QualityMode {
@@ -333,6 +340,8 @@ class Player {
     this.detachers.length = 0;
     this.mse?.dispose();
     this.mse = null;
+    this.appliedArtworkUrl = null;
+    void setFaviconBadge(null);
     if (hasMediaSession()) {
       navigator.mediaSession.playbackState = 'none';
       navigator.mediaSession.metadata = null;
@@ -392,15 +401,38 @@ class Player {
     if (hasMediaSession()) navigator.mediaSession.playbackState = state;
   }
 
-  /** Publish the current track's title/artist/album (and stand-in artwork) to the OS. */
+  /** The artwork URL currently published to the Media Session and the favicon badge; `null` means the app-icon fallback. Lets `setMediaArtwork` skip redundant rebuilds. */
+  private appliedArtworkUrl: string | null = null;
+
+  /** Publish the current track's title/artist/album (and cover, when downloaded) to the OS, and badge the favicon with the cover. */
   private updateMediaMetadata(track: TrackNode): void {
-    if (!hasMediaSession()) return;
     const meta = readFragment(PlaybackBarDocument, track);
+    const url = artworkDisplayUrl(readFragment(TrackArtworkDocument, meta).artwork);
+    this.appliedArtworkUrl = url;
+    void setFaviconBadge(url);
+    if (!hasMediaSession()) return;
     navigator.mediaSession.metadata = new MediaMetadata({
       title: meta.title ?? 'Untitled',
       artist: meta.artist ?? 'Unknown artist',
       album: meta.album ?? '',
-      artwork: MEDIA_ARTWORK,
+      artwork: mediaArtworkFor(url),
+    });
+  }
+
+  /** Swap the Media Session artwork and favicon badge for the playing track when its cover resolves after load — the playback bar's poll calls this as a download completes. Stale calls (another track now playing) and no-ops (same URL already applied) are ignored. */
+  setMediaArtwork(trackId: string, url: string | null): void {
+    if (this.snapshot.current?.id !== trackId) return;
+    if (this.appliedArtworkUrl === url) return;
+    this.appliedArtworkUrl = url;
+    void setFaviconBadge(url);
+    if (!hasMediaSession()) return;
+    const metadata = navigator.mediaSession.metadata;
+    if (!metadata) return;
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: metadata.title,
+      artist: metadata.artist,
+      album: metadata.album,
+      artwork: mediaArtworkFor(url),
     });
   }
 
@@ -843,6 +875,7 @@ type PlayerActions = {
   next: () => void;
   previous: () => void;
   seek: (seconds: number) => void;
+  setMediaArtwork: (trackId: string, url: string | null) => void;
 };
 
 type PlayerCtx = PlayerSnapshot & PlayerActions;
@@ -878,6 +911,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       next: () => player.next(),
       previous: () => player.previous(),
       seek: (s) => player.seek(s),
+      setMediaArtwork: (id, url) => player.setMediaArtwork(id, url),
     }),
     [snapshot, player],
   );

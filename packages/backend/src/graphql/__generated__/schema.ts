@@ -3,16 +3,26 @@
  * Do not manually edit. Regenerate by running `npx grats`.
  */
 
-import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, GraphQLInt, specifiedDirectives, GraphQLObjectType, GraphQLList, GraphQLString, GraphQLBoolean, GraphQLID, GraphQLEnumType, GraphQLInputObjectType, GraphQLFloat } from "graphql";
+import type { GqlScalar } from "grats";
+import type { Upload as UploadInternal } from "./../upload.js";
+import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, GraphQLInt, specifiedDirectives, GraphQLObjectType, GraphQLList, GraphQLString, GraphQLBoolean, GraphQLID, GraphQLUnionType, GraphQLInterfaceType, GraphQLEnumType, GraphQLInputObjectType, GraphQLScalarType, GraphQLFloat } from "graphql";
 import { artistIndex as queryArtistIndexResolver, track as queryTrackResolver, tracks as queryTracksResolver } from "./../track-queries.js";
 import { isUpdateAvailable as queryIsUpdateAvailableResolver, ping as queryPingResolver, noop as mutationNoopResolver } from "./../root.js";
 import { libraryScan as queryLibraryScanResolver, libraryScanCancel as mutationLibraryScanCancelResolver, libraryScanStart as mutationLibraryScanStartResolver, libraryScanSubscription as subscriptionLibraryScanResolver } from "./../library-scan.js";
 import { artistSynonyms as trackArtistSynonymsResolver, artistSynonymCreate as mutationArtistSynonymCreateResolver, artistSynonymDelete as mutationArtistSynonymDeleteResolver, artistSynonymUpdate as mutationArtistSynonymUpdateResolver } from "./../artist-synonyms.js";
-import { delivery as trackDeliveryResolver, duplicates as trackDuplicatesResolver, path as trackPathResolver, url as trackUrlResolver } from "./../track.js";
+import { Image as ImageClass } from "./../media.js";
+import { Artwork as ArtworkClass, ArtworkStatus as ArtworkStatusClass } from "./../artwork.js";
+import { artwork as trackArtworkResolver, delivery as trackDeliveryResolver, duplicates as trackDuplicatesResolver, path as trackPathResolver, url as trackUrlResolver } from "./../track.js";
 import { search as querySearchResolver } from "./../search.js";
+import { artworkClear as mutationArtworkClearResolver, artworkDownload as mutationArtworkDownloadResolver } from "./../artwork-mutations.js";
 import { trackUpdate as mutationTrackUpdateResolver } from "./../track-mutations.js";
 import { trackManifestSubscription as subscriptionTrackManifestResolver } from "./../track-manifest.js";
-export function getSchema(): GraphQLSchema {
+export type SchemaConfig = {
+    scalars: {
+        Upload: GqlScalar<UploadInternal>;
+    };
+};
+export function getSchema(config: SchemaConfig): GraphQLSchema {
     const ArtistInitialType: GraphQLObjectType = new GraphQLObjectType({
         name: "ArtistInitial",
         description: "Where a first-letter bucket begins in the `tracks` ordering.",
@@ -167,6 +177,73 @@ export function getSchema(): GraphQLSchema {
             };
         }
     });
+    const MediaType: GraphQLInterfaceType = new GraphQLInterfaceType({
+        description: "A renderable media resource.",
+        name: "Media",
+        fields() {
+            return {
+                url: {
+                    description: "Absolute URL of the original resource.",
+                    name: "url",
+                    type: new GraphQLNonNull(GraphQLString)
+                }
+            };
+        },
+        resolveType
+    });
+    const ArtworkType: GraphQLObjectType = new GraphQLObjectType({
+        name: "Artwork",
+        description: "A successfully downloaded album-art image.",
+        fields() {
+            return {
+                album: {
+                    description: "Album the image was found for.",
+                    name: "album",
+                    type: new GraphQLNonNull(GraphQLString)
+                },
+                albumArtist: {
+                    description: "Album artist the image was found for.",
+                    name: "albumArtist",
+                    type: new GraphQLNonNull(GraphQLString)
+                },
+                isManual: {
+                    description: "Whether the image was uploaded by hand rather than fetched automatically. Manual images can be cleared with `artworkClear`, requeueing an automatic download.",
+                    name: "isManual",
+                    type: new GraphQLNonNull(GraphQLBoolean)
+                },
+                media: {
+                    name: "media",
+                    type: new GraphQLNonNull(MediaType)
+                }
+            };
+        }
+    });
+    const ArtworkStatusType: GraphQLObjectType = new GraphQLObjectType({
+        name: "ArtworkStatus",
+        description: "The state of an album-art download that has not (yet) produced an image.",
+        fields() {
+            return {
+                inProgress: {
+                    description: "Whether the download is queued or running. False means it failed and may be retried with `artworkDownload`.",
+                    name: "inProgress",
+                    type: new GraphQLNonNull(GraphQLBoolean)
+                },
+                message: {
+                    description: "Why the download failed, or an empty string while it is in progress.",
+                    name: "message",
+                    type: new GraphQLNonNull(GraphQLString)
+                }
+            };
+        }
+    });
+    const TrackArtworkType: GraphQLUnionType = new GraphQLUnionType({
+        name: "TrackArtwork",
+        description: "Album art for a track: the downloaded image, or the state of a download that has not produced one.",
+        types() {
+            return [ArtworkType, ArtworkStatusType];
+        },
+        resolveType
+    });
     const QualityType: GraphQLEnumType = new GraphQLEnumType({
         description: "Coarse playback quality. `MIN` / `LOW` / `MEDIUM` / `HIGH` ask for a transcode at an ascending bitrate; `MAX` delivers the best representation of the source the client can play, copying without re-encoding whenever possible.",
         name: "Quality",
@@ -296,6 +373,11 @@ export function getSchema(): GraphQLSchema {
                     name: "album",
                     type: GraphQLString
                 },
+                albumArtist: {
+                    description: "Artist credited for the whole album (e.g. \"Various Artists\" on a compilation). Null when the track carries no album-artist tag.",
+                    name: "albumArtist",
+                    type: GraphQLString
+                },
                 artist: {
                     name: "artist",
                     type: GraphQLString
@@ -306,6 +388,14 @@ export function getSchema(): GraphQLSchema {
                     type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(GraphQLString))),
                     resolve(source) {
                         return trackArtistSynonymsResolver(source);
+                    }
+                },
+                artwork: {
+                    description: "Album art for this track's album: the image once downloaded, otherwise the download's status. Null when art has never been requested \u2014 request it with `Mutation.artworkDownload`.",
+                    name: "artwork",
+                    type: TrackArtworkType,
+                    resolve(source) {
+                        return trackArtworkResolver(source);
                     }
                 },
                 bitDepth: {
@@ -666,6 +756,11 @@ export function getSchema(): GraphQLSchema {
             };
         }
     });
+    const UploadType: GraphQLScalarType = new GraphQLScalarType({
+        description: "A file sent with the [GraphQL multipart request spec](https://github.com/jaydenseric/graphql-multipart-request-spec). The multipart hook in `app.ts` replaces the mapped variable with an instance carrying the streamed file; resolvers await its `promise` for the filename, MIME type and stream.",
+        name: "Upload",
+        ...config.scalars.Upload
+    });
     const MutationType: GraphQLObjectType = new GraphQLObjectType({
         name: "Mutation",
         fields() {
@@ -721,6 +816,32 @@ export function getSchema(): GraphQLSchema {
                         return mutationArtistSynonymUpdateResolver(args.artist, args.synonym, args.newSynonym);
                     }
                 },
+                artworkClear: {
+                    description: "Clear a manually uploaded cover from a track's album \u2014 the undo for a wrong upload. The image is removed and the album is requeued for an automatic download; poll `Track.artwork` for the result.\n\nThrows when the track does not exist, has no artwork, or its artwork was not manually set.",
+                    name: "artworkClear",
+                    type: new GraphQLNonNull(TrackArtworkType),
+                    args: {
+                        trackId: {
+                            type: new GraphQLNonNull(GraphQLID)
+                        }
+                    },
+                    resolve(_source, args) {
+                        return mutationArtworkClearResolver(args.trackId);
+                    }
+                },
+                artworkDownload: {
+                    description: "Request album art for a track's album. Upserts an `AlbumArt` row keyed on the track's effective album artist (falling back to its artist) and album \u2014 creating it PENDING, resetting a FAILED row to PENDING for a retry, and leaving an in-progress or succeeded row untouched \u2014 then links every track of the album to the row. The artwork worker processes PENDING rows asynchronously; poll `Track.artwork` for the result.\n\nThrows when the track does not exist or has no album or artist to search by.",
+                    name: "artworkDownload",
+                    type: new GraphQLNonNull(TrackArtworkType),
+                    args: {
+                        trackId: {
+                            type: new GraphQLNonNull(GraphQLID)
+                        }
+                    },
+                    resolve(_source, args) {
+                        return mutationArtworkDownloadResolver(args.trackId);
+                    }
+                },
                 libraryScanCancel: {
                     description: "Requests cancellation of the named in-progress scan. No-op when the scan is unknown or already completed.",
                     name: "libraryScanCancel",
@@ -763,7 +884,18 @@ export function getSchema(): GraphQLSchema {
                         album: {
                             type: GraphQLString
                         },
+                        albumArtist: {
+                            type: GraphQLString
+                        },
                         artist: {
+                            type: GraphQLString
+                        },
+                        artwork: {
+                            description: "Image file (jpeg, png or webp, multipart upload) to set as the cover of the track's whole album. Null leaves the artwork untouched.",
+                            type: UploadType
+                        },
+                        artworkUrl: {
+                            description: "http(s) URL of an image (jpeg, png or webp, \u2264 the upload size limit) to download and set as the cover of the track's whole album \u2014 e.g. one dragged from another browser tab. Mutually exclusive with `artwork`; null leaves the artwork untouched.",
                             type: GraphQLString
                         },
                         discNumber: {
@@ -783,7 +915,7 @@ export function getSchema(): GraphQLSchema {
                         }
                     },
                     resolve(_source, args) {
-                        return mutationTrackUpdateResolver(args.id, args.title, args.trackNumber, args.discNumber, args.artist, args.album, args.year);
+                        return mutationTrackUpdateResolver(args.id, args.title, args.trackNumber, args.discNumber, args.artist, args.albumArtist, args.album, args.year, args.artwork, args.artworkUrl);
                     }
                 }
             };
@@ -902,6 +1034,57 @@ export function getSchema(): GraphQLSchema {
             };
         }
     });
+    const MediaSizeType: GraphQLEnumType = new GraphQLEnumType({
+        description: "Pre-defined rendered sizes for media previews.",
+        name: "MediaSize",
+        values: {
+            SQUARE_500: {
+                value: "SQUARE_500"
+            }
+        }
+    });
+    const ImageSourceType: GraphQLObjectType = new GraphQLObjectType({
+        name: "ImageSource",
+        description: "A render of an image at one logical display size, shaped for an `<img>` element.",
+        fields() {
+            return {
+                src: {
+                    description: "URL of the render at the logical size. Use as the `src` attribute.",
+                    name: "src",
+                    type: new GraphQLNonNull(GraphQLString)
+                }
+            };
+        }
+    });
+    const ImageType: GraphQLObjectType = new GraphQLObjectType({
+        name: "Image",
+        description: "A renderable image resource.",
+        fields() {
+            return {
+                preview: {
+                    description: "A processed render of this image, shaped for an `<img>` element: the original URL behind the API's `/asset/<options>/` processing route.",
+                    name: "preview",
+                    type: new GraphQLNonNull(ImageSourceType),
+                    args: {
+                        size: {
+                            type: new GraphQLNonNull(MediaSizeType)
+                        }
+                    },
+                    resolve(source, args) {
+                        return source.preview(args.size);
+                    }
+                },
+                url: {
+                    description: "Absolute URL of the original resource.",
+                    name: "url",
+                    type: new GraphQLNonNull(GraphQLString)
+                }
+            };
+        },
+        interfaces() {
+            return [MediaType];
+        }
+    });
     return new GraphQLSchema({
         directives: [...specifiedDirectives, new GraphQLDirective({
                 name: "constraint",
@@ -919,6 +1102,24 @@ export function getSchema(): GraphQLSchema {
         query: QueryType,
         mutation: MutationType,
         subscription: SubscriptionType,
-        types: [QualityType, TrackFormatType, AlbumType, AlbumConnectionType, AlbumEdgeType, ArtistType, ArtistConnectionType, ArtistEdgeType, ArtistInitialType, ArtistSynonymType, DeliveryTierType, DurationType, LibraryScanType, MutationType, PageInfoType, QueryType, SearchType, SubscriptionType, TrackType, TrackConnectionType, TrackDeliveryType, TrackEdgeType, TrackManifestType, TrackManifestChunkType, TrackManifestInitType, VoidType]
+        types: [UploadType, MediaSizeType, QualityType, TrackArtworkType, MediaType, TrackFormatType, AlbumType, AlbumConnectionType, AlbumEdgeType, ArtistType, ArtistConnectionType, ArtistEdgeType, ArtistInitialType, ArtistSynonymType, ArtworkType, ArtworkStatusType, DeliveryTierType, DurationType, ImageType, ImageSourceType, LibraryScanType, MutationType, PageInfoType, QueryType, SearchType, SubscriptionType, TrackType, TrackConnectionType, TrackDeliveryType, TrackEdgeType, TrackManifestType, TrackManifestChunkType, TrackManifestInitType, VoidType]
     });
+}
+const typeNameMap = new Map();
+typeNameMap.set(ArtworkClass, "Artwork");
+typeNameMap.set(ArtworkStatusClass, "ArtworkStatus");
+typeNameMap.set(ImageClass, "Image");
+function resolveType(obj: any): string {
+    if (typeof obj.__typename === "string") {
+        return obj.__typename;
+    }
+    let prototype = Object.getPrototypeOf(obj);
+    while (prototype) {
+        const name = typeNameMap.get(prototype.constructor);
+        if (name != null) {
+            return name;
+        }
+        prototype = Object.getPrototypeOf(prototype);
+    }
+    throw new Error("Cannot find type name.");
 }

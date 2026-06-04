@@ -14,8 +14,8 @@ usage() {
   cat >&2 <<EOF
 Usage: $0 --host <ssh-host> --nfs-host <addr> --nfs-path <path> [--directory <remote-path>] [--tag <tag>] [--platform <platform>] [--skip-build]
 
-Builds and pushes the ${IMAGE} Docker image, then deploys it to a remote
-host via docker compose.
+Builds and pushes the ${IMAGE} and ${IMAGE}-artwork-worker Docker
+images, then deploys them to a remote host via docker compose.
 
 Options:
   --host <ssh-host>      SSH host to deploy to (required)
@@ -96,6 +96,14 @@ if [[ "$SKIP_BUILD" -eq 0 ]]; then
     -t "${IMAGE}:${SHA}" \
     --push \
     .
+
+  echo "==> Building & pushing ${IMAGE}-artwork-worker:${TAG} (also ${SHA}) for ${PLATFORM}"
+  docker buildx build \
+    --platform "$PLATFORM" \
+    -t "${IMAGE}-artwork-worker:${TAG}" \
+    -t "${IMAGE}-artwork-worker:${SHA}" \
+    --push \
+    packages/artwork-worker
 fi
 
 echo "==> Copying compose file and .env to ${HOST}:${DIRECTORY}"
@@ -116,7 +124,7 @@ ssh "$HOST" "cd '$DIRECTORY' && TAG='${TAG}' docker compose pull"
 echo "==> Running database migrations on ${HOST}"
 ssh "$HOST" "cd '$DIRECTORY' && TAG='${TAG}' docker compose run --rm backend pnpm --filter ./packages/backend db:migrate"
 
-echo "==> Starting service on ${HOST}"
+echo "==> Starting services on ${HOST}"
 ssh "$HOST" "cd '$DIRECTORY' && TAG='${TAG}' docker compose up -d"
 
 echo "==> Done"

@@ -1,0 +1,35 @@
+[package]
+name = "artwork-worker"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+anyhow = "1"
+opentelemetry = "0.32"
+opentelemetry-otlp = { version = "0.32", default-features = false, features = [
+  "trace",
+  "http-proto",
+  "reqwest-blocking-client",
+] }
+opentelemetry_sdk = "0.32"
+# Exact pin: sacad's library API is documented as internal to its binaries.
+sacad = "=3.0.1"
+sqlx = { version = "0.8", default-features = false, features = [
+  "runtime-tokio",
+  "postgres",
+  "uuid",
+] }
+tokio = { version = "1", features = [
+  "rt-multi-thread",
+  "macros",
+  "process",
+  "time",
+  "signal",
+  "sync",
+  "fs",
+] }
+tracing = "0.1"
+tracing-opentelemetry = "0.33"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = "1"

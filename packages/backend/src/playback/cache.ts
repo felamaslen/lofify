@@ -9,12 +9,11 @@
  *
  * Because in-memory eviction leaves files behind, the on-disk footprint is bounded separately by `sweep`: when `maxBytes` is set, completed entries are deleted least-recently-accessed-first. Recency and size live in the `PlaybackCacheAccess` table — `lastAccess` is bumped (throttled) on every `getOrStart`, so a streamed track keeps itself warm, and an entry with no row yet sorts oldest. The sweep picks the oldest evictable entry one row at a time rather than loading the table; an entry is evictable only if it is neither mid-encode nor accessed within the grace window (`sweepGraceSeconds`) — recency, not in-memory LRU membership, is what protects an entry a playback session still depends on after its handle has churned out of the LRU. See `sweep.ts` for the surrounding lifecycle.
  *
- * The factory shape (`createCache`) exists so tests can run against a fresh root without trampling each other's state; the module also exports a `defaultCache` configured from `env.DISK_CACHE_DIR` for the production wiring.
+ * The factory shape (`createCache`) exists so tests can run against a fresh root without trampling each other's state; the module also exports a `defaultCache` rooted at the disk cache's `transcode/` directory for the production wiring.
  */
 
 import { EventEmitter } from 'node:events';
 import { mkdir, readdir, readFile, rm, stat } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { SpanStatusCode, trace } from '@opentelemetry/api';
@@ -24,6 +23,7 @@ import { LRUCache } from 'lru-cache';
 import { DEFAULT_CHUNK_DURATION_SECONDS } from '../config.js';
 import { db } from '../db/client.js';
 import { playbackCacheAccess } from '../db/schema/index.js';
+import { transcodeDir } from '../disk-cache.js';
 import { env } from '../env.js';
 import { logger } from '../logger.js';
 import { type EncodeTarget, type FfmpegHandle, spawnEncoder, targetKey } from './encoder.js';
@@ -556,7 +556,7 @@ export function createCache(opts: CacheOpts): Cache {
 
 /** Production singleton wired from env. Tests should build their own via `createCache`. */
 export const defaultCache: Cache = createCache({
-  cacheRoot: env.DISK_CACHE_DIR ?? path.join(tmpdir(), 'lofify-cache'),
+  cacheRoot: transcodeDir(),
   ...(env.DISK_CACHE_MAX_BYTES !== undefined ? { maxBytes: env.DISK_CACHE_MAX_BYTES } : {}),
   sweepGraceSeconds: env.DISK_CACHE_SWEEP_GRACE_SECONDS,
 });

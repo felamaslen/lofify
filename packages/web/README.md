@@ -189,11 +189,56 @@ browsers suspend when hidden. (The visualiser's analyser context is a
 parallel tap that carries no audio, so it doesn't change this.)
 The `Player` (`state/player.tsx`) wires `navigator.mediaSession` so the OS
 treats us like a media app: it publishes track metadata (title, artist,
-album, with the app icon as stand-in artwork), keeps `playbackState` and the
-lock-screen scrub position in sync, and handles the hardware/lock-screen
+album, with the track's downloaded cover as artwork — the app icon when
+there is none), keeps `playbackState` and the lock-screen scrub position in
+sync, and handles the hardware/lock-screen
 `play`/`pause`/`previoustrack`/`nexttrack`/`seekto` controls. The Media
 Session handlers are what stop mobile platforms (iOS especially) from
 pausing hidden web audio.
+
+## Album art
+
+`components/track-artwork.tsx` owns the artwork UI: a colocated
+`TrackArtwork` fragment, a `useTrackArtwork` hook and the `ArtworkTile`
+renderer (cover image, spinner while a download runs, and a warning
+triangle on failure — the reason rides the tooltip, and clicking
+retries). A never-requested track is requested automatically the
+moment its artwork is previewed; only a FAILED row waits for a manual
+retry. Either way the hook calls `Mutation.artworkDownload` and polls
+`Track.artwork` every 2s until the row resolves, sharing one TanStack
+Query key per track so no two consumers poll the same track twice.
+
+Everything rendered (tiles and the Media Session cover alike) uses
+`media.preview(size: SQUARE_500).src` — the immutably-cached AVIF
+square from the API's `/asset` route. The original `media.url` is
+served no-store and is never used for display.
+
+While a track with a cover plays, the favicon becomes the cover, with
+the app icon as a badge in the lower-right corner (`lib/favicon.ts`
+composites them on a canvas and swaps the `<link rel="icon">` to a
+data URL; stopping playback restores the original icon). Artwork loads
+with `crossOrigin: anonymous` so the canvas stays exportable.
+
+Artwork can also be set by hand: dropping an image onto the tile (in
+any state — replacing an existing cover included) uploads it via
+`Mutation.trackUpdate`'s `artwork` argument as a GraphQL multipart
+request (`gqlUpload` in `lib/gql-request.ts`), and the album's art
+swaps to the dropped image. An image dragged from another browser tab
+arrives as a URL rather than a file; the server downloads it
+(`trackUpdate`'s `artworkUrl` argument — client-side fetching would be
+blocked by CORS on most image hosts) and stores it exactly like an
+upload, with the same size cap and magic-byte sniffing. A manually set
+cover shows a bin button on hover in the info popover; clicking it
+(`Mutation.artworkClear`) removes the image and requeues an automatic
+download.
+
+It surfaces in two places. The playback bar shows a 40px thumbnail next
+to the playing track's title (seeded by the fragment riding the
+player's track fetch, so the common case costs no extra request) and
+feeds the resolved cover to the Media Session as it lands. The track
+info popover shows a full-width preview, fetched lazily on open rather
+than carried by the list fragment — embedding artwork there would fan
+the resolver out to every visible row.
 
 ## Update indicator
 
@@ -260,9 +305,11 @@ to toggle, shift-click to extend a range. Right-clicking opens a context
 menu with **Edit tags**, which opens a dialog over the selection. Editing a
 single track exposes every tag; with multiple tracks selected the dialog
 restricts to the album-shared tags (artist, album, CD, year) and leaves any
-blank field unchanged. Saving issues one `trackUpdate` mutation per selected
-track and refetches the list. Clearing a field on a single track reverts it
-to the tag scanned from the file.
+blank field unchanged. The form is built on TanStack Form: per-field
+touched state drives both the `(multiple values)` placeholder and which
+fields a multi-edit submits. Saving issues one `trackUpdate` mutation per
+selected track and refetches the list. Clearing a field on a single track
+reverts it to the tag scanned from the file.
 
 When every selected track shares one artist, the dialog also lists that
 artist's search **synonyms** with inline add/rename/remove. These apply

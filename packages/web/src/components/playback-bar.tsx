@@ -1,6 +1,6 @@
-import { readFragment } from 'gql.tada';
+import { type FragmentOf, readFragment } from 'gql.tada';
 import { AudioLines, Pause, Play, SkipBack, SkipForward } from 'lucide-react';
-import { type MouseEvent, useMemo, useRef, useState } from 'react';
+import { type MouseEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 import { getAnalyser, isVisualiserSupported } from '../lib/audio-analyser.ts';
 import { graphql } from '../lib/gql.ts';
@@ -9,20 +9,57 @@ import { usePlayer } from '../state/player.tsx';
 import { useVisualiser } from '../state/visualiser.tsx';
 import { PlaybackFormatBadge } from './playback-format-badge.tsx';
 import { SettingsDialog } from './settings-dialog.tsx';
+import {
+  artworkDisplayUrl,
+  ArtworkTile,
+  TrackArtworkDocument,
+  useTrackArtwork,
+} from './track-artwork.tsx';
 import { Button } from './ui/button.tsx';
 import { Slider } from './ui/slider.tsx';
 
-export const PlaybackBarDocument = graphql(`
-  fragment PlaybackBar on Track {
-    title
-    artist
-    album
-    duration {
-      seconds
-      formatted
+export const PlaybackBarDocument = graphql(
+  `
+    fragment PlaybackBar on Track {
+      title
+      artist
+      album
+      duration {
+        seconds
+        formatted
+      }
+      ...TrackArtwork
     }
-  }
-`);
+  `,
+  [TrackArtworkDocument],
+);
+
+/** Cover thumbnail for the playing track. Keeps the Media Session artwork in step as a download resolves — `setMediaArtwork` ignores stale and redundant calls, so the effect can fire freely. */
+function BarArtwork({ track }: { track: FragmentOf<typeof TrackArtworkDocument> }) {
+  const { id, artwork: initial } = readFragment(TrackArtworkDocument, track);
+  const { artwork, download, upload, uploadFromUrl, uploading, error } = useTrackArtwork(
+    id,
+    initial,
+  );
+  const { setMediaArtwork } = usePlayer();
+
+  const coverUrl = artworkDisplayUrl(artwork);
+  useEffect(() => {
+    setMediaArtwork(id, coverUrl);
+  }, [id, coverUrl, setMediaArtwork]);
+
+  return (
+    <ArtworkTile
+      artwork={artwork}
+      download={download}
+      upload={upload}
+      uploadFromUrl={uploadFromUrl}
+      uploading={uploading}
+      error={error}
+      className="size-10"
+    />
+  );
+}
 
 function fmt(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));
@@ -74,18 +111,21 @@ export function PlaybackBar() {
 
   return (
     <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)_minmax(0,1fr)] items-center gap-4 border-t border-border bg-card/60 px-4 py-3 backdrop-blur max-sm:grid-cols-[minmax(0,1fr)_auto] max-sm:gap-x-3 max-sm:gap-y-2 max-sm:pb-0">
-      <div className="flex min-w-0 flex-col max-sm:col-start-1 max-sm:row-start-1">
-        {meta ? (
-          <>
-            <span className="truncate text-sm font-medium">{meta.title ?? '(untitled)'}</span>
-            <span className="truncate text-xs text-muted-foreground">
-              {meta.artist ?? 'Unknown artist'}
-              {meta.album ? ` — ${meta.album}` : ''}
-            </span>
-          </>
-        ) : (
-          <span className="text-xs text-muted-foreground">Nothing playing</span>
-        )}
+      <div className="flex min-w-0 items-center gap-3 max-sm:col-start-1 max-sm:row-start-1">
+        {meta && <BarArtwork track={meta} />}
+        <div className="flex min-w-0 flex-col">
+          {meta ? (
+            <>
+              <span className="truncate text-sm font-medium">{meta.title ?? '(untitled)'}</span>
+              <span className="truncate text-xs text-muted-foreground">
+                {meta.artist ?? 'Unknown artist'}
+                {meta.album ? ` — ${meta.album}` : ''}
+              </span>
+            </>
+          ) : (
+            <span className="text-xs text-muted-foreground">Nothing playing</span>
+          )}
+        </div>
       </div>
 
       <div className="mx-auto flex w-full max-w-[640px] flex-col items-center gap-1.5 max-sm:contents">

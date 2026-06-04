@@ -14,6 +14,8 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core';
 
+import { albumArt } from './album-art.js';
+
 export const tracks = pgTable(
   'Tracks',
   {
@@ -28,6 +30,8 @@ export const tracks = pgTable(
     trackNumber: integer('trackNumber'),
     discNumber: integer('discNumber'),
     artist: text('artist'),
+    /** Artist credited for the whole album (e.g. "Various Artists" on a compilation). Null when the file carries no album-artist tag. */
+    albumArtist: text('albumArtist'),
     album: text('album'),
     year: text('year'),
     /** User-supplied title that takes precedence over the scanned `title`. Preserved across rescans; null means fall back to the scanned tag, an empty string blanks the field. */
@@ -38,6 +42,8 @@ export const tracks = pgTable(
     discNumberOverride: integer('discNumberOverride'),
     /** User-supplied artist that takes precedence over the scanned `artist`. Preserved across rescans; null means fall back to the scanned tag, an empty string blanks the field. */
     artistOverride: text('artistOverride'),
+    /** User-supplied album artist that takes precedence over the scanned `albumArtist`. Preserved across rescans; null means fall back to the scanned tag, an empty string blanks the field. */
+    albumArtistOverride: text('albumArtistOverride'),
     /** User-supplied album that takes precedence over the scanned `album`. Preserved across rescans; null means fall back to the scanned tag, an empty string blanks the field. */
     albumOverride: text('albumOverride'),
     /** User-supplied year that takes precedence over the scanned `year`. Preserved across rescans; null means fall back to the scanned tag, an empty string blanks the field. */
@@ -61,6 +67,8 @@ export const tracks = pgTable(
     durationSeconds: integer('durationSeconds').notNull(),
     /** mtime of the source file when last scanned. Used to detect out-of-band content changes and to invalidate derived state (e.g. cached transcodes). */
     sourceMtime: timestamp('sourceMtime', { withTimezone: true, mode: 'date' }).notNull(),
+    /** Album art shared by every track of this row's album. Linked by `Mutation.artworkDownload`; null when art has never been requested. Kept on tag edits so artwork survives renames. */
+    albumArtId: uuid('albumArtId').references(() => albumArt.id, { onDelete: 'set null' }),
     /** Canonical (highest-quality) track of this row's duplicate group — the copy surfaced when duplicates are hidden. Every member of a group carries it, the canonical row pointing at itself. Null when this row has no duplicate. */
     trackIdDeduplicated: uuid('trackIdDeduplicated').references((): AnyPgColumn => tracks.id),
     /** Rank of this row within its duplicate group, 0 being the canonical/best source. Null exactly when `trackIdDeduplicated` is null (the row has no duplicate). */
