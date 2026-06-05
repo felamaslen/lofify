@@ -156,6 +156,13 @@ hash after it. It requires `shuffleSeed`. Filters and duplicate
 collapsing compose as usual; `artistIndex` is unaffected (the list view
 stays in library order).
 
+`Query.tracks(repeat:)` treats the active order — library or shuffled —
+as cyclic: a cursor page that runs past either end continues from the
+other end (stepping past the last track yields the first and vice
+versa), capped at one full lap so a page never repeats a row. With
+`repeat`, `pageInfo` reports more pages in both directions whenever any
+track matches. Ignored when `offset` is set.
+
 ## Artist synonyms
 
 `ArtistSynonyms` maps alternative names (alias, romanisation,

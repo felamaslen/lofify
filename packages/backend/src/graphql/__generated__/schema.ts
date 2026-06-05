@@ -686,7 +686,7 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
                     }
                 },
                 tracks: {
-                    description: "List the library in Relay-cursor pagination order: by `artist`, `album`, `discNumber`, `trackNumber`, then `id` for stability. Supply exactly one of `first`/`last` and at most one of `after`/`before`.\n\nPass `offset` instead to fetch an arbitrary window (`first` rows from that zero-based index) in the same order \u2014 used for index-addressed scrolling (e.g. the letter scrubber jumping anywhere without paging through the gaps). When `offset` is set, the cursor arguments are ignored.\n\nPass `shuffleSeed` to replace the library order with a deterministic pseudo-random permutation: the same seed always yields the same order, so cursor pagination and `offset` stay consistent across requests.",
+                    description: "List the library in Relay-cursor pagination order: by `artist`, `album`, `discNumber`, `trackNumber`, then `id` for stability. Supply exactly one of `first`/`last` and at most one of `after`/`before`.\n\nPass `offset` instead to fetch an arbitrary window (`first` rows from that zero-based index) in the same order \u2014 used for index-addressed scrolling (e.g. the letter scrubber jumping anywhere without paging through the gaps). When `offset` is set, the cursor arguments are ignored.\n\nPass `shuffleSeed` to replace the library order with a deterministic pseudo-random permutation: the same seed always yields the same order, so cursor pagination and `offset` stay consistent across requests.\n\nPass `repeat` to treat the active order as cyclic: a cursor page that runs past either end continues from the other end, so stepping past the last track yields the first and vice versa.",
                     name: "tracks",
                     type: TrackConnectionType,
                     args: {
@@ -718,6 +718,10 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
                             description: "Zero-based index of the first row to return, in the active sort order. When set, returns `first` rows from here and ignores `after`/`before`/`last`.",
                             type: GraphQLInt
                         },
+                        repeat: {
+                            description: "Treat the active order as cyclic: a cursor page that runs past either end continues from the other end, capped at one full lap (never more rows than `totalCount`). `pageInfo` then reports more pages in both directions whenever any track matches. Ignored when `offset` is set.",
+                            type: GraphQLBoolean
+                        },
                         shuffleInitialTrackId: {
                             description: "Track to place first in the shuffled order. Requires `shuffleSeed`.",
                             type: GraphQLID
@@ -728,7 +732,7 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
                         }
                     },
                     resolve(_source, args) {
-                        return queryTracksResolver(args.first, args.last, args.after, args.before, args.filterArtistIn, args.filterAlbumIn, args.offset, args.includeDuplicates, args.shuffleSeed, args.shuffleInitialTrackId);
+                        return queryTracksResolver(args.first, args.last, args.after, args.before, args.filterArtistIn, args.filterAlbumIn, args.offset, args.includeDuplicates, args.shuffleSeed, args.shuffleInitialTrackId, args.repeat);
                     }
                 }
             };

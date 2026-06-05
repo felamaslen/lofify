@@ -175,6 +175,8 @@ export async function track(id: ID): Promise<Track | null> {
  *
  * Pass `shuffleSeed` to replace the library order with a deterministic pseudo-random permutation: the same seed always yields the same order, so cursor pagination and `offset` stay consistent across requests.
  *
+ * Pass `repeat` to treat the active order as cyclic: a cursor page that runs past either end continues from the other end, so stepping past the last track yields the first and vice versa.
+ *
  * @gqlQueryField
  */
 export async function tracks(
@@ -194,6 +196,8 @@ export async function tracks(
   shuffleSeed?: string | null,
   /** Track to place first in the shuffled order. Requires `shuffleSeed`. */
   shuffleInitialTrackId?: ID | null,
+  /** Treat the active order as cyclic: a cursor page that runs past either end continues from the other end, capped at one full lap (never more rows than `totalCount`). `pageInfo` then reports more pages in both directions whenever any track matches. Ignored when `offset` is set. */
+  repeat?: boolean | null,
 ): Promise<TrackConnection | null> {
   if (shuffleInitialTrackId != null && shuffleSeed == null) {
     throw new Error('`shuffleInitialTrackId` requires `shuffleSeed`.');
@@ -260,20 +264,39 @@ export async function tracks(
 
   const hasMore = rows.length > limit;
   const slice = hasMore ? rows.slice(0, limit) : rows;
-  const ordered = isBackward ? slice.slice().reverse() : slice;
+  let ordered = isBackward ? slice.slice().reverse() : slice;
+
+  const totalCount = await countTracks(filterClause);
+
+  if (repeat) {
+    // Wrap-fill an underfilled page from the order's other end, capped at one full lap so the
+    // wrap can never duplicate a row already on the page (the wrap rows all sort at or before the
+    // cursor, which the lap cap keeps disjoint from the post-cursor slice).
+    const need = Math.min(limit, totalCount) - ordered.length;
+    if (need > 0) {
+      const wrap = await db
+        .select()
+        .from(tracksTable)
+        .where(filterClause ?? sql`true`)
+        .orderBy(...orderColumns(sort, isBackward ? desc : asc))
+        .limit(need);
+      ordered = isBackward ? [...wrap.reverse(), ...ordered] : [...ordered, ...wrap];
+    }
+  }
 
   const edges: TrackEdge[] = ordered.map((row) => ({
     node: toGqlTrack(row),
     cursor: row.id,
   }));
 
-  const totalCount = await countTracks(filterClause);
+  // A cyclic order has more pages in both directions as long as anything matches.
+  const cycles = repeat === true && totalCount > 0;
 
   return {
     edges,
     pageInfo: {
-      hasNextPage: isBackward ? cursorId != null : hasMore,
-      hasPreviousPage: isBackward ? hasMore : cursorId != null,
+      hasNextPage: cycles || (isBackward ? cursorId != null : hasMore),
+      hasPreviousPage: cycles || (isBackward ? hasMore : cursorId != null),
       startCursor: edges[0]?.cursor ?? null,
       endCursor: edges.at(-1)?.cursor ?? null,
     },
