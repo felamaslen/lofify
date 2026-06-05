@@ -143,6 +143,19 @@ by feeding its `offset` to `tracks`. Both honour the same filters. The
 player keeps using cursor paging for next/previous, which is relative by
 nature.
 
+## Shuffled order
+
+`Query.tracks(shuffleSeed:)` replaces the library sort with a
+deterministic pseudo-random permutation (ordering by a seeded hash of
+the track id), so the same seed always yields the same order and cursor
+paging, `offset`, and stepping stay consistent across requests.
+`shuffleInitialTrackId` places one track first in the permutation — the
+client pins the track playing when shuffle was enabled, so the whole
+remaining library follows it rather than only the tracks that happen to
+hash after it. It requires `shuffleSeed`. Filters and duplicate
+collapsing compose as usual; `artistIndex` is unaffected (the list view
+stays in library order).
+
 ## Artist synonyms
 
 `ArtistSynonyms` maps alternative names (alias, romanisation,

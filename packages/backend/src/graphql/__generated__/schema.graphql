@@ -323,6 +323,8 @@ type Query {
   List the library in Relay-cursor pagination order: by `artist`, `album`, `discNumber`, `trackNumber`, then `id` for stability. Supply exactly one of `first`/`last` and at most one of `after`/`before`.
   
   Pass `offset` instead to fetch an arbitrary window (`first` rows from that zero-based index) in the same order — used for index-addressed scrolling (e.g. the letter scrubber jumping anywhere without paging through the gaps). When `offset` is set, the cursor arguments are ignored.
+  
+  Pass `shuffleSeed` to replace the library order with a deterministic pseudo-random permutation: the same seed always yields the same order, so cursor pagination and `offset` stay consistent across requests.
   """
   tracks(
     after: String
@@ -342,9 +344,15 @@ type Query {
     includeDuplicates: Boolean
     last: Int
     """
-    Zero-based index of the first row to return, in the library sort order. When set, returns `first` rows from here and ignores `after`/`before`/`last`.
+    Zero-based index of the first row to return, in the active sort order. When set, returns `first` rows from here and ignores `after`/`before`/`last`.
     """
     offset: Int
+    """Track to place first in the shuffled order. Requires `shuffleSeed`."""
+    shuffleInitialTrackId: ID
+    """
+    Seed for a deterministic pseudo-random ordering that replaces the library sort. The same seed always produces the same permutation.
+    """
+    shuffleSeed: String
   ): TrackConnection
 }
 

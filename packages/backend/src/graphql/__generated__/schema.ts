@@ -686,7 +686,7 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
                     }
                 },
                 tracks: {
-                    description: "List the library in Relay-cursor pagination order: by `artist`, `album`, `discNumber`, `trackNumber`, then `id` for stability. Supply exactly one of `first`/`last` and at most one of `after`/`before`.\n\nPass `offset` instead to fetch an arbitrary window (`first` rows from that zero-based index) in the same order \u2014 used for index-addressed scrolling (e.g. the letter scrubber jumping anywhere without paging through the gaps). When `offset` is set, the cursor arguments are ignored.",
+                    description: "List the library in Relay-cursor pagination order: by `artist`, `album`, `discNumber`, `trackNumber`, then `id` for stability. Supply exactly one of `first`/`last` and at most one of `after`/`before`.\n\nPass `offset` instead to fetch an arbitrary window (`first` rows from that zero-based index) in the same order \u2014 used for index-addressed scrolling (e.g. the letter scrubber jumping anywhere without paging through the gaps). When `offset` is set, the cursor arguments are ignored.\n\nPass `shuffleSeed` to replace the library order with a deterministic pseudo-random permutation: the same seed always yields the same order, so cursor pagination and `offset` stay consistent across requests.",
                     name: "tracks",
                     type: TrackConnectionType,
                     args: {
@@ -715,12 +715,20 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
                             type: GraphQLInt
                         },
                         offset: {
-                            description: "Zero-based index of the first row to return, in the library sort order. When set, returns `first` rows from here and ignores `after`/`before`/`last`.",
+                            description: "Zero-based index of the first row to return, in the active sort order. When set, returns `first` rows from here and ignores `after`/`before`/`last`.",
                             type: GraphQLInt
+                        },
+                        shuffleInitialTrackId: {
+                            description: "Track to place first in the shuffled order. Requires `shuffleSeed`.",
+                            type: GraphQLID
+                        },
+                        shuffleSeed: {
+                            description: "Seed for a deterministic pseudo-random ordering that replaces the library sort. The same seed always produces the same permutation.",
+                            type: GraphQLString
                         }
                     },
                     resolve(_source, args) {
-                        return queryTracksResolver(args.first, args.last, args.after, args.before, args.filterArtistIn, args.filterAlbumIn, args.offset, args.includeDuplicates);
+                        return queryTracksResolver(args.first, args.last, args.after, args.before, args.filterArtistIn, args.filterAlbumIn, args.offset, args.includeDuplicates, args.shuffleSeed, args.shuffleInitialTrackId);
                     }
                 }
             };

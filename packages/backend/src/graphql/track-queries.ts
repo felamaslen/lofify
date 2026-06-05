@@ -1,4 +1,4 @@
-import { eq, inArray, isNull, or, type SQL, sql } from 'drizzle-orm';
+import { asc, desc, eq, inArray, isNull, ne, or, type SQL, sql } from 'drizzle-orm';
 import type { ID, Int } from 'grats';
 
 import { db } from '../db/client.js';
@@ -79,8 +79,71 @@ function buildFilterClause(
   return clauses.length > 0 ? sql.join(clauses, sql` and `) : null;
 }
 
-/** The library's stable ascending sort order, shared by cursor paging, the `offset` window, and `artistIndex` so all three address the same row sequence. */
-const ASC_ORDER = sql`coalesce(${tracksTable.artistOverride}, ${tracksTable.artist}, '') asc, coalesce(${tracksTable.albumOverride}, ${tracksTable.album}, '') asc, coalesce(${tracksTable.discNumberOverride}, ${tracksTable.discNumber}, 0) asc, coalesce(${tracksTable.trackNumberOverride}, ${tracksTable.trackNumber}, 0) asc, ${tracksTable.file} asc, ${tracksTable.id} asc`;
+/** One column of the active sort order, expressed twice: `row` against the queried table and `cursor` against the cursor-lookup alias `c`, so the order-by, the row sort key, and the cursor sort-key subquery all derive from the same definition. */
+type SortColumn = { row: SQL; cursor: SQL };
+
+/** The column expressions of the active sort order, most significant first. Without a seed this is the library order (effective artist, album, disc, track, file, id). With a seed it's a deterministic pseudo-random permutation — a seeded hash of the id, with the id as tiebreaker — optionally preceded by a pin that sorts `shuffleInitialTrackId` first. */
+function sortColumns(
+  shuffleSeed: string | null | undefined,
+  shuffleInitialTrackId: string | null | undefined,
+): SortColumn[] {
+  if (shuffleSeed != null) {
+    const columns: SortColumn[] = [];
+    if (shuffleInitialTrackId != null) {
+      columns.push({
+        row: ne(tracksTable.id, shuffleInitialTrackId),
+        cursor: sql`(c.id != ${shuffleInitialTrackId})`,
+      });
+    }
+    columns.push({
+      row: sql`md5(${shuffleSeed} || ${tracksTable.id}::text)`,
+      cursor: sql`md5(${shuffleSeed} || c.id::text)`,
+    });
+    columns.push({ row: sql`${tracksTable.id}`, cursor: sql`c.id` });
+    return columns;
+  }
+  return [
+    {
+      row: sql`coalesce(${tracksTable.artistOverride}, ${tracksTable.artist}, '')`,
+      cursor: sql`coalesce(c."artistOverride", c.artist, '')`,
+    },
+    {
+      row: sql`coalesce(${tracksTable.albumOverride}, ${tracksTable.album}, '')`,
+      cursor: sql`coalesce(c."albumOverride", c.album, '')`,
+    },
+    {
+      row: sql`coalesce(${tracksTable.discNumberOverride}, ${tracksTable.discNumber}, 0)`,
+      cursor: sql`coalesce(c."discNumberOverride", c."discNumber", 0)`,
+    },
+    {
+      row: sql`coalesce(${tracksTable.trackNumberOverride}, ${tracksTable.trackNumber}, 0)`,
+      cursor: sql`coalesce(c."trackNumberOverride", c."trackNumber", 0)`,
+    },
+    { row: sql`${tracksTable.file}`, cursor: sql`c.file` },
+    { row: sql`${tracksTable.id}`, cursor: sql`c.id` },
+  ];
+}
+
+function orderColumns(columns: SortColumn[], direction: typeof asc | typeof desc): SQL[] {
+  return columns.map((c) => direction(c.row));
+}
+
+function rowSortKey(columns: SortColumn[]): SQL {
+  return sql`(${sql.join(
+    columns.map((c) => c.row),
+    sql`, `,
+  )})`;
+}
+
+function cursorSortKey(columns: SortColumn[], cursorId: string): SQL {
+  return sql`(select ${sql.join(
+    columns.map((c) => c.cursor),
+    sql`, `,
+  )} from "Tracks" c where c.id = ${cursorId})`;
+}
+
+/** The library's stable ascending sort order, used by `artistIndex` so it addresses the same row sequence as un-shuffled `tracks`. */
+const ASC_ORDER = sql.join(orderColumns(sortColumns(null, null), asc), sql`, `);
 
 async function countTracks(filterClause: SQL | null): Promise<number> {
   const row = await db
@@ -110,6 +173,8 @@ export async function track(id: ID): Promise<Track | null> {
  *
  * Pass `offset` instead to fetch an arbitrary window (`first` rows from that zero-based index) in the same order — used for index-addressed scrolling (e.g. the letter scrubber jumping anywhere without paging through the gaps). When `offset` is set, the cursor arguments are ignored.
  *
+ * Pass `shuffleSeed` to replace the library order with a deterministic pseudo-random permutation: the same seed always yields the same order, so cursor pagination and `offset` stay consistent across requests.
+ *
  * @gqlQueryField
  */
 export async function tracks(
@@ -121,11 +186,19 @@ export async function tracks(
   filterArtistIn?: string[] | null,
   /** Restrict the result to tracks whose effective album is one of these names. An empty or omitted list applies no filter. */
   filterAlbumIn?: string[] | null,
-  /** Zero-based index of the first row to return, in the library sort order. When set, returns `first` rows from here and ignores `after`/`before`/`last`. */
+  /** Zero-based index of the first row to return, in the active sort order. When set, returns `first` rows from here and ignores `after`/`before`/`last`. */
   offset?: Int | null,
   /** Include every duplicate copy of a recording. By default only the canonical (highest-quality) copy of each duplicate group is returned. */
   includeDuplicates?: boolean | null,
+  /** Seed for a deterministic pseudo-random ordering that replaces the library sort. The same seed always produces the same permutation. */
+  shuffleSeed?: string | null,
+  /** Track to place first in the shuffled order. Requires `shuffleSeed`. */
+  shuffleInitialTrackId?: ID | null,
 ): Promise<TrackConnection | null> {
+  if (shuffleInitialTrackId != null && shuffleSeed == null) {
+    throw new Error('`shuffleInitialTrackId` requires `shuffleSeed`.');
+  }
+  const sort = sortColumns(shuffleSeed, shuffleInitialTrackId);
   const filterClause = buildFilterClause(filterArtistIn, filterAlbumIn, includeDuplicates ?? false);
 
   if (offset != null) {
@@ -135,7 +208,7 @@ export async function tracks(
       .select()
       .from(tracksTable)
       .where(filterClause ?? sql`true`)
-      .orderBy(ASC_ORDER)
+      .orderBy(...orderColumns(sort, asc))
       .limit(limit)
       .offset(off);
     const edges: TrackEdge[] = rows.map((row) => ({ node: toGqlTrack(row), cursor: row.id }));
@@ -170,25 +243,19 @@ export async function tracks(
     }
   }
 
-  const sortKey = sql`(coalesce(${tracksTable.artistOverride}, ${tracksTable.artist}, ''), coalesce(${tracksTable.albumOverride}, ${tracksTable.album}, ''), coalesce(${tracksTable.discNumberOverride}, ${tracksTable.discNumber}, 0), coalesce(${tracksTable.trackNumberOverride}, ${tracksTable.trackNumber}, 0), ${tracksTable.file}, ${tracksTable.id})`;
-  const cursorSortKey = sql`(select coalesce(c."artistOverride", c.artist, ''), coalesce(c."albumOverride", c.album, ''), coalesce(c."discNumberOverride", c."discNumber", 0), coalesce(c."trackNumberOverride", c."trackNumber", 0), c.file, c.id from "Tracks" c where c.id = ${cursorId})`;
-
   const cursorWhere = cursorId
     ? isBackward
-      ? sql`${sortKey} < ${cursorSortKey}`
-      : sql`${sortKey} > ${cursorSortKey}`
+      ? sql`${rowSortKey(sort)} < ${cursorSortKey(sort, cursorId)}`
+      : sql`${rowSortKey(sort)} > ${cursorSortKey(sort, cursorId)}`
     : undefined;
   const conditions = [cursorWhere, filterClause].filter((c): c is SQL => c != null);
   const where = conditions.length > 0 ? sql.join(conditions, sql` and `) : sql`true`;
-
-  const direction = isBackward ? sql`desc` : sql`asc`;
-  const orderBy = sql`coalesce(${tracksTable.artistOverride}, ${tracksTable.artist}, '') ${direction}, coalesce(${tracksTable.albumOverride}, ${tracksTable.album}, '') ${direction}, coalesce(${tracksTable.discNumberOverride}, ${tracksTable.discNumber}, 0) ${direction}, coalesce(${tracksTable.trackNumberOverride}, ${tracksTable.trackNumber}, 0) ${direction}, ${tracksTable.file} ${direction}, ${tracksTable.id} ${direction}`;
 
   const rows = await db
     .select()
     .from(tracksTable)
     .where(where)
-    .orderBy(orderBy)
+    .orderBy(...orderColumns(sort, isBackward ? desc : asc))
     .limit(limit + 1);
 
   const hasMore = rows.length > limit;
