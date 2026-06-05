@@ -23,6 +23,7 @@ import { type CreatePlayerOptions, MsePlayer, type QueuedTrack } from '../lib/ms
 import { subscribe as subscribeToStream } from '../lib/sse-client.ts';
 import { libraryFilterVars } from './library-filter.tsx';
 import { showDuplicatesValue } from './show-duplicates.tsx';
+import { reanchorShuffle, shuffleVars } from './shuffle.tsx';
 
 export const TrackByIdDocument = graphql(
   `
@@ -489,8 +490,14 @@ class Player {
     writePlaybackToUrl(this.snapshot.current?.id ?? null, this.mse?.currentPosition() ?? 0);
   }
 
-  /** Load the track with id `id`, fetched at the current tier/preference, and start it from the top. Disposes the existing `MsePlayer` so the new track gets a fresh `MediaSource` — rapid clicks between tracks would otherwise leave stale state (cached `initBytes`, in-flight fetch race, etc.) interleaving across the reused instance. The `playToken` check after the fetch drops earlier clicks that resolved before the user's most recent one. */
+  /** User-initiated play. Re-anchors the shuffle order at the selected track (a no-op when shuffle is off) before loading it — internal advancement (`step`) bypasses this so stepping never re-anchors. */
   async play(id: string): Promise<void> {
+    reanchorShuffle(id);
+    return this.playTrack(id);
+  }
+
+  /** Load the track with id `id`, fetched at the current tier/preference, and start it from the top. Disposes the existing `MsePlayer` so the new track gets a fresh `MediaSource` — rapid clicks between tracks would otherwise leave stale state (cached `initBytes`, in-flight fetch race, etc.) interleaving across the reused instance. The `playToken` check after the fetch drops earlier clicks that resolved before the user's most recent one. */
+  private async playTrack(id: string): Promise<void> {
     // Silence the outgoing track synchronously, before the fetch await — otherwise its buffered
     // samples keep playing audibly until `loadTrack` reassigns `audio.src`, and on mobile (higher
     // latency, and iOS ignores `audio.volume`) that gap is long enough to hear as a click.
@@ -524,12 +531,12 @@ class Player {
     void this.audio.play().catch(() => undefined);
   }
 
-  /** Advance to the next track in library order. */
+  /** Advance to the next track in the active play order. */
   next(): void {
     void this.step('next');
   }
 
-  /** Go to the previous track in library order. */
+  /** Go to the previous track in the active play order. */
   previous(): void {
     void this.step('previous');
   }
@@ -848,6 +855,7 @@ class Player {
     if (!currentId) return null;
     const filter = libraryFilterVars();
     const includeDuplicates = showDuplicatesValue();
+    const shuffle = shuffleVars();
     const data = await this.queryClient.fetchQuery({
       queryKey: [
         'step',
@@ -856,15 +864,27 @@ class Player {
         filter.filterArtistIn,
         filter.filterAlbumIn,
         includeDuplicates,
+        shuffle.shuffleSeed,
+        shuffle.shuffleInitialTrackId,
       ],
       queryFn: ({ signal }) =>
         gqlRequest(
           TracksDocument,
-          { first: 1, last: null, after: currentId, before: null, ...filter, includeDuplicates },
+          {
+            first: 1,
+            last: null,
+            after: currentId,
+            before: null,
+            ...filter,
+            includeDuplicates,
+            ...shuffle,
+          },
           signal,
         ),
     });
     const nextId = data.tracks?.edges[0]?.node.id;
+    // TODO: repeat mode — instead of ending here when the order is exhausted, re-anchor
+    // (fresh seed when shuffled) and continue from the top.
     if (!nextId) return null;
     const tier = this.snapshot.requestedTier;
     const preference = this.snapshot.lossyPreference;
@@ -884,10 +904,11 @@ class Player {
     this.audio.pause();
     const filter = libraryFilterVars();
     const includeDuplicates = showDuplicatesValue();
+    const shuffle = shuffleVars();
     const variables =
       direction === 'next'
-        ? { first: 1, last: null, after: current.id, before: null, ...filter, includeDuplicates }
-        : { first: null, last: 1, after: null, before: current.id, ...filter, includeDuplicates };
+        ? { first: 1, last: null, after: current.id, before: null }
+        : { first: null, last: 1, after: null, before: current.id };
     const data = await this.queryClient.fetchQuery({
       queryKey: [
         'step',
@@ -896,11 +917,18 @@ class Player {
         filter.filterArtistIn,
         filter.filterAlbumIn,
         includeDuplicates,
+        shuffle.shuffleSeed,
+        shuffle.shuffleInitialTrackId,
       ],
-      queryFn: ({ signal }) => gqlRequest(TracksDocument, variables, signal),
+      queryFn: ({ signal }) =>
+        gqlRequest(
+          TracksDocument,
+          { ...variables, ...filter, includeDuplicates, ...shuffle },
+          signal,
+        ),
     });
     const nextId = data.tracks?.edges[0]?.node.id;
-    if (nextId) await this.play(nextId);
+    if (nextId) await this.playTrack(nextId);
     else if (wasPlaying) await this.audio.play().catch(() => undefined);
   }
 }

@@ -49,6 +49,8 @@ export const TracksDocument = graphql(
       $filterArtistIn: [String!]
       $filterAlbumIn: [String!]
       $includeDuplicates: Boolean
+      $shuffleSeed: String
+      $shuffleInitialTrackId: ID
     ) {
       tracks(
         first: $first
@@ -58,6 +60,8 @@ export const TracksDocument = graphql(
         filterArtistIn: $filterArtistIn
         filterAlbumIn: $filterAlbumIn
         includeDuplicates: $includeDuplicates
+        shuffleSeed: $shuffleSeed
+        shuffleInitialTrackId: $shuffleInitialTrackId
       ) {
         totalCount
         pageInfo {

@@ -211,6 +211,29 @@ the cache and needs the network, the in-flight prefetch is aborted
 first, so the urgent fetch gets the whole pipe and its downscale
 samples aren't diluted by a parallel transfer.
 
+## Shuffle
+
+A shuffle button (`Shuffle`) leads the playback bar's transport row, just
+before previous / play-pause / next. The shuffled order is computed
+server-side: the client generates a random seed and passes it (plus the
+track playing when shuffle was enabled, pinned first) as
+`Query.tracks(shuffleSeed:, shuffleInitialTrackId:)`, and next/previous
+keep stepping by cursor exactly as in library order — the seed just makes
+the server walk a deterministic pseudo-random permutation instead (see
+the backend README). The state is split by lifetime
+(`state/shuffle.tsx`): the on/off toggle persists in `localStorage`
+(`lofify.player.shuffle`), while the order itself rides the URL
+(`shuffle-seed` / `shuffle-from`) next to the track and playhead params, so
+a refresh resumes the same sequence. Manually playing a track while
+shuffled re-anchors: a fresh seed with that track pinned first, since
+keeping the old seed would replay the just-played sequence verbatim. The
+track list always shows library order; when the permutation is exhausted
+playback stops, like reaching the end of the library. Like a filter
+change, toggling shuffle mid-track doesn't re-resolve a successor the
+player has already queued for gapless advance, so the first auto-advance
+after the toggle can still follow the old order — a manual skip always
+queries fresh.
+
 ## Visualiser
 
 A waveform button (`AudioLines`) sits in the playback bar's transport row,
