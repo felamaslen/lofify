@@ -4,6 +4,8 @@ import { useRef } from 'react';
 
 import { ErrorToast } from '../components/error-toast.tsx';
 import { PlaybackBar } from '../components/playback-bar.tsx';
+import { QueuePanel } from '../components/queue-panel.tsx';
+import { QueueToast } from '../components/queue-toast.tsx';
 import { SearchBox } from '../components/search-box.tsx';
 import {
   ArtistIndexDocument,
@@ -104,6 +106,7 @@ function HomeLayout() {
   return (
     <div className="flex min-h-screen flex-col">
       <header className="sticky top-0 z-30 flex h-10 items-center gap-3 border-b border-border bg-background px-3 max-sm:h-auto max-sm:py-1.5">
+        <QueuePanel />
         <h1 className="m-0 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           Lofify
         </h1>
@@ -116,6 +119,7 @@ function HomeLayout() {
         <PlaybackBar />
       </div>
       <ErrorToast />
+      <QueueToast />
     </div>
   );
 }
