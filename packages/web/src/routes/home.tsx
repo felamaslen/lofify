@@ -18,7 +18,6 @@ import { gqlRequest } from '../lib/gql-request.ts';
 import { GIT_SHA } from '../lib/version.ts';
 import { LibraryFilterProvider, useLibraryFilter } from '../state/library-filter.tsx';
 import { ShowDuplicatesProvider, useShowDuplicates } from '../state/show-duplicates.tsx';
-import { ShuffleProvider } from '../state/shuffle.tsx';
 import { useVisualiser, VisualiserProvider } from '../state/visualiser.tsx';
 
 /** Bootstraps the home screen in one request: the first window of the view the page opened on (whatever its persisted filters) and whether the server is running a newer build than this bundle. */
@@ -125,11 +124,9 @@ export function Home() {
   return (
     <LibraryFilterProvider>
       <ShowDuplicatesProvider>
-        <ShuffleProvider>
-          <VisualiserProvider>
-            <HomeLayout />
-          </VisualiserProvider>
-        </ShuffleProvider>
+        <VisualiserProvider>
+          <HomeLayout />
+        </VisualiserProvider>
       </ShowDuplicatesProvider>
     </LibraryFilterProvider>
   );

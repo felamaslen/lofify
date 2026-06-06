@@ -1,4 +1,6 @@
-import { createContext, type ReactNode, useContext, useMemo, useState } from 'react';
+import { useState } from 'react';
+
+import { playOrderChanged } from './play-order.ts';
 
 /** Whether playback traverses the library in a seeded-random order instead of the library sort. The toggle persists in `localStorage`; the order itself (seed + the track it starts from) lives in the URL, so a refresh resumes the exact same sequence. */
 const STORAGE_KEY = 'lofify.player.shuffle';
@@ -43,36 +45,18 @@ export function reanchorShuffle(trackId: string): void {
   writeShuffleToUrl(crypto.randomUUID(), trackId);
 }
 
-type ShuffleContextValue = {
-  enabled: boolean;
-  /** Toggle shuffle. Turning it on anchors a fresh order at the playing track (pass `null` when nothing is playing — the first manual play anchors instead); turning it off clears the order from the URL. */
-  toggle: (currentTrackId: string | null) => void;
-};
-
-const Ctx = createContext<ShuffleContextValue | null>(null);
-
-export function ShuffleProvider({ children }: { children: ReactNode }) {
-  const [enabled, setEnabled] = useState(readEnabled);
-
-  const value = useMemo<ShuffleContextValue>(
-    () => ({
-      enabled,
-      toggle: (currentTrackId) => {
-        const next = !enabled;
-        if (typeof window !== 'undefined') window.localStorage.setItem(STORAGE_KEY, String(next));
-        if (next) writeShuffleToUrl(crypto.randomUUID(), currentTrackId);
-        else writeShuffleToUrl(null, null);
-        setEnabled(next);
-      },
-    }),
-    [enabled],
-  );
-
-  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
-}
-
+/** The shuffle toggle for the playback bar. A plain hook, not a context — the button is the only React consumer (the player reads `shuffleVars()` live). Turning it on anchors a fresh order at the playing track (pass `null` when nothing is playing — the first manual play anchors instead); turning it off clears the order from the URL. */
 export function useShuffle() {
-  const ctx = useContext(Ctx);
-  if (!ctx) throw new Error('useShuffle must be inside <ShuffleProvider>');
-  return ctx;
+  const [enabled, setEnabled] = useState(readEnabled);
+  return {
+    enabled,
+    toggle: (currentTrackId: string | null) => {
+      const next = !enabled;
+      if (typeof window !== 'undefined') window.localStorage.setItem(STORAGE_KEY, String(next));
+      if (next) writeShuffleToUrl(crypto.randomUUID(), currentTrackId);
+      else writeShuffleToUrl(null, null);
+      setEnabled(next);
+      playOrderChanged();
+    },
+  };
 }

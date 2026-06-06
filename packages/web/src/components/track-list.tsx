@@ -51,6 +51,7 @@ export const TracksDocument = graphql(
       $includeDuplicates: Boolean
       $shuffleSeed: String
       $shuffleInitialTrackId: ID
+      $repeat: Boolean
     ) {
       tracks(
         first: $first
@@ -62,6 +63,7 @@ export const TracksDocument = graphql(
         includeDuplicates: $includeDuplicates
         shuffleSeed: $shuffleSeed
         shuffleInitialTrackId: $shuffleInitialTrackId
+        repeat: $repeat
       ) {
         totalCount
         pageInfo {

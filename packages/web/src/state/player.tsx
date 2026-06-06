@@ -22,6 +22,8 @@ import { gqlRequest } from '../lib/gql-request.ts';
 import { type CreatePlayerOptions, MsePlayer, type QueuedTrack } from '../lib/mse.ts';
 import { subscribe as subscribeToStream } from '../lib/sse-client.ts';
 import { libraryFilterVars } from './library-filter.tsx';
+import { onPlayOrderChange } from './play-order.ts';
+import { repeatValue } from './repeat.tsx';
 import { showDuplicatesValue } from './show-duplicates.tsx';
 import { reanchorShuffle, shuffleVars } from './shuffle.tsx';
 
@@ -327,6 +329,15 @@ class Player {
   activate(): undefined | (() => void) {
     if (this.detachers.length > 0) return;
     this.attachAudioListeners();
+    // A changed play-order input (filter, duplicates, shuffle, repeat) invalidates the successor
+    // mse has already resolved — drop it (and any armed single-track loop) so the preload
+    // re-resolves under the new order.
+    this.detachers.push(
+      onPlayOrderChange(() => {
+        this.audio.loop = false;
+        this.mse?.refreshNext();
+      }),
+    );
     this.setupMediaSession();
     void this.restoreFromUrl();
     return () => this.dispose();
@@ -531,14 +542,40 @@ class Player {
     void this.audio.play().catch(() => undefined);
   }
 
-  /** Advance to the next track in the active play order. */
+  /** Advance to the next track in the active play order. Past the order's end (repeat off) the player clears to its nothing-playing state — a library playing out naturally instead keeps the last track in the bar, paused at its end. */
   next(): void {
-    void this.step('next');
+    void this.step('next', true);
   }
 
   /** Go to the previous track in the active play order. */
   previous(): void {
     void this.step('previous');
+  }
+
+  /** Reset to the nothing-playing state: tear down the mse player, drop the snapshot's track, and clear the URL, Media Session, and favicon badge. */
+  private clearPlayback(): void {
+    this.playToken += 1;
+    this.audio.loop = false;
+    this.mse?.dispose();
+    this.mse = null;
+    this.tracksById.clear();
+    this.appliedArtworkUrl = null;
+    void setFaviconBadge(null);
+    if (hasMediaSession()) {
+      navigator.mediaSession.playbackState = 'none';
+      navigator.mediaSession.metadata = null;
+    }
+    writePlaybackToUrl(null, 0);
+    this.set({
+      current: null,
+      isPlaying: false,
+      positionSeconds: 0,
+      bufferedRanges: [],
+      cachedRanges: [],
+      readySeconds: 0,
+      delivery: null,
+      playingQuality: null,
+    });
   }
 
   /** Switch between Adaptive and Original, re-targeting the playing track (a live swap or, across a codec boundary, a reload at the current position). */
@@ -563,6 +600,8 @@ class Player {
 
   /** Start `track` from `startAt`, replacing whatever is queued. Reuses the existing `MsePlayer` when the codec matches (Adaptive's case — the SourceBuffer stays, the buffer gets wiped, the new track's chunks land in the same MediaSource), otherwise tears it down and creates a fresh one for the new codec. Pass `autoPlay = false` to load paused (restoring from the URL on a fresh page load, where there's no gesture to satisfy autoplay). */
   async loadTrack(track: TrackNode, startAt = 0, autoPlay = true): Promise<void> {
+    // Any armed single-track loop belonged to the previous order position.
+    this.audio.loop = false;
     this.tracksById.set(track.id, track);
     // Pre-seed snapshot for synchronous consumers; `onTrackChange` will fire and confirm.
     writePlaybackToUrl(track.id, startAt);
@@ -849,13 +888,14 @@ class Player {
       .then((data) => data.track);
   }
 
-  /** mse-invoked thunk: resolve the track after whatever is currently playing, fetch its delivery at the current tier/preference, stash the metadata for `handleTrackChange`, and return a `QueuedTrack`. Returns `null` if no successor exists (end of library) — mse interprets that as "play out and end". mse also handles codec-mismatch detection on the returned track. Reads the current id from the live snapshot so the lookup re-anchors after every boundary cross. */
+  /** mse-invoked thunk: resolve the track after whatever is currently playing, fetch its delivery at the current tier/preference, stash the metadata for `handleTrackChange`, and return a `QueuedTrack`. Returns `null` if no successor exists (end of the order) — mse interprets that as "play out and end". mse also handles codec-mismatch detection on the returned track. Reads the current id from the live snapshot so the lookup re-anchors after every boundary cross. */
   private async resolveNextTrack(): Promise<QueuedTrack | null> {
     const currentId = this.snapshot.current?.id;
     if (!currentId) return null;
     const filter = libraryFilterVars();
     const includeDuplicates = showDuplicatesValue();
     const shuffle = shuffleVars();
+    const repeat = repeatValue();
     const data = await this.queryClient.fetchQuery({
       queryKey: [
         'step',
@@ -866,6 +906,7 @@ class Player {
         includeDuplicates,
         shuffle.shuffleSeed,
         shuffle.shuffleInitialTrackId,
+        repeat,
       ],
       queryFn: ({ signal }) =>
         gqlRequest(
@@ -878,14 +919,20 @@ class Player {
             ...filter,
             includeDuplicates,
             ...shuffle,
+            repeat,
           },
           signal,
         ),
     });
     const nextId = data.tracks?.edges[0]?.node.id;
-    // TODO: repeat mode — instead of ending here when the order is exhausted, re-anchor
-    // (fresh seed when shuffled) and continue from the top.
     if (!nextId) return null;
+    // The wrap resolved the playing track itself (it's the order's only match) — let the element
+    // loop it natively. Returning null ends the stream, which is what fixes the finite duration
+    // the element wraps at; mse can't splice the same track behind itself (its slots are id-keyed).
+    if (nextId === currentId) {
+      this.audio.loop = true;
+      return null;
+    }
     const tier = this.snapshot.requestedTier;
     const preference = this.snapshot.lossyPreference;
     const next = await this.fetchTrack(nextId, tier, preference);
@@ -895,16 +942,17 @@ class Player {
     return this.buildQueuedTrack(next, totalSeconds);
   }
 
-  private async step(direction: 'next' | 'previous'): Promise<void> {
+  private async step(direction: 'next' | 'previous', clearAtBoundary = false): Promise<void> {
     const current = this.snapshot.current;
     if (!current) return;
     // Stop the outgoing track before the library query, not just inside `play` — otherwise it
-    // bleeds through this round-trip too. Resume if we turn out to be at a library boundary.
+    // bleeds through this round-trip too.
     const wasPlaying = !this.audio.paused;
     this.audio.pause();
     const filter = libraryFilterVars();
     const includeDuplicates = showDuplicatesValue();
     const shuffle = shuffleVars();
+    const repeat = repeatValue();
     const variables =
       direction === 'next'
         ? { first: 1, last: null, after: current.id, before: null }
@@ -919,17 +967,30 @@ class Player {
         includeDuplicates,
         shuffle.shuffleSeed,
         shuffle.shuffleInitialTrackId,
+        repeat,
       ],
       queryFn: ({ signal }) =>
         gqlRequest(
           TracksDocument,
-          { ...variables, ...filter, includeDuplicates, ...shuffle },
+          { ...variables, ...filter, includeDuplicates, ...shuffle, repeat },
           signal,
         ),
     });
     const nextId = data.tracks?.edges[0]?.node.id;
-    if (nextId) await this.playTrack(nextId);
-    else if (wasPlaying) await this.audio.play().catch(() => undefined);
+    if (nextId) {
+      await this.playTrack(nextId);
+      return;
+    }
+    // Past the order's boundary (repeat off). A manual next clears the player entirely; a
+    // fruitless previous resumes instead — backing into the start of the order shouldn't halt
+    // the current track.
+    if (clearAtBoundary) {
+      this.clearPlayback();
+      return;
+    }
+    if (direction === 'previous' && wasPlaying) {
+      await this.audio.play().catch(() => undefined);
+    }
   }
 }
 

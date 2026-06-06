@@ -1,5 +1,7 @@
 import { createContext, type ReactNode, useContext, useMemo, useState } from 'react';
 
+import { playOrderChanged } from './play-order.ts';
+
 /** Whether the library shows every duplicate copy of a recording, or only the canonical (highest-quality) one. Persisted in `localStorage`; defaults to off. */
 const STORAGE_KEY = 'lofify.library.show-duplicates';
 
@@ -29,6 +31,7 @@ export function ShowDuplicatesProvider({ children }: { children: ReactNode }) {
       setShowDuplicates: (next) => {
         if (typeof window !== 'undefined') window.localStorage.setItem(STORAGE_KEY, String(next));
         setState(next);
+        playOrderChanged();
       },
     }),
     [showDuplicates],

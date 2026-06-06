@@ -325,6 +325,8 @@ type Query {
   Pass `offset` instead to fetch an arbitrary window (`first` rows from that zero-based index) in the same order — used for index-addressed scrolling (e.g. the letter scrubber jumping anywhere without paging through the gaps). When `offset` is set, the cursor arguments are ignored.
   
   Pass `shuffleSeed` to replace the library order with a deterministic pseudo-random permutation: the same seed always yields the same order, so cursor pagination and `offset` stay consistent across requests.
+  
+  Pass `repeat` to treat the active order as cyclic: a cursor page that runs past either end continues from the other end, so stepping past the last track yields the first and vice versa.
   """
   tracks(
     after: String
@@ -347,6 +349,10 @@ type Query {
     Zero-based index of the first row to return, in the active sort order. When set, returns `first` rows from here and ignores `after`/`before`/`last`.
     """
     offset: Int
+    """
+    Treat the active order as cyclic: a cursor page that runs past either end continues from the other end, capped at one full lap (never more rows than `totalCount`). `pageInfo` then reports more pages in both directions whenever any track matches. Ignored when `offset` is set.
+    """
+    repeat: Boolean
     """Track to place first in the shuffled order. Requires `shuffleSeed`."""
     shuffleInitialTrackId: ID
     """

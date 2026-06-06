@@ -227,12 +227,38 @@ the backend README). The state is split by lifetime
 a refresh resumes the same sequence. Manually playing a track while
 shuffled re-anchors: a fresh seed with that track pinned first, since
 keeping the old seed would replay the just-played sequence verbatim. The
-track list always shows library order; when the permutation is exhausted
-playback stops, like reaching the end of the library. Like a filter
-change, toggling shuffle mid-track doesn't re-resolve a successor the
-player has already queued for gapless advance, so the first auto-advance
-after the toggle can still follow the old order — a manual skip always
-queries fresh.
+track list always shows library order.
+
+Every setting that defines the play order — the library filter, the
+duplicates toggle, shuffle, repeat — announces changes through
+`state/play-order.ts` (a tiny pub/sub, so state modules never import the
+player). The player listens and has mse drop its already-resolved
+successor, re-resolving it under the new order when the preload window
+next opens; without this, a prefetched successor would follow the old
+order for one more boundary.
+
+## Repeat
+
+A repeat button (`Repeat`) sits after next in the transport row
+(`state/repeat.tsx`, persisted in `localStorage` as
+`lofify.player.repeat`). When on, every next/previous step and successor
+resolution sends `Query.tracks(repeat: true)`, which makes the active
+order — library or shuffled, filtered or not — cyclic on the server, so
+stepping and gapless auto-advance wrap from the last track to the first
+(the same shuffled permutation cycles; it is not reshuffled). Toggling
+the button mid-track re-resolves the prefetched successor via the
+play-order notification described under Shuffle. A repeat whose order
+contains only the playing
+track loops via the audio element's native `loop` flag — mse can't
+splice the same track behind itself (its slots are id-keyed), so the
+successor resolution ends the stream (fixing the finite duration the
+element wraps at) and arms `loop` instead. The element wraps to
+media-timeline 0, which for a track spliced mid-stream lies before its
+`durationOffset`; mse clamps the playhead back up to the entry's start
+so the wrap lands on buffered audio. Pressing next past the end of the order
+(repeat off) clears the player to its nothing-playing state; a library
+playing out naturally keeps the last track in the bar, paused at its
+end.
 
 ## Visualiser
 
