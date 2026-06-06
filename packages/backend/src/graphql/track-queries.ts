@@ -1,4 +1,4 @@
-import { eq, inArray, isNull, or, type SQL, sql } from 'drizzle-orm';
+import { asc, desc, eq, inArray, isNull, ne, or, type SQL, sql } from 'drizzle-orm';
 import type { ID, Int } from 'grats';
 
 import { db } from '../db/client.js';
@@ -47,10 +47,10 @@ export type PageInfo = {
   endCursor: ID | null;
 };
 
-const DEFAULT_PAGE_SIZE = 50;
+export const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 200;
 
-function clampLimit(value: Int | null | undefined): number | null {
+export function clampLimit(value: Int | null | undefined): number | null {
   if (value == null) return null;
   if (!Number.isFinite(value) || value <= 0) return 0;
   return Math.min(MAX_PAGE_SIZE, Math.floor(value));
@@ -79,8 +79,71 @@ function buildFilterClause(
   return clauses.length > 0 ? sql.join(clauses, sql` and `) : null;
 }
 
-/** The library's stable ascending sort order, shared by cursor paging, the `offset` window, and `artistIndex` so all three address the same row sequence. */
-const ASC_ORDER = sql`coalesce(${tracksTable.artistOverride}, ${tracksTable.artist}, '') asc, coalesce(${tracksTable.albumOverride}, ${tracksTable.album}, '') asc, coalesce(${tracksTable.discNumberOverride}, ${tracksTable.discNumber}, 0) asc, coalesce(${tracksTable.trackNumberOverride}, ${tracksTable.trackNumber}, 0) asc, ${tracksTable.file} asc, ${tracksTable.id} asc`;
+/** One column of the active sort order, expressed twice: `row` against the queried table and `cursor` against the cursor-lookup alias `c`, so the order-by, the row sort key, and the cursor sort-key subquery all derive from the same definition. */
+type SortColumn = { row: SQL; cursor: SQL };
+
+/** The column expressions of the active sort order, most significant first. Without a seed this is the library order (effective artist, album, disc, track, file, id). With a seed it's a deterministic pseudo-random permutation — a seeded hash of the id, with the id as tiebreaker — optionally preceded by a pin that sorts `shuffleInitialTrackId` first. */
+function sortColumns(
+  shuffleSeed: string | null | undefined,
+  shuffleInitialTrackId: string | null | undefined,
+): SortColumn[] {
+  if (shuffleSeed != null) {
+    const columns: SortColumn[] = [];
+    if (shuffleInitialTrackId != null) {
+      columns.push({
+        row: ne(tracksTable.id, shuffleInitialTrackId),
+        cursor: sql`(c.id != ${shuffleInitialTrackId})`,
+      });
+    }
+    columns.push({
+      row: sql`md5(${shuffleSeed} || ${tracksTable.id}::text)`,
+      cursor: sql`md5(${shuffleSeed} || c.id::text)`,
+    });
+    columns.push({ row: sql`${tracksTable.id}`, cursor: sql`c.id` });
+    return columns;
+  }
+  return [
+    {
+      row: sql`coalesce(${tracksTable.artistOverride}, ${tracksTable.artist}, '')`,
+      cursor: sql`coalesce(c."artistOverride", c.artist, '')`,
+    },
+    {
+      row: sql`coalesce(${tracksTable.albumOverride}, ${tracksTable.album}, '')`,
+      cursor: sql`coalesce(c."albumOverride", c.album, '')`,
+    },
+    {
+      row: sql`coalesce(${tracksTable.discNumberOverride}, ${tracksTable.discNumber}, 0)`,
+      cursor: sql`coalesce(c."discNumberOverride", c."discNumber", 0)`,
+    },
+    {
+      row: sql`coalesce(${tracksTable.trackNumberOverride}, ${tracksTable.trackNumber}, 0)`,
+      cursor: sql`coalesce(c."trackNumberOverride", c."trackNumber", 0)`,
+    },
+    { row: sql`${tracksTable.file}`, cursor: sql`c.file` },
+    { row: sql`${tracksTable.id}`, cursor: sql`c.id` },
+  ];
+}
+
+function orderColumns(columns: SortColumn[], direction: typeof asc | typeof desc): SQL[] {
+  return columns.map((c) => direction(c.row));
+}
+
+function rowSortKey(columns: SortColumn[]): SQL {
+  return sql`(${sql.join(
+    columns.map((c) => c.row),
+    sql`, `,
+  )})`;
+}
+
+function cursorSortKey(columns: SortColumn[], cursorId: string): SQL {
+  return sql`(select ${sql.join(
+    columns.map((c) => c.cursor),
+    sql`, `,
+  )} from "Tracks" c where c.id = ${cursorId})`;
+}
+
+/** The library's stable ascending sort order, used by `artistIndex` so it addresses the same row sequence as un-shuffled `tracks`. */
+const ASC_ORDER = sql.join(orderColumns(sortColumns(null, null), asc), sql`, `);
 
 async function countTracks(filterClause: SQL | null): Promise<number> {
   const row = await db
@@ -96,14 +159,24 @@ async function countTracks(filterClause: SQL | null): Promise<number> {
  * @gqlQueryField
  */
 export async function track(id: ID): Promise<Track | null> {
-  const rows = await db
-    .select()
-    .from(tracksTable)
-    .where(sql`${tracksTable.id} = ${id}`)
-    .limit(1);
+  const rows = await db.select().from(tracksTable).where(eq(tracksTable.id, id)).limit(1);
   const row = rows[0];
   return row ? toGqlTrack(row) : null;
 }
+
+/** Options for one cursor-addressed page of the library, shared by `Query.tracks` (library order only) and `PlaybackQueue.tracks` (full options). Mirrors the GraphQL argument semantics documented on those fields. */
+export type TrackPageOpts = {
+  first?: Int | null | undefined;
+  last?: Int | null | undefined;
+  after?: ID | null | undefined;
+  before?: ID | null | undefined;
+  filterArtistIn?: string[] | null | undefined;
+  filterAlbumIn?: string[] | null | undefined;
+  includeDuplicates?: boolean | null | undefined;
+  shuffleSeed?: string | null | undefined;
+  shuffleInitialTrackId?: ID | null | undefined;
+  repeat?: boolean | null | undefined;
+};
 
 /**
  * List the library in Relay-cursor pagination order: by `artist`, `album`, `discNumber`, `trackNumber`, then `id` for stability. Supply exactly one of `first`/`last` and at most one of `after`/`before`.
@@ -115,8 +188,8 @@ export async function track(id: ID): Promise<Track | null> {
 export async function tracks(
   first?: Int | null,
   last?: Int | null,
-  after?: string | null,
-  before?: string | null,
+  after?: ID | null,
+  before?: ID | null,
   /** Restrict the result to tracks whose effective artist is one of these names. Pass the names returned by `Query.search` (not synonyms); an empty or omitted list applies no filter. */
   filterArtistIn?: string[] | null,
   /** Restrict the result to tracks whose effective album is one of these names. An empty or omitted list applies no filter. */
@@ -126,16 +199,20 @@ export async function tracks(
   /** Include every duplicate copy of a recording. By default only the canonical (highest-quality) copy of each duplicate group is returned. */
   includeDuplicates?: boolean | null,
 ): Promise<TrackConnection | null> {
-  const filterClause = buildFilterClause(filterArtistIn, filterAlbumIn, includeDuplicates ?? false);
-
   if (offset != null) {
+    const filterClause = buildFilterClause(
+      filterArtistIn,
+      filterAlbumIn,
+      includeDuplicates ?? false,
+    );
+    const sort = sortColumns(null, null);
     const limit = clampLimit(first) ?? DEFAULT_PAGE_SIZE;
     const off = Number.isFinite(offset) && offset > 0 ? Math.floor(offset) : 0;
     const rows = await db
       .select()
       .from(tracksTable)
       .where(filterClause ?? sql`true`)
-      .orderBy(ASC_ORDER)
+      .orderBy(...orderColumns(sort, asc))
       .limit(limit)
       .offset(off);
     const edges: TrackEdge[] = rows.map((row) => ({ node: toGqlTrack(row), cursor: row.id }));
@@ -152,6 +229,30 @@ export async function tracks(
     };
   }
 
+  return queryTrackPage({
+    first,
+    last,
+    after,
+    before,
+    filterArtistIn,
+    filterAlbumIn,
+    includeDuplicates,
+  });
+}
+
+/** One cursor-addressed page of the library under the full option set (filters, shuffle, repeat). The engine behind `Query.tracks`' cursor mode and the library portion of `PlaybackQueue.tracks`. */
+export async function queryTrackPage(opts: TrackPageOpts): Promise<TrackConnection> {
+  const { first, last, after, before, shuffleSeed, shuffleInitialTrackId, repeat } = opts;
+  if (shuffleInitialTrackId != null && shuffleSeed == null) {
+    throw new Error('`shuffleInitialTrackId` requires `shuffleSeed`.');
+  }
+  const sort = sortColumns(shuffleSeed, shuffleInitialTrackId);
+  const filterClause = buildFilterClause(
+    opts.filterArtistIn,
+    opts.filterAlbumIn,
+    opts.includeDuplicates ?? false,
+  );
+
   if (first != null && last != null) {
     throw new Error('Pass either `first` or `last`, not both.');
   }
@@ -163,50 +264,63 @@ export async function tracks(
     const exists = await db
       .select({ id: tracksTable.id })
       .from(tracksTable)
-      .where(sql`${tracksTable.id} = ${cursorId}`)
+      .where(eq(tracksTable.id, cursorId))
       .limit(1);
     if (exists.length === 0) {
       throw new Error('Unknown cursor.');
     }
   }
 
-  const sortKey = sql`(coalesce(${tracksTable.artistOverride}, ${tracksTable.artist}, ''), coalesce(${tracksTable.albumOverride}, ${tracksTable.album}, ''), coalesce(${tracksTable.discNumberOverride}, ${tracksTable.discNumber}, 0), coalesce(${tracksTable.trackNumberOverride}, ${tracksTable.trackNumber}, 0), ${tracksTable.file}, ${tracksTable.id})`;
-  const cursorSortKey = sql`(select coalesce(c."artistOverride", c.artist, ''), coalesce(c."albumOverride", c.album, ''), coalesce(c."discNumberOverride", c."discNumber", 0), coalesce(c."trackNumberOverride", c."trackNumber", 0), c.file, c.id from "Tracks" c where c.id = ${cursorId})`;
-
   const cursorWhere = cursorId
     ? isBackward
-      ? sql`${sortKey} < ${cursorSortKey}`
-      : sql`${sortKey} > ${cursorSortKey}`
+      ? sql`${rowSortKey(sort)} < ${cursorSortKey(sort, cursorId)}`
+      : sql`${rowSortKey(sort)} > ${cursorSortKey(sort, cursorId)}`
     : undefined;
   const conditions = [cursorWhere, filterClause].filter((c): c is SQL => c != null);
   const where = conditions.length > 0 ? sql.join(conditions, sql` and `) : sql`true`;
-
-  const direction = isBackward ? sql`desc` : sql`asc`;
-  const orderBy = sql`coalesce(${tracksTable.artistOverride}, ${tracksTable.artist}, '') ${direction}, coalesce(${tracksTable.albumOverride}, ${tracksTable.album}, '') ${direction}, coalesce(${tracksTable.discNumberOverride}, ${tracksTable.discNumber}, 0) ${direction}, coalesce(${tracksTable.trackNumberOverride}, ${tracksTable.trackNumber}, 0) ${direction}, ${tracksTable.file} ${direction}, ${tracksTable.id} ${direction}`;
 
   const rows = await db
     .select()
     .from(tracksTable)
     .where(where)
-    .orderBy(orderBy)
+    .orderBy(...orderColumns(sort, isBackward ? desc : asc))
     .limit(limit + 1);
 
   const hasMore = rows.length > limit;
   const slice = hasMore ? rows.slice(0, limit) : rows;
-  const ordered = isBackward ? slice.slice().reverse() : slice;
+  let ordered = isBackward ? slice.slice().reverse() : slice;
+
+  const totalCount = await countTracks(filterClause);
+
+  if (repeat) {
+    // Wrap-fill an underfilled page from the order's other end, capped at one full lap so the
+    // wrap can never duplicate a row already on the page (the wrap rows all sort at or before the
+    // cursor, which the lap cap keeps disjoint from the post-cursor slice).
+    const need = Math.min(limit, totalCount) - ordered.length;
+    if (need > 0) {
+      const wrap = await db
+        .select()
+        .from(tracksTable)
+        .where(filterClause ?? sql`true`)
+        .orderBy(...orderColumns(sort, isBackward ? desc : asc))
+        .limit(need);
+      ordered = isBackward ? [...wrap.reverse(), ...ordered] : [...ordered, ...wrap];
+    }
+  }
 
   const edges: TrackEdge[] = ordered.map((row) => ({
     node: toGqlTrack(row),
     cursor: row.id,
   }));
 
-  const totalCount = await countTracks(filterClause);
+  // A cyclic order has more pages in both directions as long as anything matches.
+  const cycles = repeat === true && totalCount > 0;
 
   return {
     edges,
     pageInfo: {
-      hasNextPage: isBackward ? cursorId != null : hasMore,
-      hasPreviousPage: isBackward ? hasMore : cursorId != null,
+      hasNextPage: cycles || (isBackward ? cursorId != null : hasMore),
+      hasPreviousPage: cycles || (isBackward ? hasMore : cursorId != null),
       startCursor: edges[0]?.cursor ?? null,
       endCursor: edges.at(-1)?.cursor ?? null,
     },

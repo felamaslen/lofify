@@ -492,6 +492,24 @@ export class MsePlayer {
     this.tick();
   }
 
+  /** Drop the resolved successor so the preload window re-resolves it through `trackNext` — for when the caller's play-order inputs (repeat, shuffle, filters) change mid-track. Removes the dropped entry's buffered bytes so a different successor can't leave stale audio past the boundary, and re-arms the end-of-stream gate in case the order now continues (or no longer continues) after `current`. */
+  refreshNext(): void {
+    if (this.disposed) return;
+    this.nextRequested = false;
+    this.nextEnded = false;
+    const next = this.next;
+    if (next) {
+      this.unsubscribeEntry(next);
+      this.cancelPendingForTrack(next.id);
+      this.appendQueue = this.appendQueue.filter((it) => it.trackId !== next.id);
+      if (next.durationOffset !== null) {
+        this.tryRemove(next.durationOffset, Number.POSITIVE_INFINITY);
+      }
+      this.next = null;
+    }
+    this.tick();
+  }
+
   private makeEntry(track: QueuedTrack, durationOffset: number | null): TrackEntry {
     return {
       id: track.id,
@@ -636,6 +654,7 @@ export class MsePlayer {
 
   /** The orchestration loop, fired by `updateend`/`timeupdate`/`seeking` and by internal state transitions. Runs reconcile, advances slots on a boundary cross, kicks off the preload thunk, ends the stream when due, and reports quality changes. */
   private tick(): void {
+    this.clampPlayheadToCurrent();
     this.trackPlayheadStability();
     this.reconcile();
     // Retry on every tick — the initial call from `installCurrent` (or a manifest emission) can
@@ -646,6 +665,15 @@ export class MsePlayer {
     this.maybeInvokeTrackNext();
     this.tryEndOfStream();
     this.reportQuality();
+  }
+
+  /** The element's `loop` wrap seeks to media-timeline 0, but `current` may sit at a non-zero `durationOffset` (it was spliced after predecessors whose buffer has since been pruned) — lift the playhead back up to the entry's start so the wrap lands on buffered audio instead of stalling in the dead region. Only the loop wrap can put the playhead there: every other seek path clamps within the live entries. */
+  private clampPlayheadToCurrent(): void {
+    if (!this.audio.loop) return;
+    if (!this.current || this.current.durationOffset === null) return;
+    if (this.audio.currentTime < this.current.durationOffset - PLAYHEAD_EPS) {
+      this.audio.currentTime = this.current.durationOffset;
+    }
   }
 
   /** Track when `audio.currentTime` last changed. The wall-clock-vs-playhead delta lets `updateCurrentTrack` distinguish "audio stalled" from "audio playing through this position". Reset on pause/seek so those states never look like a stall. */

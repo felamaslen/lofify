@@ -1,16 +1,22 @@
+import type { QueryClient } from '@tanstack/react-query';
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useWindowVirtualizer } from '@tanstack/react-virtual';
 import { readFragment } from 'gql.tada';
+import { ListPlus } from 'lucide-react';
 import { type MouseEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { useIsMobile } from '../hooks/use-is-mobile.ts';
 import { type FragmentOf, graphql, type ResultOf } from '../lib/gql.ts';
 import { gqlRequest } from '../lib/gql-request.ts';
+import { useSwipeRight } from '../lib/use-swipe-right.ts';
 import { cn } from '../lib/utils.ts';
 import { useLibraryFilter } from '../state/library-filter.tsx';
+import { playOrderChanged } from '../state/play-order.ts';
 import { TrackByIdDocument, trackFormatFor, usePlayer } from '../state/player.tsx';
+import { queueIdValue, rememberQueueId } from '../state/queue.ts';
 import { useShowDuplicates } from '../state/show-duplicates.tsx';
 import { LetterScrubber } from './letter-scrubber.tsx';
+import { showQueueToast } from './queue-toast.tsx';
 import { type EditableTrack, TagEditDialog } from './tag-edit-dialog.tsx';
 import { TrackInfoButton, TrackInfoDocument } from './track-info-popover.tsx';
 import {
@@ -19,6 +25,29 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from './ui/context-menu.tsx';
+
+const QueueAppendDocument = graphql(`
+  mutation QueueAppend($trackId: ID!, $queueId: ID) {
+    queueAppend(trackId: $trackId, queueId: $queueId) {
+      id
+    }
+  }
+`);
+
+/** Append `trackIds` to the play queue in order, threading the lazily-created queue id through, then refresh queue readers and the player's prefetched successor, and confirm with a toast. */
+async function enqueueTracks(queryClient: QueryClient, trackIds: string[]): Promise<void> {
+  let queueId = queueIdValue();
+  for (const trackId of trackIds) {
+    const data = await gqlRequest(QueueAppendDocument, { trackId, queueId });
+    queueId = data.queueAppend.id;
+    rememberQueueId(queueId);
+  }
+  void queryClient.invalidateQueries({ queryKey: ['playback-queue'] });
+  playOrderChanged();
+  showQueueToast(
+    trackIds.length > 1 ? `Added ${trackIds.length} tracks to queue` : 'Added to queue',
+  );
+}
 
 export const TrackListRowDocument = graphql(`
   fragment TrackListRow on Track {
@@ -37,47 +66,6 @@ export const TrackListRowDocument = graphql(`
     }
   }
 `);
-
-/** Cursor-paginated track list. Kept for the player's next/previous resolution, which walks the library relative to the current track. The list view itself loads by index (see `TracksWindowDocument`) so it can jump anywhere without paging through the gap. */
-export const TracksDocument = graphql(
-  `
-    query Tracks(
-      $first: Int
-      $last: Int
-      $after: String
-      $before: String
-      $filterArtistIn: [String!]
-      $filterAlbumIn: [String!]
-      $includeDuplicates: Boolean
-    ) {
-      tracks(
-        first: $first
-        last: $last
-        after: $after
-        before: $before
-        filterArtistIn: $filterArtistIn
-        filterAlbumIn: $filterAlbumIn
-        includeDuplicates: $includeDuplicates
-      ) {
-        totalCount
-        pageInfo {
-          hasNextPage
-          hasPreviousPage
-          startCursor
-          endCursor
-        }
-        edges {
-          cursor
-          node {
-            id
-            ...TrackListRow
-          }
-        }
-      }
-    }
-  `,
-  [TrackListRowDocument],
-);
 
 /** One page of the library: the matching total plus a window of rows. Composed into the index-addressed `TracksWindowDocument` and the home bootstrap query (`routes/home.tsx`) alike. */
 export const TrackWindowDocument = graphql(
@@ -338,6 +326,20 @@ export function TrackList() {
     // rowsByIndex is rebuilt every render; depend on the loaded windows + selection instead.
   }, [windowResults, selected]);
 
+  /** The selected ids in row order (selection sets carry insertion order, which a shift-range or ctrl-click sequence needn't match). */
+  const selectedIdsInRowOrder = (): string[] =>
+    [...rowsByIndex.entries()]
+      .sort(([a], [b]) => a - b)
+      .filter(([, edge]) => selected.has(edge.node.id))
+      .map(([, edge]) => edge.node.id);
+
+  const enqueueSelected = (): void => {
+    const ids = selectedIdsInRowOrder();
+    if (ids.length > 0) void enqueueTracks(queryClient, ids);
+  };
+
+  const swipeHandlers = useSwipeRight((id) => void enqueueTracks(queryClient, [id]));
+
   const onRowEnter = (id: string): void => {
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
     hoverTimerRef.current = setTimeout(() => {
@@ -416,7 +418,9 @@ export function TrackList() {
         <ContextMenuTrigger asChild>
           <div
             ref={spacerRef}
-            className="relative w-full"
+            // overflow-x-clip: a swiped row slides right by up to MAX_PULL_PX; clip (rather than
+            // hidden) cuts it off without creating a horizontal scroll container.
+            className="relative w-full overflow-x-clip"
             style={{ height: virtualizer.getTotalSize() }}
           >
             {items.map((virtualRow) => {
@@ -472,13 +476,18 @@ export function TrackList() {
                   onMouseEnter={() => onRowEnter(edge.node.id)}
                   onMouseLeave={onRowLeave}
                   onDoubleClick={() => play(edge.node.id)}
+                  {...(isMobile ? swipeHandlers(edge.node.id) : {})}
                   className={cn(
-                    COLS,
-                    'cursor-pointer text-sm hover:bg-accent/40',
+                    // touch-pan-y: vertical scrolling stays native, but the browser never pans the
+                    // view for a horizontal gesture starting on a row — that belongs to the
+                    // swipe-to-enqueue handler alone.
+                    'cursor-pointer touch-pan-y text-sm hover:bg-accent/40',
+                    // The long-press that opens the context menu must not start a native text
+                    // selection; desktop keeps click-drag text selection.
+                    isMobile && 'select-none',
                     !t.isLossless && !active && 'text-muted-foreground',
                     isSelected && 'bg-accent/60',
                     active && 'shadow-[inset_4px_0_0_0] shadow-primary text-primary',
-                    showScrubber && 'pr-8',
                   )}
                   style={{
                     position: 'absolute',
@@ -489,45 +498,59 @@ export function TrackList() {
                     transform: `translateY(${virtualRow.start - scrollMargin}px)`,
                   }}
                 >
-                  <span className="text-muted-foreground tabular-nums max-sm:hidden">
-                    {t.discNumber ?? ''}
-                  </span>
-                  <span className="text-muted-foreground tabular-nums max-sm:hidden">
-                    {t.trackNumber ?? ''}
-                  </span>
-                  <span
-                    className={cn(
-                      'truncate max-sm:col-start-1 max-sm:row-start-1 max-sm:self-baseline max-sm:font-medium max-sm:leading-tight',
-                      t.isLossless && 'font-medium',
-                    )}
-                  >
-                    {t.title ?? (
-                      <>
-                        (untitled) <span className="text-muted-foreground/60">{t.path}</span>
-                      </>
-                    )}
-                  </span>
-                  <span className="tabular-nums text-muted-foreground max-sm:col-start-2 max-sm:row-start-1 max-sm:self-baseline max-sm:text-xs">
-                    {t.duration.formatted}
-                  </span>
-                  <span className="truncate text-muted-foreground max-sm:col-start-1 max-sm:row-start-2 max-sm:self-start max-sm:text-xs max-sm:leading-tight">
-                    {t.artist ?? ''}
-                  </span>
-                  <span className="truncate text-muted-foreground max-sm:hidden">
-                    {t.album ?? ''}
-                  </span>
-                  <span className="text-muted-foreground tabular-nums max-sm:hidden">
-                    {t.year ?? ''}
-                  </span>
-                  <span className="flex justify-end max-sm:col-start-3 max-sm:row-start-1 max-sm:self-center">
-                    <TrackInfoButton track={edge.node} />
-                  </span>
+                  {isMobile && (
+                    <span
+                      data-swipe-icon
+                      aria-hidden
+                      className="absolute inset-y-0 left-0 flex w-12 items-center justify-center text-primary opacity-0"
+                    >
+                      <ListPlus className="size-5" />
+                    </span>
+                  )}
+                  <div data-swipe-content className={cn(COLS, 'h-full', showScrubber && 'pr-8')}>
+                    <span className="text-muted-foreground tabular-nums max-sm:hidden">
+                      {t.discNumber ?? ''}
+                    </span>
+                    <span className="text-muted-foreground tabular-nums max-sm:hidden">
+                      {t.trackNumber ?? ''}
+                    </span>
+                    <span
+                      className={cn(
+                        'truncate max-sm:col-start-1 max-sm:row-start-1 max-sm:self-baseline max-sm:font-medium max-sm:leading-tight',
+                        t.isLossless && 'font-medium',
+                      )}
+                    >
+                      {t.title ?? (
+                        <>
+                          (untitled) <span className="text-muted-foreground/60">{t.path}</span>
+                        </>
+                      )}
+                    </span>
+                    <span className="tabular-nums text-muted-foreground max-sm:col-start-2 max-sm:row-start-1 max-sm:self-baseline max-sm:text-xs">
+                      {t.duration.formatted}
+                    </span>
+                    <span className="truncate text-muted-foreground max-sm:col-start-1 max-sm:row-start-2 max-sm:self-start max-sm:text-xs max-sm:leading-tight">
+                      {t.artist ?? ''}
+                    </span>
+                    <span className="truncate text-muted-foreground max-sm:hidden">
+                      {t.album ?? ''}
+                    </span>
+                    <span className="text-muted-foreground tabular-nums max-sm:hidden">
+                      {t.year ?? ''}
+                    </span>
+                    <span className="flex justify-end max-sm:col-start-3 max-sm:row-start-1 max-sm:self-center">
+                      <TrackInfoButton track={edge.node} />
+                    </span>
+                  </div>
                 </div>
               );
             })}
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent>
+          <ContextMenuItem disabled={selected.size === 0} onSelect={enqueueSelected}>
+            Add to queue{selected.size > 1 ? ` (${selected.size})` : ''}
+          </ContextMenuItem>
           <ContextMenuItem disabled={selected.size === 0} onSelect={() => setEditing(true)}>
             Edit tags{selected.size > 1 ? ` (${selected.size})` : ''}
           </ContextMenuItem>

@@ -1,5 +1,7 @@
 import { createContext, type ReactNode, useContext, useEffect, useMemo, useState } from 'react';
 
+import { playOrderChanged } from './play-order.ts';
+
 /** The active library filter. At most one of artist/album-scope is set at a time; an album filter also pins its artist (when the album has exactly one) so same-named albums by other artists are excluded. */
 export type LibraryFilter = {
   artist: string | null;
@@ -54,7 +56,10 @@ export function LibraryFilterProvider({ children }: { children: ReactNode }) {
   const [filter, setFilterState] = useState<LibraryFilter>(readFilterFromUrl);
 
   useEffect(() => {
-    const onPopState = () => setFilterState(readFilterFromUrl());
+    const onPopState = () => {
+      setFilterState(readFilterFromUrl());
+      playOrderChanged();
+    };
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
@@ -63,6 +68,7 @@ export function LibraryFilterProvider({ children }: { children: ReactNode }) {
     const update = (next: LibraryFilter) => {
       writeFilterToUrl(next);
       setFilterState(next);
+      playOrderChanged();
     };
     return {
       ...filter,

@@ -9,7 +9,7 @@ beforeEach(async () => {
 });
 
 const TracksQuery = graphql(`
-  query Tracks($first: Int, $last: Int, $after: String, $before: String) {
+  query Tracks($first: Int, $last: Int, $after: ID, $before: ID) {
     tracks(first: $first, last: $last, after: $after, before: $before) {
       edges {
         cursor

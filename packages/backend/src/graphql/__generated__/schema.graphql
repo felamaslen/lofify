@@ -5,6 +5,11 @@
 directive @constraint(min: Int!, max: Int!) on ARGUMENT_DEFINITION
 
 """
+Marks a field that is null only when an error has been propagated into it — never as a meaningful value. Clients with error-aware response handling may treat it as non-nullable. `levels` names the list depths the guarantee applies to (`0` is the field itself), matching the semantic-nullability draft spec.
+"""
+directive @semanticNonNull(levels: [Int!]) on FIELD_DEFINITION
+
+"""
 A file sent with the [GraphQL multipart request spec](https://github.com/jaydenseric/graphql-multipart-request-spec). The multipart hook in `app.ts` replaces the mapped variable with an instance carrying the streamed file; resolvers await its `promise` for the filename, MIME type and stream.
 """
 scalar Upload
@@ -245,6 +250,22 @@ type Mutation {
   """Does nothing."""
   noop: Void!
   """
+  Append a track to the end of a queue. Omitting `queueId` creates a queue; the returned `id` addresses it from then on. An expired or unknown `queueId` revives that queue, empty, under the same id.
+  """
+  queueAppend(queueId: ID, trackId: ID!): PlaybackQueue!
+  """
+  Drop every entry of the queue. Idempotent; the id remains usable for later appends.
+  """
+  queueClear(id: ID!): Void!
+  """
+  Remove the queue entry at `index`, which must currently hold `trackId` — the pairing guards against removing a different entry when the queue changed since it was last read.
+  """
+  queueRemove(id: ID!, index: Int!, trackId: ID!): PlaybackQueue!
+  """
+  Move the queue entry at `fromIndex`, which must currently hold `trackId`, to `toIndex`. Errors when `toIndex` falls outside the queue; a move onto its own position is a no-op.
+  """
+  queueReorder(fromIndex: Int!, id: ID!, toIndex: Int!, trackId: ID!): PlaybackQueue!
+  """
   Override one or more tags on a single track. Each supplied tag is stored as an override that takes precedence over the value read from the file on disk and survives rescans — the scanner never touches it.
   
   Omit an argument to leave its current override untouched; pass an explicit `null` to clear the override and fall back to the scanned tag; pass an empty string to blank the field outright.
@@ -287,6 +308,53 @@ type PageInfo {
   startCursor: ID
 }
 
+"""
+The play order: any explicitly queued tracks, followed by the library continuing in its active order. The queued portion may be empty — a queue is only created by the first append and addressed by `id` from then on; one left unwritten for a day may expire, and appending with an expired or unknown id revives it, empty, under that same id.
+"""
+type PlaybackQueue {
+  """
+  Identifier to pass to the queue mutations and `Query.playbackQueue`. Null until a mutation first writes to the queue.
+  """
+  id: ID
+  """
+  Every track to be played, in order: the explicitly queued tracks lead, then the library continues in its active order. The filter, duplicate, shuffle, and repeat arguments shape only the library portion; queued tracks always lead a forwards page regardless of `after`, which addresses where the library portion picks up. Backwards pages (`last`/`before`) walk the library back from the cursor and continue into the queued tracks once the start of the library order is reached.
+  """
+  tracks(
+    after: ID
+    before: ID
+    """
+    Restrict the library portion to tracks whose effective album is one of these names. An empty or omitted list applies no filter.
+    """
+    filterAlbumIn: [String!]
+    """
+    Restrict the library portion to tracks whose effective artist is one of these names. An empty or omitted list applies no filter.
+    """
+    filterArtistIn: [String!]
+    first: Int
+    """
+    Include every duplicate copy of a recording in the library portion. By default only the canonical (highest-quality) copy of each duplicate group is returned.
+    """
+    includeDuplicates: Boolean
+    last: Int
+    """
+    Treat the library portion as cyclic: a page that runs past either end continues from the other end, capped at one full lap. `pageInfo` then reports more pages in both directions whenever any track matches. Queued tracks are not part of the cycle — each plays once.
+    """
+    repeat: Boolean
+    """
+    Track to place first in the shuffled library portion. Requires `shuffleSeed`.
+    """
+    shuffleInitialTrackId: ID
+    """
+    Seed for a deterministic pseudo-random ordering of the library portion. The same seed always produces the same permutation.
+    """
+    shuffleSeed: String
+  ): TrackConnection!
+  """
+  The explicitly queued tracks, in play order. The same track may be queued more than once; a cursor addresses its first occurrence.
+  """
+  tracksQueued(after: ID, before: ID, first: Int, last: Int): TrackConnection!
+}
+
 type Query {
   """
   The first-letter buckets present in the library, in `tracks` order, each with the index where it starts. Powers an A–Z scrubber: map a scroll position to its bucket, or jump to a letter by feeding its `offset` to `Query.tracks`. Honours the same `filterArtistIn`/`filterAlbumIn` as `tracks`.
@@ -312,6 +380,10 @@ type Query {
   """Returns the literal string `"pong"`. Useful as a liveness probe."""
   ping: String
   """
+  The play queue addressed by `id`, or an empty unidentified queue when `id` is omitted or doesn't address one.
+  """
+  playbackQueue(id: ID): PlaybackQueue @semanticNonNull
+  """
   Search the library for artists, albums and tracks whose name matches `query` as a case-insensitive prefix. Returns `null` for a blank query.
   """
   search(query: String!): Search
@@ -325,8 +397,8 @@ type Query {
   Pass `offset` instead to fetch an arbitrary window (`first` rows from that zero-based index) in the same order — used for index-addressed scrolling (e.g. the letter scrubber jumping anywhere without paging through the gaps). When `offset` is set, the cursor arguments are ignored.
   """
   tracks(
-    after: String
-    before: String
+    after: ID
+    before: ID
     """
     Restrict the result to tracks whose effective album is one of these names. An empty or omitted list applies no filter.
     """

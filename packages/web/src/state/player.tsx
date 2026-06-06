@@ -12,7 +12,6 @@ import {
 
 import { PlaybackBarDocument } from '../components/playback-bar.tsx';
 import { artworkDisplayUrl, TrackArtworkDocument } from '../components/track-artwork.tsx';
-import { TracksDocument } from '../components/track-list.tsx';
 import { getAudioElement } from '../lib/audio-element.ts';
 import { type Capabilities, capabilities, type LossyPreference } from '../lib/capabilities.ts';
 import { readCachedManifest, storeCachedManifest } from '../lib/chunk-cache.ts';
@@ -22,7 +21,11 @@ import { gqlRequest } from '../lib/gql-request.ts';
 import { type CreatePlayerOptions, MsePlayer, type QueuedTrack } from '../lib/mse.ts';
 import { subscribe as subscribeToStream } from '../lib/sse-client.ts';
 import { libraryFilterVars } from './library-filter.tsx';
+import { onPlayOrderChange } from './play-order.ts';
+import { queueIdValue } from './queue.ts';
+import { repeatValue } from './repeat.tsx';
 import { showDuplicatesValue } from './show-duplicates.tsx';
+import { reanchorShuffle, shuffleVars } from './shuffle.tsx';
 
 export const TrackByIdDocument = graphql(
   `
@@ -61,6 +64,60 @@ export const TrackManifestDocument = graphql(`
         byteEnd
         endSeconds
       }
+    }
+  }
+`);
+
+/** One step of the play order: queued tracks lead `tracks`, so a non-empty `tracksQueued` marks the step as consuming a queue entry. The cursor addresses where the library portion picks up. */
+const QueueStepDocument = graphql(`
+  query QueueStep(
+    $queueId: ID
+    $first: Int
+    $last: Int
+    $after: ID
+    $before: ID
+    $filterArtistIn: [String!]
+    $filterAlbumIn: [String!]
+    $includeDuplicates: Boolean
+    $shuffleSeed: String
+    $shuffleInitialTrackId: ID
+    $repeat: Boolean
+  ) {
+    playbackQueue(id: $queueId) {
+      tracksQueued(first: 1) {
+        edges {
+          node {
+            id
+          }
+        }
+      }
+      tracks(
+        first: $first
+        last: $last
+        after: $after
+        before: $before
+        filterArtistIn: $filterArtistIn
+        filterAlbumIn: $filterAlbumIn
+        includeDuplicates: $includeDuplicates
+        shuffleSeed: $shuffleSeed
+        shuffleInitialTrackId: $shuffleInitialTrackId
+        repeat: $repeat
+      ) {
+        edges {
+          node {
+            id
+          }
+        }
+      }
+    }
+  }
+`);
+
+/** Removes the queue head once playback starts on it. */
+const QueueConsumeDocument = graphql(`
+  mutation QueueConsume($id: ID!, $trackId: ID!) {
+    queueRemove(id: $id, trackId: $trackId, index: 0) {
+      id
     }
   }
 `);
@@ -280,6 +337,12 @@ class Player {
   /** Pending debounced URL playhead write; cleared/flushed on pause and teardown. */
   private urlWriteTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly detachers: Array<() => void> = [];
+  /** The last library-order (non-queued) track that played: the stepping cursor, so a queued detour never moves the library position. Null until a library track plays this session; stepping then anchors at the playing track. */
+  private libraryAnchorId: string | null = null;
+  /** Track expected to consume the queue head when it becomes current via gapless auto-advance. Set at successor resolution, settled in `handleTrackChange`. */
+  private consumeOnStart: string | null = null;
+  /** In-flight queue-head consumption. Later steps and successor resolutions await it, so they never read the queue with a consumed head still present (which would replay it — and the same-id loop guard would misfire). */
+  private pendingConsumption: Promise<void> | null = null;
 
   constructor(
     private readonly audio: HTMLAudioElement,
@@ -326,6 +389,15 @@ class Player {
   activate(): undefined | (() => void) {
     if (this.detachers.length > 0) return;
     this.attachAudioListeners();
+    // A changed play-order input (filter, duplicates, shuffle, repeat) invalidates the successor
+    // mse has already resolved — drop it (and any armed single-track loop) so the preload
+    // re-resolves under the new order.
+    this.detachers.push(
+      onPlayOrderChange(() => {
+        this.audio.loop = false;
+        this.mse?.refreshNext();
+      }),
+    );
     this.setupMediaSession();
     void this.restoreFromUrl();
     return () => this.dispose();
@@ -489,8 +561,15 @@ class Player {
     writePlaybackToUrl(this.snapshot.current?.id ?? null, this.mse?.currentPosition() ?? 0);
   }
 
-  /** Load the track with id `id`, fetched at the current tier/preference, and start it from the top. Disposes the existing `MsePlayer` so the new track gets a fresh `MediaSource` — rapid clicks between tracks would otherwise leave stale state (cached `initBytes`, in-flight fetch race, etc.) interleaving across the reused instance. The `playToken` check after the fetch drops earlier clicks that resolved before the user's most recent one. */
+  /** User-initiated play. Re-anchors the shuffle order at the selected track (a no-op when shuffle is off) and the library anchor before loading it — internal advancement (`step`) bypasses this so stepping never re-anchors. */
   async play(id: string): Promise<void> {
+    reanchorShuffle(id);
+    this.libraryAnchorId = id;
+    return this.playTrack(id);
+  }
+
+  /** Load the track with id `id`, fetched at the current tier/preference, and start it from the top. Disposes the existing `MsePlayer` so the new track gets a fresh `MediaSource` — rapid clicks between tracks would otherwise leave stale state (cached `initBytes`, in-flight fetch race, etc.) interleaving across the reused instance. The `playToken` check after the fetch drops earlier clicks that resolved before the user's most recent one. */
+  private async playTrack(id: string): Promise<void> {
     // Silence the outgoing track synchronously, before the fetch await — otherwise its buffered
     // samples keep playing audibly until `loadTrack` reassigns `audio.src`, and on mobile (higher
     // latency, and iOS ignores `audio.volume`) that gap is long enough to hear as a click.
@@ -524,14 +603,42 @@ class Player {
     void this.audio.play().catch(() => undefined);
   }
 
-  /** Advance to the next track in library order. */
+  /** Advance to the next track in the active play order. Past the order's end (repeat off) the player clears to its nothing-playing state — a library playing out naturally instead keeps the last track in the bar, paused at its end. */
   next(): void {
-    void this.step('next');
+    void this.step('next', true);
   }
 
-  /** Go to the previous track in library order. */
+  /** Go to the previous track in the active play order. */
   previous(): void {
     void this.step('previous');
+  }
+
+  /** Reset to the nothing-playing state: tear down the mse player, drop the snapshot's track, and clear the URL, Media Session, and favicon badge. */
+  private clearPlayback(): void {
+    this.playToken += 1;
+    this.audio.loop = false;
+    this.libraryAnchorId = null;
+    this.consumeOnStart = null;
+    this.mse?.dispose();
+    this.mse = null;
+    this.tracksById.clear();
+    this.appliedArtworkUrl = null;
+    void setFaviconBadge(null);
+    if (hasMediaSession()) {
+      navigator.mediaSession.playbackState = 'none';
+      navigator.mediaSession.metadata = null;
+    }
+    writePlaybackToUrl(null, 0);
+    this.set({
+      current: null,
+      isPlaying: false,
+      positionSeconds: 0,
+      bufferedRanges: [],
+      cachedRanges: [],
+      readySeconds: 0,
+      delivery: null,
+      playingQuality: null,
+    });
   }
 
   /** Switch between Adaptive and Original, re-targeting the playing track (a live swap or, across a codec boundary, a reload at the current position). */
@@ -556,6 +663,8 @@ class Player {
 
   /** Start `track` from `startAt`, replacing whatever is queued. Reuses the existing `MsePlayer` when the codec matches (Adaptive's case — the SourceBuffer stays, the buffer gets wiped, the new track's chunks land in the same MediaSource), otherwise tears it down and creates a fresh one for the new codec. Pass `autoPlay = false` to load paused (restoring from the URL on a fresh page load, where there's no gesture to satisfy autoplay). */
   async loadTrack(track: TrackNode, startAt = 0, autoPlay = true): Promise<void> {
+    // Any armed single-track loop belonged to the previous order position.
+    this.audio.loop = false;
     this.tracksById.set(track.id, track);
     // Pre-seed snapshot for synchronous consumers; `onTrackChange` will fire and confirm.
     writePlaybackToUrl(track.id, startAt);
@@ -670,6 +779,12 @@ class Player {
     if (!track) return;
     const prevId = this.snapshot.current?.id;
     if (prevId === trackId) return;
+    // Settle the resolution-time expectation: a queued successor consumes the queue head as it
+    // starts; a library successor moves the anchor. A stale marker (the successor was re-resolved
+    // after a play-order change) just falls through to the anchor branch.
+    if (this.consumeOnStart === trackId) void this.consumeQueueHead(trackId);
+    else this.libraryAnchorId = trackId;
+    this.consumeOnStart = null;
     if (prevId) this.tracksById.delete(prevId);
     const position = this.mse?.currentPosition() ?? 0;
     this.set({
@@ -842,66 +957,126 @@ class Player {
       .then((data) => data.track);
   }
 
-  /** mse-invoked thunk: resolve the track after whatever is currently playing, fetch its delivery at the current tier/preference, stash the metadata for `handleTrackChange`, and return a `QueuedTrack`. Returns `null` if no successor exists (end of library) — mse interprets that as "play out and end". mse also handles codec-mismatch detection on the returned track. Reads the current id from the live snapshot so the lookup re-anchors after every boundary cross. */
+  /** The play-order inputs of a step query, read live so every step and successor resolution sees the latest settings. */
+  private stepVariables() {
+    return {
+      queueId: queueIdValue(),
+      ...libraryFilterVars(),
+      includeDuplicates: showDuplicatesValue(),
+      ...shuffleVars(),
+      repeat: repeatValue(),
+    };
+  }
+
+  /** Remove the queue head (`trackId`) — playback has started on it. The promise is held so later steps and resolutions can await it; failures are swallowed (a concurrent edit moved the head, and the next resolution re-reads the queue anyway). */
+  private async consumeQueueHead(trackId: string): Promise<void> {
+    const queueId = queueIdValue();
+    if (!queueId) return;
+    const run = (async () => {
+      try {
+        await gqlRequest(QueueConsumeDocument, { id: queueId, trackId });
+        await this.queryClient.invalidateQueries({ queryKey: ['playback-queue'] });
+      } catch {
+        // Concurrent edit moved the head; the next resolution re-reads the queue.
+      }
+    })();
+    this.pendingConsumption = run;
+    try {
+      await run;
+    } finally {
+      if (this.pendingConsumption === run) this.pendingConsumption = null;
+    }
+  }
+
+  /** mse-invoked thunk: resolve the track after whatever is currently playing, fetch its delivery at the current tier/preference, stash the metadata for `handleTrackChange`, and return a `QueuedTrack`. Returns `null` if no successor exists (end of the order) — mse interprets that as "play out and end". mse also handles codec-mismatch detection on the returned track. The cursor is the library anchor, not the playing track, so a queued detour resumes the library where it left off. */
   private async resolveNextTrack(): Promise<QueuedTrack | null> {
     const currentId = this.snapshot.current?.id;
     if (!currentId) return null;
-    const filter = libraryFilterVars();
-    const includeDuplicates = showDuplicatesValue();
+    if (this.pendingConsumption) await this.pendingConsumption;
+    const vars = this.stepVariables();
+    const anchor = this.libraryAnchorId ?? currentId;
     const data = await this.queryClient.fetchQuery({
-      queryKey: [
-        'step',
-        'next',
-        currentId,
-        filter.filterArtistIn,
-        filter.filterAlbumIn,
-        includeDuplicates,
-      ],
+      queryKey: ['step', 'next', anchor, vars],
       queryFn: ({ signal }) =>
         gqlRequest(
-          TracksDocument,
-          { first: 1, last: null, after: currentId, before: null, ...filter, includeDuplicates },
+          QueueStepDocument,
+          { ...vars, first: 1, last: null, after: anchor, before: null },
           signal,
         ),
+      // The queue mutates server-side under an unchanged key, so a cached page must never satisfy
+      // a step.
+      staleTime: 0,
     });
-    const nextId = data.tracks?.edges[0]?.node.id;
+    const queue = data.playbackQueue;
+    const nextId = queue?.tracks.edges[0]?.node.id;
     if (!nextId) return null;
+    const nextIsQueued = (queue?.tracksQueued.edges.length ?? 0) > 0;
+    if (nextId === currentId) {
+      if (nextIsQueued) {
+        // A queued copy of the playing track can't be spliced behind itself (mse's slots are
+        // id-keyed) — consume the entry and resolve whatever follows it.
+        await this.consumeQueueHead(nextId);
+        return this.resolveNextTrack();
+      }
+      // The wrap resolved the playing track itself (it's the order's only match) — let the element
+      // loop it natively. Returning null ends the stream, which is what fixes the finite duration
+      // the element wraps at.
+      this.audio.loop = true;
+      return null;
+    }
     const tier = this.snapshot.requestedTier;
     const preference = this.snapshot.lossyPreference;
     const next = await this.fetchTrack(nextId, tier, preference);
     if (!next) return null;
+    if (nextIsQueued) this.consumeOnStart = nextId;
     this.tracksById.set(next.id, next);
     const totalSeconds = readFragment(PlaybackBarDocument, next).duration.seconds;
     return this.buildQueuedTrack(next, totalSeconds);
   }
 
-  private async step(direction: 'next' | 'previous'): Promise<void> {
+  private async step(direction: 'next' | 'previous', clearAtBoundary = false): Promise<void> {
     const current = this.snapshot.current;
     if (!current) return;
     // Stop the outgoing track before the library query, not just inside `play` — otherwise it
-    // bleeds through this round-trip too. Resume if we turn out to be at a library boundary.
+    // bleeds through this round-trip too.
     const wasPlaying = !this.audio.paused;
     this.audio.pause();
-    const filter = libraryFilterVars();
-    const includeDuplicates = showDuplicatesValue();
-    const variables =
+    if (this.pendingConsumption) await this.pendingConsumption;
+    const vars = this.stepVariables();
+    const anchor = this.libraryAnchorId ?? current.id;
+    const cursor =
       direction === 'next'
-        ? { first: 1, last: null, after: current.id, before: null, ...filter, includeDuplicates }
-        : { first: null, last: 1, after: null, before: current.id, ...filter, includeDuplicates };
+        ? { first: 1, last: null, after: anchor, before: null }
+        : { first: null, last: 1, after: null, before: anchor };
     const data = await this.queryClient.fetchQuery({
-      queryKey: [
-        'step',
-        direction,
-        current.id,
-        filter.filterArtistIn,
-        filter.filterAlbumIn,
-        includeDuplicates,
-      ],
-      queryFn: ({ signal }) => gqlRequest(TracksDocument, variables, signal),
+      queryKey: ['step', direction, anchor, vars],
+      queryFn: ({ signal }) => gqlRequest(QueueStepDocument, { ...vars, ...cursor }, signal),
+      // The queue mutates server-side under an unchanged key, so a cached page must never satisfy
+      // a step.
+      staleTime: 0,
     });
-    const nextId = data.tracks?.edges[0]?.node.id;
-    if (nextId) await this.play(nextId);
-    else if (wasPlaying) await this.audio.play().catch(() => undefined);
+    const queue = data.playbackQueue;
+    const nextId = queue?.tracks.edges[0]?.node.id;
+    if (nextId) {
+      // Only a forward step lands on the queue's head, which consuming removes. A backward step
+      // can reach the queue's tail (past the library start) — that entry stays queued and plays
+      // again in its turn.
+      const nextIsQueued = direction === 'next' && (queue?.tracksQueued.edges.length ?? 0) > 0;
+      if (nextIsQueued) void this.consumeQueueHead(nextId);
+      else this.libraryAnchorId = nextId;
+      await this.playTrack(nextId);
+      return;
+    }
+    // Past the order's boundary (repeat off). A manual next clears the player entirely; a
+    // fruitless previous resumes instead — backing into the start of the order shouldn't halt
+    // the current track.
+    if (clearAtBoundary) {
+      this.clearPlayback();
+      return;
+    }
+    if (direction === 'previous' && wasPlaying) {
+      await this.audio.play().catch(() => undefined);
+    }
   }
 }
 

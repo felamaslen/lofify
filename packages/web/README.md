@@ -211,6 +211,85 @@ the cache and needs the network, the in-flight prefetch is aborted
 first, so the urgent fetch gets the whole pipe and its downscale
 samples aren't diluted by a parallel transfer.
 
+## Shuffle
+
+A shuffle button (`Shuffle`) leads the playback bar's transport row, just
+before previous / play-pause / next. The shuffled order is computed
+server-side: the client generates a random seed and passes it (plus the
+track playing when shuffle was enabled, pinned first) as
+`PlaybackQueue.tracks(shuffleSeed:, shuffleInitialTrackId:)`, and next/previous
+keep stepping by cursor exactly as in library order — the seed just makes
+the server walk a deterministic pseudo-random permutation instead (see
+the backend README). The state is split by lifetime
+(`state/shuffle.tsx`): the on/off toggle persists in `localStorage`
+(`lofify.player.shuffle`), while the order itself rides the URL
+(`shuffle-seed` / `shuffle-from`) next to the track and playhead params, so
+a refresh resumes the same sequence. Manually playing a track while
+shuffled re-anchors: a fresh seed with that track pinned first, since
+keeping the old seed would replay the just-played sequence verbatim. The
+track list always shows library order.
+
+Every setting that defines the play order — the library filter, the
+duplicates toggle, shuffle, repeat, the queue — announces changes through
+`state/play-order.ts` (a tiny pub/sub, so state modules never import the
+player). The player listens and has mse drop its already-resolved
+successor, re-resolving it under the new order when the preload window
+next opens; without this, a prefetched successor would follow the old
+order for one more boundary.
+
+## Repeat
+
+A repeat button (`Repeat`) sits after next in the transport row
+(`state/repeat.tsx`, persisted in `localStorage` as
+`lofify.player.repeat`). When on, every next/previous step and successor
+resolution sends `repeat: true`, which makes the active library
+order — shuffled or not, filtered or not — cyclic on the server, so
+stepping and gapless auto-advance wrap from the last track to the first
+(the same shuffled permutation cycles; it is not reshuffled). Toggling
+the button mid-track re-resolves the prefetched successor via the
+play-order notification described under Shuffle. A repeat whose order
+contains only the playing
+track loops via the audio element's native `loop` flag — mse can't
+splice the same track behind itself (its slots are id-keyed), so the
+successor resolution ends the stream (fixing the finite duration the
+element wraps at) and arms `loop` instead. The element wraps to
+media-timeline 0, which for a track spliced mid-stream lies before its
+`durationOffset`; mse clamps the playhead back up to the entry's start
+so the wrap lands on buffered audio. Pressing next past the end of the order
+(repeat off) clears the player to its nothing-playing state; a library
+playing out naturally keeps the last track in the bar, paused at its
+end.
+
+## Play queue
+
+Tracks queue up server-side (see the backend README); the client keeps
+only the queue id, in `localStorage` (`state/queue.ts`,
+`lofify.player.queue-id`), so a refresh keeps the queue. Enqueue from
+the track list's context menu — right-click on desktop, long-press on
+touch, multi-selection appends in row order — or by swiping a row to the
+right on touch layouts (`lib/use-swipe-right.ts`: once the gesture reads
+as horizontal the row's content slides right, capped at a fixed gap and
+clipped by the list so nothing overflows, revealing a queue icon that
+fades in with the pull; releasing past the threshold enqueues). The
+hamburger to the left of the `Lofify` title opens the queue panel
+(`components/queue-panel.tsx`): a side panel (`ui/sheet.tsx`, sliding in
+from the left edge) listing what's queued with per-row remove,
+drag-to-reorder (`@dnd-kit/sortable` — row keys pair index with track
+id, since the same track may be queued twice), and a clear button.
+
+The player resolves every step through `playbackQueue.tracks`, so queued
+tracks play next regardless of shuffle or repeat. While a queued track
+plays, stepping stays anchored to the last _library_ track that played —
+so when the queue drains, playback returns to where the library order
+was interrupted rather than jumping to the queued track's
+neighbourhood. The queue head is consumed (removed) as playback starts
+on it; consumption is awaited by later resolutions, so a half-finished
+removal can never replay the same entry. A queued copy of the playing
+track is the one entry that can't be spliced gaplessly (mse's slots are
+keyed by track id) — it's consumed and skipped. Queue edits announce
+through the play-order pub/sub like every other order input, so a
+prefetched successor re-resolves immediately.
+
 ## Visualiser
 
 A waveform button (`AudioLines`) sits in the playback bar's transport row,

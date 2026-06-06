@@ -1,11 +1,13 @@
 import { type FragmentOf, readFragment } from 'gql.tada';
-import { AudioLines, Pause, Play, SkipBack, SkipForward } from 'lucide-react';
+import { AudioLines, Pause, Play, Repeat, Shuffle, SkipBack, SkipForward } from 'lucide-react';
 import { type MouseEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 import { getAnalyser, isVisualiserSupported } from '../lib/audio-analyser.ts';
 import { graphql } from '../lib/gql.ts';
 import { useCoarsePointer } from '../lib/use-coarse-pointer.ts';
 import { usePlayer } from '../state/player.tsx';
+import { useRepeat } from '../state/repeat.tsx';
+import { useShuffle } from '../state/shuffle.tsx';
 import { useVisualiser } from '../state/visualiser.tsx';
 import { PlaybackFormatBadge } from './playback-format-badge.tsx';
 import { SettingsDialog } from './settings-dialog.tsx';
@@ -82,6 +84,8 @@ export function PlaybackBar() {
     seek,
   } = usePlayer();
   const { active: visualiserActive, toggle: toggleVisualiser } = useVisualiser();
+  const { enabled: shuffleEnabled, toggle: toggleShuffle } = useShuffle();
+  const { enabled: repeatEnabled, toggle: toggleRepeat } = useRepeat();
   // Touch devices are excluded (the small screen is for the list, not a
   // visualiser) and so are browsers without `captureStream` (Safari).
   const showVisualiser = !useCoarsePointer() && isVisualiserSupported();
@@ -132,6 +136,15 @@ export function PlaybackBar() {
       <div className="mx-auto flex w-full max-w-[640px] flex-col items-center gap-1.5 max-sm:contents">
         <div className="flex items-center gap-1 max-sm:col-span-2 max-sm:row-start-2 max-sm:justify-center">
           <Button
+            variant={shuffleEnabled ? 'secondary' : 'ghost'}
+            size="icon"
+            onClick={() => toggleShuffle(current?.id ?? null)}
+            aria-label="Shuffle"
+            aria-pressed={shuffleEnabled}
+          >
+            <Shuffle />
+          </Button>
+          <Button
             variant="ghost"
             size="icon"
             onClick={previous}
@@ -151,6 +164,15 @@ export function PlaybackBar() {
           </Button>
           <Button variant="ghost" size="icon" onClick={next} disabled={!current} aria-label="Next">
             <SkipForward />
+          </Button>
+          <Button
+            variant={repeatEnabled ? 'secondary' : 'ghost'}
+            size="icon"
+            onClick={toggleRepeat}
+            aria-label="Repeat"
+            aria-pressed={repeatEnabled}
+          >
+            <Repeat />
           </Button>
           {showVisualiser && (
             <Button

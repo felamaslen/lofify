@@ -5,7 +5,7 @@
 
 import type { GqlScalar } from "grats";
 import type { Upload as UploadInternal } from "./../upload.js";
-import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, GraphQLInt, specifiedDirectives, GraphQLObjectType, GraphQLList, GraphQLString, GraphQLBoolean, GraphQLID, GraphQLUnionType, GraphQLInterfaceType, GraphQLEnumType, GraphQLInputObjectType, GraphQLScalarType, GraphQLFloat } from "graphql";
+import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, GraphQLInt, GraphQLList, specifiedDirectives, GraphQLObjectType, GraphQLString, GraphQLBoolean, GraphQLID, GraphQLUnionType, GraphQLInterfaceType, GraphQLEnumType, GraphQLInputObjectType, GraphQLScalarType, GraphQLFloat } from "graphql";
 import { artistIndex as queryArtistIndexResolver, track as queryTrackResolver, tracks as queryTracksResolver } from "./../track-queries.js";
 import { isUpdateAvailable as queryIsUpdateAvailableResolver, ping as queryPingResolver, noop as mutationNoopResolver } from "./../root.js";
 import { libraryScan as queryLibraryScanResolver, libraryScanCancel as mutationLibraryScanCancelResolver, libraryScanStart as mutationLibraryScanStartResolver, libraryScanSubscription as subscriptionLibraryScanResolver } from "./../library-scan.js";
@@ -13,10 +13,17 @@ import { artistSynonyms as trackArtistSynonymsResolver, artistSynonymCreate as m
 import { Image as ImageClass } from "./../media.js";
 import { Artwork as ArtworkClass, ArtworkStatus as ArtworkStatusClass } from "./../artwork.js";
 import { artwork as trackArtworkResolver, delivery as trackDeliveryResolver, duplicates as trackDuplicatesResolver, path as trackPathResolver, url as trackUrlResolver } from "./../track.js";
+import { tracks as playbackQueueTracksResolver, tracksQueued as playbackQueueTracksQueuedResolver, playbackQueue as queryPlaybackQueueResolver, queueAppend as mutationQueueAppendResolver, queueClear as mutationQueueClearResolver, queueRemove as mutationQueueRemoveResolver, queueReorder as mutationQueueReorderResolver } from "./../playback-queue.js";
 import { search as querySearchResolver } from "./../search.js";
 import { artworkClear as mutationArtworkClearResolver, artworkDownload as mutationArtworkDownloadResolver } from "./../artwork-mutations.js";
 import { trackUpdate as mutationTrackUpdateResolver } from "./../track-mutations.js";
 import { trackManifestSubscription as subscriptionTrackManifestResolver } from "./../track-manifest.js";
+async function assertNonNull<T>(value: T | Promise<T>): Promise<T> {
+    const awaited = await value;
+    if (awaited == null)
+        throw new Error("Cannot return null for semantically non-nullable field.");
+    return awaited;
+}
 export type SchemaConfig = {
     scalars: {
         Upload: GqlScalar<UploadInternal>;
@@ -73,105 +80,6 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
                 scannedTotal: {
                     description: "Files successfully parsed and upserted so far.",
                     name: "scannedTotal",
-                    type: new GraphQLNonNull(GraphQLInt)
-                }
-            };
-        }
-    });
-    const ArtistType: GraphQLObjectType = new GraphQLObjectType({
-        name: "Artist",
-        description: "A distinct artist in the library.",
-        fields() {
-            return {
-                name: {
-                    description: "The artist's name, suitable to pass back as `Query.tracks(filterArtistIn:)`.",
-                    name: "name",
-                    type: new GraphQLNonNull(GraphQLString)
-                }
-            };
-        }
-    });
-    const AlbumType: GraphQLObjectType = new GraphQLObjectType({
-        name: "Album",
-        description: "A distinct album in the library.",
-        fields() {
-            return {
-                artists: {
-                    description: "Every artist credited on a track of this album.",
-                    name: "artists",
-                    type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(ArtistType)))
-                },
-                name: {
-                    description: "The album's title, suitable to pass back as `Query.tracks(filterAlbumIn:)`.",
-                    name: "name",
-                    type: new GraphQLNonNull(GraphQLString)
-                }
-            };
-        }
-    });
-    const AlbumEdgeType: GraphQLObjectType = new GraphQLObjectType({
-        name: "AlbumEdge",
-        description: "An edge in an `AlbumConnection`.",
-        fields() {
-            return {
-                cursor: {
-                    description: "Opaque cursor for this edge; equal to the album's title.",
-                    name: "cursor",
-                    type: new GraphQLNonNull(GraphQLString)
-                },
-                node: {
-                    name: "node",
-                    type: new GraphQLNonNull(AlbumType)
-                }
-            };
-        }
-    });
-    const AlbumConnectionType: GraphQLObjectType = new GraphQLObjectType({
-        name: "AlbumConnection",
-        description: "Albums matching a search.",
-        fields() {
-            return {
-                edges: {
-                    name: "edges",
-                    type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(AlbumEdgeType)))
-                },
-                totalCount: {
-                    description: "Total distinct albums matching the search, ignoring the result cap.",
-                    name: "totalCount",
-                    type: new GraphQLNonNull(GraphQLInt)
-                }
-            };
-        }
-    });
-    const ArtistEdgeType: GraphQLObjectType = new GraphQLObjectType({
-        name: "ArtistEdge",
-        description: "An edge in an `ArtistConnection`.",
-        fields() {
-            return {
-                cursor: {
-                    description: "Opaque cursor for this edge; equal to the artist's name.",
-                    name: "cursor",
-                    type: new GraphQLNonNull(GraphQLString)
-                },
-                node: {
-                    name: "node",
-                    type: new GraphQLNonNull(ArtistType)
-                }
-            };
-        }
-    });
-    const ArtistConnectionType: GraphQLObjectType = new GraphQLObjectType({
-        name: "ArtistConnection",
-        description: "Artists matching a search.",
-        fields() {
-            return {
-                edges: {
-                    name: "edges",
-                    type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(ArtistEdgeType)))
-                },
-                totalCount: {
-                    description: "Total distinct artists matching the search, ignoring the result cap.",
-                    name: "totalCount",
                     type: new GraphQLNonNull(GraphQLInt)
                 }
             };
@@ -583,6 +491,186 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
             };
         }
     });
+    const PlaybackQueueType: GraphQLObjectType = new GraphQLObjectType({
+        name: "PlaybackQueue",
+        description: "The play order: any explicitly queued tracks, followed by the library continuing in its active order. The queued portion may be empty \u2014 a queue is only created by the first append and addressed by `id` from then on; one left unwritten for a day may expire, and appending with an expired or unknown id revives it, empty, under that same id.",
+        fields() {
+            return {
+                id: {
+                    description: "Identifier to pass to the queue mutations and `Query.playbackQueue`. Null until a mutation first writes to the queue.",
+                    name: "id",
+                    type: GraphQLID
+                },
+                tracks: {
+                    description: "Every track to be played, in order: the explicitly queued tracks lead, then the library continues in its active order. The filter, duplicate, shuffle, and repeat arguments shape only the library portion; queued tracks always lead a forwards page regardless of `after`, which addresses where the library portion picks up. Backwards pages (`last`/`before`) walk the library back from the cursor and continue into the queued tracks once the start of the library order is reached.",
+                    name: "tracks",
+                    type: new GraphQLNonNull(TrackConnectionType),
+                    args: {
+                        after: {
+                            type: GraphQLID
+                        },
+                        before: {
+                            type: GraphQLID
+                        },
+                        filterAlbumIn: {
+                            description: "Restrict the library portion to tracks whose effective album is one of these names. An empty or omitted list applies no filter.",
+                            type: new GraphQLList(new GraphQLNonNull(GraphQLString))
+                        },
+                        filterArtistIn: {
+                            description: "Restrict the library portion to tracks whose effective artist is one of these names. An empty or omitted list applies no filter.",
+                            type: new GraphQLList(new GraphQLNonNull(GraphQLString))
+                        },
+                        first: {
+                            type: GraphQLInt
+                        },
+                        includeDuplicates: {
+                            description: "Include every duplicate copy of a recording in the library portion. By default only the canonical (highest-quality) copy of each duplicate group is returned.",
+                            type: GraphQLBoolean
+                        },
+                        last: {
+                            type: GraphQLInt
+                        },
+                        repeat: {
+                            description: "Treat the library portion as cyclic: a page that runs past either end continues from the other end, capped at one full lap. `pageInfo` then reports more pages in both directions whenever any track matches. Queued tracks are not part of the cycle \u2014 each plays once.",
+                            type: GraphQLBoolean
+                        },
+                        shuffleInitialTrackId: {
+                            description: "Track to place first in the shuffled library portion. Requires `shuffleSeed`.",
+                            type: GraphQLID
+                        },
+                        shuffleSeed: {
+                            description: "Seed for a deterministic pseudo-random ordering of the library portion. The same seed always produces the same permutation.",
+                            type: GraphQLString
+                        }
+                    },
+                    resolve(source, args) {
+                        return playbackQueueTracksResolver(source, args.first, args.last, args.after, args.before, args.filterArtistIn, args.filterAlbumIn, args.includeDuplicates, args.shuffleSeed, args.shuffleInitialTrackId, args.repeat);
+                    }
+                },
+                tracksQueued: {
+                    description: "The explicitly queued tracks, in play order. The same track may be queued more than once; a cursor addresses its first occurrence.",
+                    name: "tracksQueued",
+                    type: new GraphQLNonNull(TrackConnectionType),
+                    args: {
+                        after: {
+                            type: GraphQLID
+                        },
+                        before: {
+                            type: GraphQLID
+                        },
+                        first: {
+                            type: GraphQLInt
+                        },
+                        last: {
+                            type: GraphQLInt
+                        }
+                    },
+                    resolve(source, args) {
+                        return playbackQueueTracksQueuedResolver(source, args.first, args.last, args.after, args.before);
+                    }
+                }
+            };
+        }
+    });
+    const ArtistType: GraphQLObjectType = new GraphQLObjectType({
+        name: "Artist",
+        description: "A distinct artist in the library.",
+        fields() {
+            return {
+                name: {
+                    description: "The artist's name, suitable to pass back as `Query.tracks(filterArtistIn:)`.",
+                    name: "name",
+                    type: new GraphQLNonNull(GraphQLString)
+                }
+            };
+        }
+    });
+    const AlbumType: GraphQLObjectType = new GraphQLObjectType({
+        name: "Album",
+        description: "A distinct album in the library.",
+        fields() {
+            return {
+                artists: {
+                    description: "Every artist credited on a track of this album.",
+                    name: "artists",
+                    type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(ArtistType)))
+                },
+                name: {
+                    description: "The album's title, suitable to pass back as `Query.tracks(filterAlbumIn:)`.",
+                    name: "name",
+                    type: new GraphQLNonNull(GraphQLString)
+                }
+            };
+        }
+    });
+    const AlbumEdgeType: GraphQLObjectType = new GraphQLObjectType({
+        name: "AlbumEdge",
+        description: "An edge in an `AlbumConnection`.",
+        fields() {
+            return {
+                cursor: {
+                    description: "Opaque cursor for this edge; equal to the album's title.",
+                    name: "cursor",
+                    type: new GraphQLNonNull(GraphQLString)
+                },
+                node: {
+                    name: "node",
+                    type: new GraphQLNonNull(AlbumType)
+                }
+            };
+        }
+    });
+    const AlbumConnectionType: GraphQLObjectType = new GraphQLObjectType({
+        name: "AlbumConnection",
+        description: "Albums matching a search.",
+        fields() {
+            return {
+                edges: {
+                    name: "edges",
+                    type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(AlbumEdgeType)))
+                },
+                totalCount: {
+                    description: "Total distinct albums matching the search, ignoring the result cap.",
+                    name: "totalCount",
+                    type: new GraphQLNonNull(GraphQLInt)
+                }
+            };
+        }
+    });
+    const ArtistEdgeType: GraphQLObjectType = new GraphQLObjectType({
+        name: "ArtistEdge",
+        description: "An edge in an `ArtistConnection`.",
+        fields() {
+            return {
+                cursor: {
+                    description: "Opaque cursor for this edge; equal to the artist's name.",
+                    name: "cursor",
+                    type: new GraphQLNonNull(GraphQLString)
+                },
+                node: {
+                    name: "node",
+                    type: new GraphQLNonNull(ArtistType)
+                }
+            };
+        }
+    });
+    const ArtistConnectionType: GraphQLObjectType = new GraphQLObjectType({
+        name: "ArtistConnection",
+        description: "Artists matching a search.",
+        fields() {
+            return {
+                edges: {
+                    name: "edges",
+                    type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(ArtistEdgeType)))
+                },
+                totalCount: {
+                    description: "Total distinct artists matching the search, ignoring the result cap.",
+                    name: "totalCount",
+                    type: new GraphQLNonNull(GraphQLInt)
+                }
+            };
+        }
+    });
     const SearchType: GraphQLObjectType = new GraphQLObjectType({
         name: "Search",
         description: "Results of a library search, grouped by the kind of thing matched. Each group is resolved independently, so a client may select only the kinds it intends to render.",
@@ -659,6 +747,19 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
                         return queryPingResolver();
                     }
                 },
+                playbackQueue: {
+                    description: "The play queue addressed by `id`, or an empty unidentified queue when `id` is omitted or doesn't address one.",
+                    name: "playbackQueue",
+                    type: PlaybackQueueType,
+                    args: {
+                        id: {
+                            type: GraphQLID
+                        }
+                    },
+                    resolve(_source, args) {
+                        return assertNonNull(queryPlaybackQueueResolver(args.id));
+                    }
+                },
                 search: {
                     description: "Search the library for artists, albums and tracks whose name matches `query` as a case-insensitive prefix. Returns `null` for a blank query.",
                     name: "search",
@@ -691,10 +792,10 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
                     type: TrackConnectionType,
                     args: {
                         after: {
-                            type: GraphQLString
+                            type: GraphQLID
                         },
                         before: {
-                            type: GraphQLString
+                            type: GraphQLID
                         },
                         filterAlbumIn: {
                             description: "Restrict the result to tracks whose effective album is one of these names. An empty or omitted list applies no filter.",
@@ -874,6 +975,76 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
                     type: new GraphQLNonNull(VoidType),
                     resolve() {
                         return mutationNoopResolver();
+                    }
+                },
+                queueAppend: {
+                    description: "Append a track to the end of a queue. Omitting `queueId` creates a queue; the returned `id` addresses it from then on. An expired or unknown `queueId` revives that queue, empty, under the same id.",
+                    name: "queueAppend",
+                    type: new GraphQLNonNull(PlaybackQueueType),
+                    args: {
+                        queueId: {
+                            type: GraphQLID
+                        },
+                        trackId: {
+                            type: new GraphQLNonNull(GraphQLID)
+                        }
+                    },
+                    resolve(_source, args) {
+                        return mutationQueueAppendResolver(args.trackId, args.queueId);
+                    }
+                },
+                queueClear: {
+                    description: "Drop every entry of the queue. Idempotent; the id remains usable for later appends.",
+                    name: "queueClear",
+                    type: new GraphQLNonNull(VoidType),
+                    args: {
+                        id: {
+                            type: new GraphQLNonNull(GraphQLID)
+                        }
+                    },
+                    resolve(_source, args) {
+                        return mutationQueueClearResolver(args.id);
+                    }
+                },
+                queueRemove: {
+                    description: "Remove the queue entry at `index`, which must currently hold `trackId` \u2014 the pairing guards against removing a different entry when the queue changed since it was last read.",
+                    name: "queueRemove",
+                    type: new GraphQLNonNull(PlaybackQueueType),
+                    args: {
+                        id: {
+                            type: new GraphQLNonNull(GraphQLID)
+                        },
+                        index: {
+                            type: new GraphQLNonNull(GraphQLInt)
+                        },
+                        trackId: {
+                            type: new GraphQLNonNull(GraphQLID)
+                        }
+                    },
+                    resolve(_source, args) {
+                        return mutationQueueRemoveResolver(args.id, args.trackId, args.index);
+                    }
+                },
+                queueReorder: {
+                    description: "Move the queue entry at `fromIndex`, which must currently hold `trackId`, to `toIndex`. Errors when `toIndex` falls outside the queue; a move onto its own position is a no-op.",
+                    name: "queueReorder",
+                    type: new GraphQLNonNull(PlaybackQueueType),
+                    args: {
+                        fromIndex: {
+                            type: new GraphQLNonNull(GraphQLInt)
+                        },
+                        id: {
+                            type: new GraphQLNonNull(GraphQLID)
+                        },
+                        toIndex: {
+                            type: new GraphQLNonNull(GraphQLInt)
+                        },
+                        trackId: {
+                            type: new GraphQLNonNull(GraphQLID)
+                        }
+                    },
+                    resolve(_source, args) {
+                        return mutationQueueReorderResolver(args.id, args.trackId, args.fromIndex, args.toIndex);
                     }
                 },
                 trackUpdate: {
@@ -1098,11 +1269,20 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
                         type: new GraphQLNonNull(GraphQLInt)
                     }
                 }
+            }), new GraphQLDirective({
+                name: "semanticNonNull",
+                locations: [DirectiveLocation.FIELD_DEFINITION],
+                description: "Marks a field that is null only when an error has been propagated into it \u2014 never as a meaningful value. Clients with error-aware response handling may treat it as non-nullable. `levels` names the list depths the guarantee applies to (`0` is the field itself), matching the semantic-nullability draft spec.",
+                args: {
+                    levels: {
+                        type: new GraphQLList(new GraphQLNonNull(GraphQLInt))
+                    }
+                }
             })],
         query: QueryType,
         mutation: MutationType,
         subscription: SubscriptionType,
-        types: [UploadType, MediaSizeType, QualityType, TrackArtworkType, MediaType, TrackFormatType, AlbumType, AlbumConnectionType, AlbumEdgeType, ArtistType, ArtistConnectionType, ArtistEdgeType, ArtistInitialType, ArtistSynonymType, ArtworkType, ArtworkStatusType, DeliveryTierType, DurationType, ImageType, ImageSourceType, LibraryScanType, MutationType, PageInfoType, QueryType, SearchType, SubscriptionType, TrackType, TrackConnectionType, TrackDeliveryType, TrackEdgeType, TrackManifestType, TrackManifestChunkType, TrackManifestInitType, VoidType]
+        types: [UploadType, MediaSizeType, QualityType, TrackArtworkType, MediaType, TrackFormatType, AlbumType, AlbumConnectionType, AlbumEdgeType, ArtistType, ArtistConnectionType, ArtistEdgeType, ArtistInitialType, ArtistSynonymType, ArtworkType, ArtworkStatusType, DeliveryTierType, DurationType, ImageType, ImageSourceType, LibraryScanType, MutationType, PageInfoType, PlaybackQueueType, QueryType, SearchType, SubscriptionType, TrackType, TrackConnectionType, TrackDeliveryType, TrackEdgeType, TrackManifestType, TrackManifestChunkType, TrackManifestInitType, VoidType]
     });
 }
 const typeNameMap = new Map();

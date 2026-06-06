@@ -61,7 +61,7 @@ const FilteredTracksQuery = graphql(`
 `);
 
 const NextFilteredTrackQuery = graphql(`
-  query NextFilteredTrack($after: String!, $filterArtistIn: [String!]) {
+  query NextFilteredTrack($after: ID!, $filterArtistIn: [String!]) {
     tracks(first: 1, after: $after, filterArtistIn: $filterArtistIn) {
       edges {
         node {
