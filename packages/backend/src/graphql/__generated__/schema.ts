@@ -5,7 +5,7 @@
 
 import type { GqlScalar } from "grats";
 import type { Upload as UploadInternal } from "./../upload.js";
-import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, GraphQLInt, specifiedDirectives, GraphQLObjectType, GraphQLList, GraphQLString, GraphQLBoolean, GraphQLID, GraphQLUnionType, GraphQLInterfaceType, GraphQLEnumType, GraphQLInputObjectType, GraphQLScalarType, GraphQLFloat } from "graphql";
+import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, GraphQLInt, GraphQLList, specifiedDirectives, GraphQLObjectType, GraphQLString, GraphQLBoolean, GraphQLID, GraphQLUnionType, GraphQLInterfaceType, GraphQLEnumType, GraphQLInputObjectType, GraphQLScalarType, GraphQLFloat } from "graphql";
 import { artistIndex as queryArtistIndexResolver, track as queryTrackResolver, tracks as queryTracksResolver } from "./../track-queries.js";
 import { isUpdateAvailable as queryIsUpdateAvailableResolver, ping as queryPingResolver, noop as mutationNoopResolver } from "./../root.js";
 import { libraryScan as queryLibraryScanResolver, libraryScanCancel as mutationLibraryScanCancelResolver, libraryScanStart as mutationLibraryScanStartResolver, libraryScanSubscription as subscriptionLibraryScanResolver } from "./../library-scan.js";
@@ -1108,6 +1108,15 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
                     },
                     max: {
                         type: new GraphQLNonNull(GraphQLInt)
+                    }
+                }
+            }), new GraphQLDirective({
+                name: "semanticNonNull",
+                locations: [DirectiveLocation.FIELD_DEFINITION],
+                description: "Marks a field that is null only when an error has been propagated into it \u2014 never as a meaningful value. Clients with error-aware response handling may treat it as non-nullable. `levels` names the list depths the guarantee applies to (`0` is the field itself), matching the semantic-nullability draft spec.",
+                args: {
+                    levels: {
+                        type: new GraphQLList(new GraphQLNonNull(GraphQLInt))
                     }
                 }
             })],

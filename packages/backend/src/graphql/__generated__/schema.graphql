@@ -5,6 +5,11 @@
 directive @constraint(min: Int!, max: Int!) on ARGUMENT_DEFINITION
 
 """
+Marks a field that is null only when an error has been propagated into it — never as a meaningful value. Clients with error-aware response handling may treat it as non-nullable. `levels` names the list depths the guarantee applies to (`0` is the field itself), matching the semantic-nullability draft spec.
+"""
+directive @semanticNonNull(levels: [Int!]) on FIELD_DEFINITION
+
+"""
 A file sent with the [GraphQL multipart request spec](https://github.com/jaydenseric/graphql-multipart-request-spec). The multipart hook in `app.ts` replaces the mapped variable with an instance carrying the streamed file; resolvers await its `promise` for the filename, MIME type and stream.
 """
 scalar Upload
