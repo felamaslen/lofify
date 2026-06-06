@@ -47,10 +47,10 @@ export type PageInfo = {
   endCursor: ID | null;
 };
 
-const DEFAULT_PAGE_SIZE = 50;
+export const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 200;
 
-function clampLimit(value: Int | null | undefined): number | null {
+export function clampLimit(value: Int | null | undefined): number | null {
   if (value == null) return null;
   if (!Number.isFinite(value) || value <= 0) return 0;
   return Math.min(MAX_PAGE_SIZE, Math.floor(value));
@@ -159,53 +159,53 @@ async function countTracks(filterClause: SQL | null): Promise<number> {
  * @gqlQueryField
  */
 export async function track(id: ID): Promise<Track | null> {
-  const rows = await db
-    .select()
-    .from(tracksTable)
-    .where(sql`${tracksTable.id} = ${id}`)
-    .limit(1);
+  const rows = await db.select().from(tracksTable).where(eq(tracksTable.id, id)).limit(1);
   const row = rows[0];
   return row ? toGqlTrack(row) : null;
 }
+
+/** Options for one cursor-addressed page of the library, shared by `Query.tracks` (library order only) and `PlaybackQueue.tracks` (full options). Mirrors the GraphQL argument semantics documented on those fields. */
+export type TrackPageOpts = {
+  first?: Int | null | undefined;
+  last?: Int | null | undefined;
+  after?: ID | null | undefined;
+  before?: ID | null | undefined;
+  filterArtistIn?: string[] | null | undefined;
+  filterAlbumIn?: string[] | null | undefined;
+  includeDuplicates?: boolean | null | undefined;
+  shuffleSeed?: string | null | undefined;
+  shuffleInitialTrackId?: ID | null | undefined;
+  repeat?: boolean | null | undefined;
+};
 
 /**
  * List the library in Relay-cursor pagination order: by `artist`, `album`, `discNumber`, `trackNumber`, then `id` for stability. Supply exactly one of `first`/`last` and at most one of `after`/`before`.
  *
  * Pass `offset` instead to fetch an arbitrary window (`first` rows from that zero-based index) in the same order — used for index-addressed scrolling (e.g. the letter scrubber jumping anywhere without paging through the gaps). When `offset` is set, the cursor arguments are ignored.
  *
- * Pass `shuffleSeed` to replace the library order with a deterministic pseudo-random permutation: the same seed always yields the same order, so cursor pagination and `offset` stay consistent across requests.
- *
- * Pass `repeat` to treat the active order as cyclic: a cursor page that runs past either end continues from the other end, so stepping past the last track yields the first and vice versa.
- *
  * @gqlQueryField
  */
 export async function tracks(
   first?: Int | null,
   last?: Int | null,
-  after?: string | null,
-  before?: string | null,
+  after?: ID | null,
+  before?: ID | null,
   /** Restrict the result to tracks whose effective artist is one of these names. Pass the names returned by `Query.search` (not synonyms); an empty or omitted list applies no filter. */
   filterArtistIn?: string[] | null,
   /** Restrict the result to tracks whose effective album is one of these names. An empty or omitted list applies no filter. */
   filterAlbumIn?: string[] | null,
-  /** Zero-based index of the first row to return, in the active sort order. When set, returns `first` rows from here and ignores `after`/`before`/`last`. */
+  /** Zero-based index of the first row to return, in the library sort order. When set, returns `first` rows from here and ignores `after`/`before`/`last`. */
   offset?: Int | null,
   /** Include every duplicate copy of a recording. By default only the canonical (highest-quality) copy of each duplicate group is returned. */
   includeDuplicates?: boolean | null,
-  /** Seed for a deterministic pseudo-random ordering that replaces the library sort. The same seed always produces the same permutation. */
-  shuffleSeed?: string | null,
-  /** Track to place first in the shuffled order. Requires `shuffleSeed`. */
-  shuffleInitialTrackId?: ID | null,
-  /** Treat the active order as cyclic: a cursor page that runs past either end continues from the other end, capped at one full lap (never more rows than `totalCount`). `pageInfo` then reports more pages in both directions whenever any track matches. Ignored when `offset` is set. */
-  repeat?: boolean | null,
 ): Promise<TrackConnection | null> {
-  if (shuffleInitialTrackId != null && shuffleSeed == null) {
-    throw new Error('`shuffleInitialTrackId` requires `shuffleSeed`.');
-  }
-  const sort = sortColumns(shuffleSeed, shuffleInitialTrackId);
-  const filterClause = buildFilterClause(filterArtistIn, filterAlbumIn, includeDuplicates ?? false);
-
   if (offset != null) {
+    const filterClause = buildFilterClause(
+      filterArtistIn,
+      filterAlbumIn,
+      includeDuplicates ?? false,
+    );
+    const sort = sortColumns(null, null);
     const limit = clampLimit(first) ?? DEFAULT_PAGE_SIZE;
     const off = Number.isFinite(offset) && offset > 0 ? Math.floor(offset) : 0;
     const rows = await db
@@ -229,6 +229,30 @@ export async function tracks(
     };
   }
 
+  return queryTrackPage({
+    first,
+    last,
+    after,
+    before,
+    filterArtistIn,
+    filterAlbumIn,
+    includeDuplicates,
+  });
+}
+
+/** One cursor-addressed page of the library under the full option set (filters, shuffle, repeat). The engine behind `Query.tracks`' cursor mode and the library portion of `PlaybackQueue.tracks`. */
+export async function queryTrackPage(opts: TrackPageOpts): Promise<TrackConnection> {
+  const { first, last, after, before, shuffleSeed, shuffleInitialTrackId, repeat } = opts;
+  if (shuffleInitialTrackId != null && shuffleSeed == null) {
+    throw new Error('`shuffleInitialTrackId` requires `shuffleSeed`.');
+  }
+  const sort = sortColumns(shuffleSeed, shuffleInitialTrackId);
+  const filterClause = buildFilterClause(
+    opts.filterArtistIn,
+    opts.filterAlbumIn,
+    opts.includeDuplicates ?? false,
+  );
+
   if (first != null && last != null) {
     throw new Error('Pass either `first` or `last`, not both.');
   }
@@ -240,7 +264,7 @@ export async function tracks(
     const exists = await db
       .select({ id: tracksTable.id })
       .from(tracksTable)
-      .where(sql`${tracksTable.id} = ${cursorId}`)
+      .where(eq(tracksTable.id, cursorId))
       .limit(1);
     if (exists.length === 0) {
       throw new Error('Unknown cursor.');

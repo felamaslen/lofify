@@ -143,12 +143,32 @@ by feeding its `offset` to `tracks`. Both honour the same filters. The
 player keeps using cursor paging for next/previous, which is relative by
 nature.
 
-## Shuffled order
+## Play queue and play order
 
-`Query.tracks(shuffleSeed:)` replaces the library sort with a
+`Query.playbackQueue(id:)` is the play-order surface: its `tracks` field
+lists everything to be played, in order — explicitly queued tracks
+first, then the library continuing after the cursor in the active order.
+It carries the shuffle and repeat arguments (below) alongside the same
+filter/duplicate arguments as `Query.tracks`, which itself serves only
+list population. The player resolves next/previous exclusively through
+`playbackQueue.tracks`; without a queue id it behaves exactly like the
+plain library listing.
+
+A queue is created lazily by the first `Mutation.queueAppend` (the
+response carries the id to use from then on) and lives server-side, in
+memory: at most 500 entries, expiring after a day without a write —
+appending with an expired or unknown id revives it, empty, under that
+same id. `queueRemove(id, trackId, index)` and
+`queueReorder(id, trackId, fromIndex, toIndex)` pair the track with its
+index so a concurrent edit can't displace the wrong entry (the same
+track may be queued twice); `queueClear` is idempotent. The client
+removes the head entry as playback starts on it, so
+`PlaybackQueue.tracksQueued` always lists what is still to come.
+
+`PlaybackQueue.tracks(shuffleSeed:)` replaces the library sort with a
 deterministic pseudo-random permutation (ordering by a seeded hash of
 the track id), so the same seed always yields the same order and cursor
-paging, `offset`, and stepping stay consistent across requests.
+paging and stepping stay consistent across requests.
 `shuffleInitialTrackId` places one track first in the permutation — the
 client pins the track playing when shuffle was enabled, so the whole
 remaining library follows it rather than only the tracks that happen to
@@ -156,12 +176,13 @@ hash after it. It requires `shuffleSeed`. Filters and duplicate
 collapsing compose as usual; `artistIndex` is unaffected (the list view
 stays in library order).
 
-`Query.tracks(repeat:)` treats the active order — library or shuffled —
+`PlaybackQueue.tracks(repeat:)` treats the library portion of the order
 as cyclic: a cursor page that runs past either end continues from the
 other end (stepping past the last track yields the first and vice
 versa), capped at one full lap so a page never repeats a row. With
 `repeat`, `pageInfo` reports more pages in both directions whenever any
-track matches. Ignored when `offset` is set.
+track matches. Queued tracks are not part of the cycle — each plays
+once.
 
 ## Artist synonyms
 

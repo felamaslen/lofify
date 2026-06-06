@@ -12,36 +12,36 @@ const ShuffledTracksQuery = graphql(`
   query ShuffledTracks(
     $first: Int
     $last: Int
-    $after: String
-    $before: String
-    $offset: Int
+    $after: ID
+    $before: ID
     $shuffleSeed: String
     $shuffleInitialTrackId: ID
     $filterArtistIn: [String!]
   ) {
-    tracks(
-      first: $first
-      last: $last
-      after: $after
-      before: $before
-      offset: $offset
-      shuffleSeed: $shuffleSeed
-      shuffleInitialTrackId: $shuffleInitialTrackId
-      filterArtistIn: $filterArtistIn
-    ) {
-      totalCount
-      pageInfo {
-        hasNextPage
-        hasPreviousPage
-        startCursor
-        endCursor
-      }
-      edges {
-        cursor
-        node {
-          id
-          title
-          artist
+    playbackQueue {
+      tracks(
+        first: $first
+        last: $last
+        after: $after
+        before: $before
+        shuffleSeed: $shuffleSeed
+        shuffleInitialTrackId: $shuffleInitialTrackId
+        filterArtistIn: $filterArtistIn
+      ) {
+        totalCount
+        pageInfo {
+          hasNextPage
+          hasPreviousPage
+          startCursor
+          endCursor
+        }
+        edges {
+          cursor
+          node {
+            id
+            title
+            artist
+          }
         }
       }
     }
@@ -75,7 +75,6 @@ type Vars = {
   last?: number | null;
   after?: string | null;
   before?: string | null;
-  offset?: number | null;
   shuffleSeed?: string | null;
   shuffleInitialTrackId?: string | null;
   filterArtistIn?: string[] | null;
@@ -89,17 +88,16 @@ async function fetchIds(vars: Vars): Promise<string[]> {
       last: null,
       after: null,
       before: null,
-      offset: null,
       shuffleSeed: null,
       shuffleInitialTrackId: null,
       filterArtistIn: null,
       ...vars,
     })
     .expectNoErrors();
-  return data.tracks!.edges.map((e) => e.node.id);
+  return data.playbackQueue!.tracks.edges.map((e) => e.node.id);
 }
 
-test('Query.tracks shuffleSeed orders deterministically per seed', async () => {
+test('PlaybackQueue.tracks shuffleSeed orders deterministically per seed', async () => {
   await seed(10);
   const once = await fetchIds({ first: 100, shuffleSeed: 'seed-a' });
   const again = await fetchIds({ first: 100, shuffleSeed: 'seed-a' });
@@ -108,7 +106,7 @@ test('Query.tracks shuffleSeed orders deterministically per seed', async () => {
   expect(other).not.toEqual(once);
 });
 
-test('Query.tracks shuffleSeed returns a permutation of the library', async () => {
+test('PlaybackQueue.tracks shuffleSeed returns a permutation of the library', async () => {
   await seed(10);
   const library = await fetchIds({ first: 100 });
   const shuffled = await fetchIds({ first: 100, shuffleSeed: 'seed-a' });
@@ -116,7 +114,7 @@ test('Query.tracks shuffleSeed returns a permutation of the library', async () =
   expect([...shuffled].sort()).toEqual([...library].sort());
 });
 
-test('Query.tracks shuffleInitialTrackId comes first and has no predecessor', async () => {
+test('PlaybackQueue.tracks shuffleInitialTrackId comes first and has no predecessor', async () => {
   await seed(10);
   const library = await fetchIds({ first: 100 });
   const initial = library[4]!;
@@ -135,7 +133,7 @@ test('Query.tracks shuffleInitialTrackId comes first and has no predecessor', as
   expect(previous).toEqual([]);
 });
 
-test('Query.tracks pages and single-steps through the shuffled order consistently', async () => {
+test('PlaybackQueue.tracks pages and single-steps through the shuffled order consistently', async () => {
   await seed(10);
   const library = await fetchIds({ first: 100 });
   const initial = library[2]!;
@@ -161,7 +159,7 @@ test('Query.tracks pages and single-steps through the shuffled order consistentl
   expect(stepped).toEqual(oneShot);
 });
 
-test('Query.tracks steps backward through the shuffled order', async () => {
+test('PlaybackQueue.tracks steps backward through the shuffled order', async () => {
   await seed(10);
   const library = await fetchIds({ first: 100 });
   const vars = { shuffleSeed: 'seed-a', shuffleInitialTrackId: library[0]! };
@@ -170,16 +168,7 @@ test('Query.tracks steps backward through the shuffled order', async () => {
   expect(previous).toEqual([order[4]!]);
 });
 
-test('Query.tracks offset addresses the shuffled order', async () => {
-  await seed(10);
-  const library = await fetchIds({ first: 100 });
-  const vars = { shuffleSeed: 'seed-a', shuffleInitialTrackId: library[7]! };
-  const order = await fetchIds({ first: 100, ...vars });
-  const window = await fetchIds({ first: 2, offset: 3, ...vars });
-  expect(window).toEqual(order.slice(3, 5));
-});
-
-test('Query.tracks shuffle composes with filters', async () => {
+test('PlaybackQueue.tracks shuffle composes with filters', async () => {
   await seed(10, (i) => (i < 5 ? 'A' : 'B'));
   const filtered = await fetchIds({ first: 100, filterArtistIn: ['A'] });
   const shuffled = await fetchIds({ first: 100, shuffleSeed: 'seed-a', filterArtistIn: ['A'] });
@@ -189,7 +178,7 @@ test('Query.tracks shuffle composes with filters', async () => {
   expect(again).toEqual(shuffled);
 });
 
-test('Query.tracks rejects shuffleInitialTrackId without shuffleSeed', async () => {
+test('PlaybackQueue.tracks rejects shuffleInitialTrackId without shuffleSeed', async () => {
   await seed(3);
   const library = await fetchIds({ first: 100 });
   const { errors } = await gqlRequest(app)
@@ -199,7 +188,6 @@ test('Query.tracks rejects shuffleInitialTrackId without shuffleSeed', async () 
       last: null,
       after: null,
       before: null,
-      offset: null,
       shuffleSeed: null,
       shuffleInitialTrackId: library[0]!,
       filterArtistIn: null,
