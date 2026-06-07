@@ -19,6 +19,7 @@ const URL_TO_QUALITY = Object.fromEntries(
 const VALID_FORMATS = [
   'mp4/opus',
   'mp4/flac',
+  'mp4/aac',
   'webm/opus',
   'webm/vorbis',
   'mp3/mp3',

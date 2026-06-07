@@ -111,6 +111,7 @@ function codecLabel(mimeType: string): string {
   if (mimeType.includes('flac')) return 'FLAC';
   if (mimeType.includes('opus')) return 'Opus';
   if (mimeType.includes('vorbis')) return 'Vorbis';
+  if (mimeType.includes('mp4a')) return 'AAC';
   return 'MP3';
 }
 

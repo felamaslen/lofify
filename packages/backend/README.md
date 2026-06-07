@@ -276,7 +276,7 @@ copying without re-encoding whenever possible:
 | `quality`                        | source                 | served as                                                                                                                                                                                                                                         |
 | -------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `MAX`                            | lossless               | first supported `losslessFormats` entry — `audio/mp4; codecs="flac"` (copy for flac, re-encode otherwise)                                                                                                                                         |
-| `MAX`                            | lossy                  | first `lossyFormats` entry whose codec matches the source (a **copy**: vorbis→webm, opus→mp4/webm, mp3→mp3); else transcode to the first encodable entry                                                                                          |
+| `MAX`                            | lossy                  | first `lossyFormats` entry whose codec matches the source (a **copy**: aac→mp4, vorbis→webm, opus→mp4/webm, mp3→mp3); else transcode to the first encodable entry                                                                                 |
 | `MIN`/`LOW`/`MEDIUM`/`HIGH`      | any                    | transcode to the first `lossyFormats` entry the server can encode (opus or mp3) at the preset bitrate                                                                                                                                             |
 | `MIN`–`HIGH` + `autoPassthrough` | lossy (codec playable) | **copy** the source verbatim at its original quality — resolves exactly as the `MAX` lossy row, rather than transcoding to the tier (Smart's no-double-lossy upgrade); lossless sources and unplayable lossy codecs ignore the flag and transcode |
 
@@ -288,7 +288,7 @@ live-updating JSON manifest (chunk byte ranges + cumulative
 `endSeconds`) maintained by `live-tail.ts` as ffmpeg writes.
 
 The chunk layout depends on the container — fragmented mp4 (`moof` +
-`mdat` fragments) for opus/flac, WebM (`Cluster` elements) for
+`mdat` fragments) for opus/flac/aac, WebM (`Cluster` elements) for
 opus/vorbis, raw mp3 frame stream for mp3 — each with its own
 `Scanner` (`scan-mp4`/`scan-webm`/`scan-mp3`), but the route doesn't
 care; it slices bytes. A "copy" is always a container remux (e.g.

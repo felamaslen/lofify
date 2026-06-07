@@ -1,5 +1,5 @@
 /**
- * Spawn ffmpeg to produce a single-file encoded `.bin` for one cache entry. Output containers: fragmented mp4 (opus or flac), WebM (opus or Vorbis), or raw mp3. The live-tail driver in `live-tail.ts` walks the growing file and emits a `.idx`; this module just shells out and reports completion.
+ * Spawn ffmpeg to produce a single-file encoded `.bin` for one cache entry. Output containers: fragmented mp4 (opus, flac, or a copied AAC source), WebM (opus or Vorbis), or raw mp3. The live-tail driver in `live-tail.ts` walks the growing file and emits a `.idx`; this module just shells out and reports completion.
  *
  * Concurrency is bounded by `env.TRANSCODE_MAX_PARALLEL` via a shared semaphore. A `kill()` on the returned handle sends `SIGTERM` to the ffmpeg child and resolves the `done` promise without further waiting (the caller is responsible for cleaning up the partial output file).
  */
@@ -45,10 +45,11 @@ function release(sem: Semaphore): void {
 
 const encoderSem = makeSemaphore(() => env.TRANSCODE_MAX_PARALLEL);
 
-/** Container + codec pairing the encoder is willing to produce. Internal — `resolve.ts` translates a client's quality + supported-format lists into one of these. `webm/vorbis` is only ever reached as a passthrough copy (we never encode to Vorbis); `webm/opus` and `mp4/opus` may be either copy or transcode. */
+/** Container + codec pairing the encoder is willing to produce. Internal — `resolve.ts` translates a client's quality + supported-format lists into one of these. `mp4/aac` and `webm/vorbis` are only ever reached as a passthrough copy (we never encode to AAC or Vorbis); `webm/opus` and `mp4/opus` may be either copy or transcode. */
 export type EncodeFormat =
   | { container: 'mp4'; codec: 'opus' }
   | { container: 'mp4'; codec: 'flac' }
+  | { container: 'mp4'; codec: 'aac' }
   | { container: 'webm'; codec: 'opus' }
   | { container: 'webm'; codec: 'vorbis' }
   | { container: 'mp3'; codec: 'mp3' };
@@ -101,13 +102,14 @@ function opusEncodeArgs(quality: Quality): string[] {
   ];
 }
 
-function mp4CodecArgs(codec: 'opus' | 'flac', quality: Quality, passthrough: boolean): string[] {
-  switch (codec) {
-    case 'opus':
-      return passthrough ? ['-c:a', 'copy'] : opusEncodeArgs(quality);
-    case 'flac':
-      return passthrough ? ['-c:a', 'copy'] : ['-c:a', 'flac', '-compression_level', '5'];
-  }
+function mp4CodecArgs(
+  codec: 'opus' | 'flac' | 'aac',
+  quality: Quality,
+  passthrough: boolean,
+): string[] {
+  // AAC is copy-only — `resolve.ts` only ever picks mp4/aac when the source is already AAC.
+  if (codec === 'aac' || passthrough) return ['-c:a', 'copy'];
+  return codec === 'flac' ? ['-c:a', 'flac', '-compression_level', '5'] : opusEncodeArgs(quality);
 }
 
 function webmCodecArgs(codec: 'opus' | 'vorbis', quality: Quality, passthrough: boolean): string[] {

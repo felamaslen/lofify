@@ -12,6 +12,7 @@ const FLAC = 'audio/mp4; codecs="flac"';
 const OPUS_MP4 = 'audio/mp4; codecs="opus"';
 const OPUS_WEBM = 'audio/webm; codecs="opus"';
 const VORBIS_WEBM = 'audio/webm; codecs="vorbis"';
+const AAC_MP4 = 'audio/mp4; codecs="mp4a.40.2"';
 const MP3 = 'audio/mpeg';
 
 const lossless = (codec: string): ResolveSource => ({ isLossless: true, sourceCodec: codec });
@@ -85,6 +86,46 @@ test('MAX Vorbis source copies into webm/vorbis when supported', () => {
 test('MAX Vorbis source on an mp4-only (Safari) client transcodes to opus', () => {
   const t = resolveTarget(lossy('vorbis'), { quality: Quality.MAX, lossyFormats: [OPUS_MP4, MP3] });
   expect(fmt(t)).toBe('mp4/opus');
+});
+
+test('MAX AAC source copies into mp4/aac when supported', () => {
+  const t = resolveTarget(lossy('aac'), {
+    quality: Quality.MAX,
+    lossyFormats: [OPUS_MP4, AAC_MP4, MP3],
+  });
+  expect(fmt(t)).toBe('mp4/aac');
+  expect(isPassthrough(t, 'aac')).toBe(true);
+});
+
+test('MAX AAC source copies regardless of the mp4a profile string', () => {
+  const t = resolveTarget(lossy('aac'), {
+    quality: Quality.MAX,
+    lossyFormats: ['audio/mp4; codecs="mp4a.40.5"'],
+  });
+  expect(fmt(t)).toBe('mp4/aac');
+});
+
+test('MAX AAC source on a client without AAC support transcodes to opus', () => {
+  const t = resolveTarget(lossy('aac'), { quality: Quality.MAX, lossyFormats: [OPUS_MP4, MP3] });
+  expect(fmt(t)).toBe('mp4/opus');
+});
+
+test('below MAX skips copy-only AAC and picks the first codec it can encode', () => {
+  const t = resolveTarget(lossy('aac'), {
+    quality: Quality.LOW,
+    lossyFormats: [AAC_MP4, MP3],
+  });
+  expect(fmt(t)).toBe('mp3/mp3');
+});
+
+test('autoPassthrough copies a sub-MAX AAC source the client can play verbatim', () => {
+  const t = resolveTarget(lossy('aac'), {
+    quality: Quality.MEDIUM,
+    lossyFormats: [OPUS_MP4, AAC_MP4, MP3],
+    autoPassthrough: true,
+  });
+  expect(fmt(t)).toBe('mp4/aac');
+  expect(t.quality).toBe(Quality.MAX);
 });
 
 test('MAX Opus source copies into the first matching container by preference', () => {

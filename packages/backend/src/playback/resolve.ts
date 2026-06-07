@@ -16,7 +16,7 @@ export type ResolveSource = {
 /** Thrown when a `TrackFormat` can't be satisfied (e.g. empty `lossyFormats`, or no entry the server can transcode to). Surfaces to the client as a GraphQL error from `Track.url` / `trackManifest`. */
 export class ResolveError extends Error {}
 
-/** Codecs the lossy path can *transcode* to. Vorbis is excluded — we only ever copy into it. */
+/** Codecs the lossy path can *transcode* to. AAC and Vorbis are excluded — we only ever copy into them. */
 const TRANSCODABLE = new Set(['opus', 'mp3']);
 
 /** Map a client MIME type to the `EncodeFormat` that produces it, or `null` if the server can't emit it. `audio/mpeg` carries no `codecs` parameter, so it's treated as `mp3`; everything else is keyed on the `codecs="…"` value. */
@@ -35,6 +35,9 @@ function formatForMime(raw: string): EncodeFormat | null {
       .toLowerCase();
   }
   if (!codec) return null;
+  // AAC is identified by an `mp4a.40.x` profile string (LC, HE, HEv2, …); collapse them all to the
+  // copy-only `mp4/aac` format — we never transcode to AAC, only pass an AAC source through.
+  if (base === 'audio/mp4' && codec.startsWith('mp4a')) return { container: 'mp4', codec: 'aac' };
   switch (`${base} ${codec}`) {
     case 'audio/mp4 flac':
       return { container: 'mp4', codec: 'flac' };
@@ -133,6 +136,7 @@ export function isMultiLossy(
 const CODEC_LABEL: Record<EncodeFormat['codec'], string> = {
   opus: 'Opus',
   flac: 'FLAC',
+  aac: 'AAC',
   vorbis: 'Vorbis',
   mp3: 'MP3',
 };
@@ -154,6 +158,8 @@ export function contentTypeFor(target: EncodeTarget): string {
           return 'audio/mp4; codecs="opus"';
         case 'flac':
           return 'audio/mp4; codecs="flac"';
+        case 'aac':
+          return 'audio/mp4; codecs="mp4a.40.2"';
       }
       break;
     case 'webm':

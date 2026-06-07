@@ -6,6 +6,7 @@ const MP4_OPUS = 'audio/mp4; codecs="opus"';
 const WEBM_OPUS = 'audio/webm; codecs="opus"';
 const WEBM_VORBIS = 'audio/webm; codecs="vorbis"';
 const MP4_FLAC = 'audio/mp4; codecs="flac"';
+const MP4_AAC = 'audio/mp4; codecs="mp4a.40.2"';
 const MPEG = 'audio/mpeg';
 
 /** Which lossy codec the user would rather receive when the server has to transcode. */
@@ -23,7 +24,7 @@ export type Capabilities = {
   /** Whether MP3 can be delivered. Enables the MP3 preference. */
   mp3Supported: boolean;
   /**
-   * Build the `TrackFormat.lossyFormats` list to send for a given preference. The preferred transcodable codec leads (it wins below MAX and as the MAX fallback); copy-only Vorbis always trails — present so a Vorbis source can be copied, never chosen for a transcode.
+   * Build the `TrackFormat.lossyFormats` list to send for a given preference. The preferred transcodable codec leads (it wins below MAX and as the MAX fallback); copy-only AAC and Vorbis always trail — present so an AAC or Vorbis source can be copied, never chosen for a transcode.
    */
   lossyFormats(preference: LossyPreference): string[];
 };
@@ -43,6 +44,7 @@ function detect(): Capabilities {
   const opus = [MP4_OPUS, WEBM_OPUS].filter(sup);
   const mp3 = sup(MPEG) ? [MPEG] : [];
   const vorbis = sup(WEBM_VORBIS) ? [WEBM_VORBIS] : [];
+  const aac = sup(MP4_AAC) ? [MP4_AAC] : [];
   const flac = sup(MP4_FLAC) ? [MP4_FLAC] : [];
   return {
     mse: true,
@@ -52,7 +54,7 @@ function detect(): Capabilities {
     mp3Supported: mp3.length > 0,
     lossyFormats: (preference) => {
       const ordered = preference === 'MP3' ? [...mp3, ...opus] : [...opus, ...mp3];
-      return [...ordered, ...vorbis];
+      return [...ordered, ...aac, ...vorbis];
     },
   };
 }
