@@ -82,7 +82,7 @@ function buildFilterClause(
 /** One column of the active sort order, expressed twice: `row` against the queried table and `cursor` against the cursor-lookup alias `c`, so the order-by, the row sort key, and the cursor sort-key subquery all derive from the same definition. */
 type SortColumn = { row: SQL; cursor: SQL };
 
-/** The column expressions of the active sort order, most significant first. Without a seed this is the library order (effective artist, album, disc, track, file, id). With a seed it's a deterministic pseudo-random permutation — a seeded hash of the id, with the id as tiebreaker — optionally preceded by a pin that sorts `shuffleInitialTrackId` first. */
+/** The column expressions of the active sort order, most significant first. Without a seed this is the library order (effective artist, year descending, album, disc, track, file, id). With a seed it's a deterministic pseudo-random permutation — a seeded hash of the id, with the id as tiebreaker — optionally preceded by a pin that sorts `shuffleInitialTrackId` first. */
 function sortColumns(
   shuffleSeed: string | null | undefined,
   shuffleInitialTrackId: string | null | undefined,
@@ -106,6 +106,11 @@ function sortColumns(
     {
       row: sql`coalesce(${tracksTable.artistOverride}, ${tracksTable.artist}, '')`,
       cursor: sql`coalesce(c."artistOverride", c.artist, '')`,
+    },
+    {
+      // Year is free text; extract its leading digits and sort numerically (2011 before 2002) rather than lexically. Negated so the otherwise-ascending order runs newest-first; untagged tracks coalesce to 0 and trail.
+      row: sql`-coalesce(substring(coalesce(${tracksTable.yearOverride}, ${tracksTable.year}, '') from '[0-9]+')::int, 0)`,
+      cursor: sql`-coalesce(substring(coalesce(c."yearOverride", c.year, '') from '[0-9]+')::int, 0)`,
     },
     {
       row: sql`coalesce(${tracksTable.albumOverride}, ${tracksTable.album}, '')`,
@@ -179,7 +184,7 @@ export type TrackPageOpts = {
 };
 
 /**
- * List the library in Relay-cursor pagination order: by `artist`, `album`, `discNumber`, `trackNumber`, then `id` for stability. Supply exactly one of `first`/`last` and at most one of `after`/`before`.
+ * List the library in Relay-cursor pagination order: by `artist`, `year` (descending), `album`, `discNumber`, `trackNumber`, then `id` for stability. Supply exactly one of `first`/`last` and at most one of `after`/`before`.
  *
  * Pass `offset` instead to fetch an arbitrary window (`first` rows from that zero-based index) in the same order — used for index-addressed scrolling (e.g. the letter scrubber jumping anywhere without paging through the gaps). When `offset` is set, the cursor arguments are ignored.
  *

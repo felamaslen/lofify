@@ -73,6 +73,7 @@ type Seed = {
   id?: string;
   artist: string | null;
   album: string | null;
+  year?: string | null;
   discNumber: number | null;
   trackNumber: number | null;
   title: string;
@@ -90,7 +91,7 @@ async function seed(rows: Seed[]) {
       discNumber: r.discNumber,
       artist: r.artist,
       album: r.album,
-      year: null,
+      year: r.year ?? null,
       format: r.format,
       codec: r.codec,
       bitRate: null,
@@ -104,67 +105,74 @@ async function seed(rows: Seed[]) {
   );
 }
 
-test('Query.tracks paginates forward in artist/album/disc/track order', async () => {
+test('Query.tracks paginates forward in artist/year-desc/album/disc/track order', async () => {
   await seed([
     {
       artist: 'B',
       album: 'B1',
+      year: '2050',
       discNumber: 1,
       trackNumber: 1,
-      title: 'b1-1',
+      title: 'b-2050',
       format: 'mp3',
       codec: 'mp3',
       durationSeconds: 100,
     },
     {
       artist: 'A',
-      album: 'A2',
+      album: 'Zebra',
+      year: '2011',
       discNumber: 1,
       trackNumber: 1,
-      title: 'a2-1',
+      title: 'a-2011-zebra',
       format: 'mp3',
       codec: 'mp3',
       durationSeconds: 100,
     },
     {
       artist: 'A',
-      album: 'A1',
-      discNumber: 2,
+      album: 'Beta',
+      year: '2002',
+      discNumber: 1,
       trackNumber: 1,
-      title: 'a1-2-1',
+      title: 'a-2002-beta',
       format: 'mp3',
       codec: 'mp3',
       durationSeconds: 100,
     },
     {
       artist: 'A',
-      album: 'A1',
+      album: 'Alpha',
+      year: '2002',
       discNumber: 1,
       trackNumber: 2,
-      title: 'a1-1-2',
+      title: 'a-2002-alpha-t2',
       format: 'mp3',
       codec: 'mp3',
       durationSeconds: 100,
     },
     {
       artist: 'A',
-      album: 'A1',
+      album: 'Alpha',
+      year: '2002',
       discNumber: 1,
       trackNumber: 1,
-      title: 'a1-1-1',
+      title: 'a-2002-alpha-t1',
       format: 'mp3',
       codec: 'mp3',
       durationSeconds: 100,
     },
   ]);
 
+  // Artist outranks year (all of A precedes B's 2050), year is newest-first (2011 before 2002),
+  // and album groups within a year (Alpha before Beta, both 2002) ahead of disc/track.
   const { data: first } = await gqlRequest(app)
     .query(TracksQuery)
     .variables({ first: 2, last: null, after: null, before: null })
     .expectNoErrors();
   const page1 = first.tracks!;
   expect(page1.totalCount).toBe(5);
-  expect(page1.edges.map((e) => e.node.title)).toEqual(['a1-1-1', 'a1-1-2']);
+  expect(page1.edges.map((e) => e.node.title)).toEqual(['a-2011-zebra', 'a-2002-alpha-t1']);
   expect(page1.edges.map((e) => e.cursor)).toEqual(page1.edges.map((e) => e.node.id));
   expect(page1.pageInfo.endCursor).toBe(page1.edges.at(-1)!.node.id);
   expect(page1.pageInfo.hasNextPage).toBe(true);
@@ -175,7 +183,7 @@ test('Query.tracks paginates forward in artist/album/disc/track order', async ()
     .variables({ first: 2, last: null, after: page1.pageInfo.endCursor, before: null })
     .expectNoErrors();
   const page2 = second.tracks!;
-  expect(page2.edges.map((e) => e.node.title)).toEqual(['a1-2-1', 'a2-1']);
+  expect(page2.edges.map((e) => e.node.title)).toEqual(['a-2002-alpha-t2', 'a-2002-beta']);
   expect(page2.pageInfo.hasNextPage).toBe(true);
   expect(page2.pageInfo.hasPreviousPage).toBe(true);
 
@@ -184,8 +192,31 @@ test('Query.tracks paginates forward in artist/album/disc/track order', async ()
     .variables({ first: 2, last: null, after: page2.pageInfo.endCursor, before: null })
     .expectNoErrors();
   const page3 = third.tracks!;
-  expect(page3.edges.map((e) => e.node.title)).toEqual(['b1-1']);
+  expect(page3.edges.map((e) => e.node.title)).toEqual(['b-2050']);
   expect(page3.pageInfo.hasNextPage).toBe(false);
+});
+
+test('Query.tracks orders years numerically and newest-first, not lexically', async () => {
+  // Lexical text sort would give 100 < 2002 < 2011 < 99; numeric descending gives 2011, 2002, 100, 99.
+  await seed(
+    ['2011', '100', '2002', '99'].map((year) => ({
+      artist: 'A',
+      album: 'A1',
+      year,
+      discNumber: 1,
+      trackNumber: 1,
+      title: `y${year}`,
+      format: 'mp3',
+      codec: 'mp3',
+      durationSeconds: 100,
+    })),
+  );
+
+  const { data } = await gqlRequest(app)
+    .query(TracksQuery)
+    .variables({ first: 100, last: null, after: null, before: null })
+    .expectNoErrors();
+  expect(data.tracks!.edges.map((e) => e.node.title)).toEqual(['y2011', 'y2002', 'y100', 'y99']);
 });
 
 test('Query.tracks paginates backward with last/before', async () => {

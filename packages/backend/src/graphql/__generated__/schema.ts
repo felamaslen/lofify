@@ -787,7 +787,7 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
                     }
                 },
                 tracks: {
-                    description: "List the library in Relay-cursor pagination order: by `artist`, `album`, `discNumber`, `trackNumber`, then `id` for stability. Supply exactly one of `first`/`last` and at most one of `after`/`before`.\n\nPass `offset` instead to fetch an arbitrary window (`first` rows from that zero-based index) in the same order \u2014 used for index-addressed scrolling (e.g. the letter scrubber jumping anywhere without paging through the gaps). When `offset` is set, the cursor arguments are ignored.",
+                    description: "List the library in Relay-cursor pagination order: by `artist`, `year` (descending), `album`, `discNumber`, `trackNumber`, then `id` for stability. Supply exactly one of `first`/`last` and at most one of `after`/`before`.\n\nPass `offset` instead to fetch an arbitrary window (`first` rows from that zero-based index) in the same order \u2014 used for index-addressed scrolling (e.g. the letter scrubber jumping anywhere without paging through the gaps). When `offset` is set, the cursor arguments are ignored.",
                     name: "tracks",
                     type: TrackConnectionType,
                     args: {
