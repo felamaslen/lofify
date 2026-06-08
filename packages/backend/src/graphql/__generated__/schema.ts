@@ -4,6 +4,7 @@
  */
 
 import type { GqlScalar } from "grats";
+import type { DateTime as DateTimeInternal } from "./../date-time.js";
 import type { Upload as UploadInternal } from "./../upload.js";
 import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, GraphQLInt, GraphQLList, specifiedDirectives, GraphQLObjectType, GraphQLString, GraphQLBoolean, GraphQLID, GraphQLUnionType, GraphQLInterfaceType, GraphQLEnumType, GraphQLInputObjectType, GraphQLScalarType, GraphQLFloat } from "graphql";
 import { artistIndex as queryArtistIndexResolver, track as queryTrackResolver, tracks as queryTracksResolver } from "./../track-queries.js";
@@ -26,6 +27,7 @@ async function assertNonNull<T>(value: T | Promise<T>): Promise<T> {
 }
 export type SchemaConfig = {
     scalars: {
+        DateTime: GqlScalar<DateTimeInternal>;
         Upload: GqlScalar<UploadInternal>;
     };
 };
@@ -1205,6 +1207,11 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
             };
         }
     });
+    const DateTimeType: GraphQLScalarType = new GraphQLScalarType({
+        description: "An instant in time, serialised as an ISO 8601 string in UTC (e.g. `2026-06-08T15:42:49.000Z`).",
+        name: "DateTime",
+        ...config.scalars.DateTime
+    });
     const MediaSizeType: GraphQLEnumType = new GraphQLEnumType({
         description: "Pre-defined rendered sizes for media previews.",
         name: "MediaSize",
@@ -1282,7 +1289,7 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
         query: QueryType,
         mutation: MutationType,
         subscription: SubscriptionType,
-        types: [UploadType, MediaSizeType, QualityType, TrackArtworkType, MediaType, TrackFormatType, AlbumType, AlbumConnectionType, AlbumEdgeType, ArtistType, ArtistConnectionType, ArtistEdgeType, ArtistInitialType, ArtistSynonymType, ArtworkType, ArtworkStatusType, DeliveryTierType, DurationType, ImageType, ImageSourceType, LibraryScanType, MutationType, PageInfoType, PlaybackQueueType, QueryType, SearchType, SubscriptionType, TrackType, TrackConnectionType, TrackDeliveryType, TrackEdgeType, TrackManifestType, TrackManifestChunkType, TrackManifestInitType, VoidType]
+        types: [DateTimeType, UploadType, MediaSizeType, QualityType, TrackArtworkType, MediaType, TrackFormatType, AlbumType, AlbumConnectionType, AlbumEdgeType, ArtistType, ArtistConnectionType, ArtistEdgeType, ArtistInitialType, ArtistSynonymType, ArtworkType, ArtworkStatusType, DeliveryTierType, DurationType, ImageType, ImageSourceType, LibraryScanType, MutationType, PageInfoType, PlaybackQueueType, QueryType, SearchType, SubscriptionType, TrackType, TrackConnectionType, TrackDeliveryType, TrackEdgeType, TrackManifestType, TrackManifestChunkType, TrackManifestInitType, VoidType]
     });
 }
 const typeNameMap = new Map();

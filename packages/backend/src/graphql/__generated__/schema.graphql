@@ -10,6 +10,11 @@ Marks a field that is null only when an error has been propagated into it — ne
 directive @semanticNonNull(levels: [Int!]) on FIELD_DEFINITION
 
 """
+An instant in time, serialised as an ISO 8601 string in UTC (e.g. `2026-06-08T15:42:49.000Z`).
+"""
+scalar DateTime
+
+"""
 A file sent with the [GraphQL multipart request spec](https://github.com/jaydenseric/graphql-multipart-request-spec). The multipart hook in `app.ts` replaces the mapped variable with an instance carrying the streamed file; resolvers await its `promise` for the filename, MIME type and stream.
 """
 scalar Upload
