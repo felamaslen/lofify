@@ -9,7 +9,7 @@ import { usePlayer } from '../state/player.tsx';
 import { Input } from './ui/input.tsx';
 
 const SearchDocument = graphql(`
-  query Search($query: String!) {
+  query Search($query: String!, $skipFilename: Boolean!) {
     search(query: $query) {
       artists {
         edges {
@@ -37,9 +37,20 @@ const SearchDocument = graphql(`
           }
         }
       }
+      tracksByFilename @skip(if: $skipFilename) {
+        edges {
+          node {
+            id
+            path
+          }
+        }
+      }
     }
   }
 `);
+
+/** Filename search only kicks in from this query length; shorter queries match too much of every path to be useful. */
+const MIN_FILENAME_QUERY = 3;
 
 const DEBOUNCE_MS = 200;
 
@@ -47,7 +58,16 @@ const DEBOUNCE_MS = 200;
 type Item =
   | { kind: 'artist'; label: string; name: string }
   | { kind: 'album'; label: string; name: string; artists: string[] }
-  | { kind: 'track'; label: string; sublabel: string | null; id: string };
+  | { kind: 'track'; label: string; sublabel: string | null; id: string }
+  | { kind: 'filename'; path: string; id: string };
+
+/** Split a path into its directory prefix (with trailing slash) and its basename. */
+function splitPath(path: string): { dir: string; base: string } {
+  const i = path.lastIndexOf('/');
+  return i === -1
+    ? { dir: '', base: path }
+    : { dir: path.slice(0, i + 1), base: path.slice(i + 1) };
+}
 
 export function SearchBox() {
   const { play } = usePlayer();
@@ -68,7 +88,12 @@ export function SearchBox() {
 
   const { data, isFetching } = useQuery({
     queryKey: ['search', query],
-    queryFn: ({ signal }) => gqlRequest(SearchDocument, { query }, signal),
+    queryFn: ({ signal }) =>
+      gqlRequest(
+        SearchDocument,
+        { query, skipFilename: query.length < MIN_FILENAME_QUERY },
+        signal,
+      ),
     enabled: query.length > 0,
     placeholderData: (prev) => prev,
   });
@@ -95,6 +120,9 @@ export function SearchBox() {
           sublabel: e.node.artist,
           id: e.node.id,
         }),
+      ),
+      ...(search.tracksByFilename?.edges ?? []).map(
+        (e): Item => ({ kind: 'filename', path: e.node.path, id: e.node.id }),
       ),
     ];
   }, [data]);
@@ -131,6 +159,7 @@ export function SearchBox() {
         setAlbumFilter(item.name, item.artists.length === 1 ? item.artists[0]! : null);
         break;
       case 'track':
+      case 'filename':
         play(item.id);
         break;
     }
@@ -197,6 +226,7 @@ const GROUP_LABELS: Record<Item['kind'], string> = {
   artist: 'Artists',
   album: 'Albums',
   track: 'Tracks',
+  filename: 'Matched by filename',
 };
 
 function Groups({
@@ -234,7 +264,14 @@ function Groups({
                 index === active && 'bg-accent/60',
               )}
             >
-              <span className="truncate">{item.label}</span>
+              {item.kind === 'filename' ? (
+                <span className="flex min-w-0 items-baseline">
+                  <span className="truncate text-muted-foreground">{splitPath(item.path).dir}</span>
+                  <span className="shrink-0 font-semibold">{splitPath(item.path).base}</span>
+                </span>
+              ) : (
+                <span className="truncate">{item.label}</span>
+              )}
               {item.kind === 'track' && item.sublabel && (
                 <span className="truncate text-xs text-muted-foreground">{item.sublabel}</span>
               )}

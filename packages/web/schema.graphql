@@ -433,7 +433,7 @@ type Query {
   """
   playbackQueue(id: ID): PlaybackQueue @semanticNonNull
   """
-  Search the library for artists, albums and tracks whose name matches `query` as a case-insensitive prefix. Returns `null` for a blank query.
+  Search the library for artists, albums and tracks whose name matches `query` as a case-insensitive prefix, plus tracks whose file path contains `query` as a substring. Returns `null` for a blank query.
   """
   search(query: String!): Search
   """
@@ -483,6 +483,15 @@ type Search {
   artists: ArtistConnection!
   """Tracks whose title matches the query, in library order."""
   tracks: TrackConnection!
+  """
+  Tracks whose file path contains the query, matched as a substring rather than a prefix, ordered by path. Surfaces recordings whose tags are missing or wrong but whose filename carries the query. Paginated (default page size 10), since a substring path match can be broad.
+  """
+  tracksByFilename(
+    """Continue after this cursor — a track `id` from a previous page's edge."""
+    after: ID
+    """Maximum number of rows to return. Defaults to 10."""
+    first: Int
+  ): TrackConnection!
 }
 
 type Subscription {
