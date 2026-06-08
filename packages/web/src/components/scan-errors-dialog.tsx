@@ -115,7 +115,7 @@ export function ScanErrorsDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="max-h-[60vh] overflow-y-auto -mx-1 px-1">
+        <div className="min-w-0 max-h-[60vh] overflow-y-auto -mx-1 px-1">
           {isLoading ? (
             <div className="flex items-center justify-center py-10 text-muted-foreground">
               <Loader2 className="h-5 w-5 animate-spin" />
@@ -131,7 +131,7 @@ export function ScanErrorsDialog({
                 return (
                   <li
                     key={node.id}
-                    className="flex items-center gap-3 rounded-md border border-border bg-card/40 px-3 py-2"
+                    className="flex min-w-0 items-center gap-3 rounded-md border border-border bg-card/40 px-3 py-2"
                   >
                     <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
                     <div className="min-w-0 flex-1">
