@@ -763,6 +763,24 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
                     description: "Tracks whose title matches the query, in library order.",
                     name: "tracks",
                     type: new GraphQLNonNull(TrackConnectionType)
+                },
+                tracksByFilename: {
+                    description: "Tracks whose file path contains the query, matched as a substring rather than a prefix, ordered by path. Surfaces recordings whose tags are missing or wrong but whose filename carries the query. Paginated (default page size 10), since a substring path match can be broad.",
+                    name: "tracksByFilename",
+                    type: new GraphQLNonNull(TrackConnectionType),
+                    args: {
+                        after: {
+                            description: "Continue after this cursor \u2014 a track `id` from a previous page's edge.",
+                            type: GraphQLID
+                        },
+                        first: {
+                            description: "Maximum number of rows to return. Defaults to 10.",
+                            type: GraphQLInt
+                        }
+                    },
+                    resolve(source, args) {
+                        return source.tracksByFilename(args.first, args.after);
+                    }
                 }
             };
         }
@@ -850,7 +868,7 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
                     }
                 },
                 search: {
-                    description: "Search the library for artists, albums and tracks whose name matches `query` as a case-insensitive prefix. Returns `null` for a blank query.",
+                    description: "Search the library for artists, albums and tracks whose name matches `query` as a case-insensitive prefix, plus tracks whose file path contains `query` as a substring. Returns `null` for a blank query.",
                     name: "search",
                     type: SearchType,
                     args: {

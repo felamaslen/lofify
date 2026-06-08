@@ -44,6 +44,24 @@ const SearchQuery = graphql(`
   }
 `);
 
+const FilenameSearchQuery = graphql(`
+  query FilenameSearch($query: String!) {
+    search(query: $query) {
+      tracks {
+        totalCount
+      }
+      tracksByFilename {
+        totalCount
+        edges {
+          node {
+            title
+          }
+        }
+      }
+    }
+  }
+`);
+
 const FilteredTracksQuery = graphql(`
   query FilteredTracks($filterArtistIn: [String!], $filterAlbumIn: [String!]) {
     tracks(first: 100, filterArtistIn: $filterArtistIn, filterAlbumIn: $filterAlbumIn) {
@@ -124,6 +142,22 @@ test('Query.search matches artists, albums and tracks case-insensitively', async
   expect(s.tracks.edges.map((e) => e.node.title)).toEqual(['Da Funk']);
   // No album title starts with "da".
   expect(s.albums.totalCount).toBe(0);
+});
+
+test('Query.search.tracksByFilename matches a path substring that the name groups do not', async () => {
+  await seed([
+    { artist: 'Beethoven Collection', album: 'Vol 1', title: 'Sonata' },
+    { artist: 'Mozart', album: 'Vol 2', title: 'Requiem' },
+  ]);
+
+  // "ethoven" is mid-string: it prefixes no artist/album/title, but it is a
+  // substring of the first track's file path (/library/Beethoven Collection/...).
+  const { data } = await gqlRequest(app)
+    .query(FilenameSearchQuery)
+    .variables({ query: 'ethoven' })
+    .expectNoErrors();
+  expect(data.search!.tracks.totalCount).toBe(0);
+  expect(data.search!.tracksByFilename.edges.map((e) => e.node.title)).toEqual(['Sonata']);
 });
 
 test('Query.search matches only the beginning of the string, not a mid-string substring', async () => {

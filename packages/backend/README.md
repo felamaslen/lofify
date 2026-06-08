@@ -141,7 +141,12 @@ default; pass `includeDuplicates: true` to include every copy.
 (start of string) against the effective artist, album, and title, and
 returns three relay-style connections: `artists`, `albums`, and
 `tracks`. Each group is resolved independently and capped (no
-pagination — it backs a top-N dropdown). A blank query returns `null`.
+pagination — it backs a top-N dropdown). A fourth group,
+`tracksByFilename`, matches `query` as a **substring** of the file path
+(not a prefix) — surfacing recordings whose tags are missing or wrong
+but whose path carries the query — and unlike the others is genuinely
+paginated (`first`/`after`, default page size 10), since a substring
+path match can be broad. A blank query returns `null`.
 An `Album` carries every artist credited across its tracks (`artists`),
 so a multi-artist album isn't collapsed to one. `artists` also matches
 on registered synonyms (see below), always returning the canonical
