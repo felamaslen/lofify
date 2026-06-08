@@ -12,7 +12,7 @@ export const scanErrors = pgTable(
       .default(sql`uuidv7()`),
     /** Absolute path of the file that failed. */
     file: text('file').notNull(),
-    /** Short, human-readable category of the failure (e.g. "I/O error", "Could not read audio metadata"), shown to the user when reviewing errors. */
+    /** Short, human-readable category of the failure, shown to the user when reviewing errors. Currently always "Unknown error"; finer categories will be added as real failures surface in production. */
     message: text('message').notNull(),
     /** Full error stack of the most recent attempt, kept for server-side diagnosis. */
     stack: text('stack').notNull(),

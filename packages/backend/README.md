@@ -19,7 +19,9 @@ src/
                 walks every library root, classifies discovered files
                 against `Tracks` in batches, and feeds a priority queue:
                 new files are parsed first, changed files next, and
-                unchanged files are skipped.
+                unchanged files are skipped. Files that failed a previous
+                read are recorded in `ScanErrors` and skipped until
+                retried by hand; `force` re-attempts them.
   playback/     `/play/...` HTTP route, HMAC-signed URLs, unified
                 per-entry encoded cache (.bin + .idx live-tail), and
                 ffmpeg encoder.

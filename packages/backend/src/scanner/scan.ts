@@ -11,6 +11,7 @@ import { dedupKeyOf, deleteTrackAndRecompute, recomputeKeysInTx } from '../dedup
 import { env } from '../env.js';
 import { logger } from '../logger.js';
 import { AUDIO_EXTENSIONS } from './audio-extensions.js';
+import { clearFileError, erroredFilesIn, recordFileError } from './error-store.js';
 import { parseTrack } from './parse.js';
 import { AsyncPriorityQueue } from './priority-queue.js';
 import {
@@ -53,9 +54,21 @@ export async function upsertTrack(file: string): Promise<void> {
   });
 }
 
-/** Remove the `Tracks` row matching the given absolute path, if any, and re-rank its former duplicate group. */
+/** Parse and upsert `file`, maintaining its `ScanErrors` row as a side effect: a clean parse clears any prior error, a failure records (or refreshes) one. The error row is written regardless; the original error is re-thrown so callers can still log and update their own metrics. This is the single funnel for scan workers, the watcher, and manual retries, so the persisted-error invariant holds no matter which triggered the read. */
+export async function upsertTrackTracked(file: string): Promise<void> {
+  try {
+    await upsertTrack(file);
+    await clearFileError(file);
+  } catch (err) {
+    await recordFileError(file, err);
+    throw err;
+  }
+}
+
+/** Remove the `Tracks` row matching the given absolute path, if any, re-rank its former duplicate group, and drop any error row for the file. */
 export async function deleteTrackByFile(file: string): Promise<void> {
   await deleteTrackAndRecompute(file);
+  await clearFileError(file);
 }
 
 const tracer = trace.getTracer('lofify.scanner');
@@ -81,7 +94,7 @@ export function scanLibrary(roots: string[], opts: { force?: boolean } = {}): Sc
   const upsertScannedTrack = async (file: string) => {
     if (state.abort.signal.aborted) return;
     try {
-      await upsertTrack(file);
+      await upsertTrackTracked(file);
       state.scannedTotal += 1;
     } catch (err) {
       logger.error(
@@ -93,7 +106,7 @@ export function scanLibrary(roots: string[], opts: { force?: boolean } = {}): Sc
     }
   };
 
-  /** Classify a batch of discovered entries against the DB in one query, queueing those that need work. Unchanged files count towards `scannedTotal` (they are verified, just not re-parsed) so progress still reaches `filesTotal`. */
+  /** Classify a batch of discovered entries against the DB in one query, queueing those that need work. Files with a recorded error are skipped until retried by hand, unless `force` is set. Skipped files (unchanged or errored) count towards `scannedTotal` so progress still reaches `filesTotal`. */
   const classifyBatch = async (batch: Entry[]) => {
     if (state.abort.signal.aborted || batch.length === 0) return;
     const paths = batch.map((e) => e.path);
@@ -102,8 +115,13 @@ export function scanLibrary(roots: string[], opts: { force?: boolean } = {}): Sc
       .from(tracks)
       .where(inArray(tracks.file, paths));
     const known = new Map(rows.map((r) => [r.file, r.sourceMtime.getTime()]));
+    const errored = force ? new Set<string>() : await erroredFilesIn(paths);
 
     for (const entry of batch) {
+      if (errored.has(entry.path)) {
+        state.scannedTotal += 1;
+        continue;
+      }
       const knownMs = known.get(entry.path);
       if (knownMs === undefined) {
         queue.push(entry.path, PRIORITY_NEW);
