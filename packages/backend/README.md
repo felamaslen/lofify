@@ -93,6 +93,25 @@ columns, so overrides survive rescans. Every read (`Query.track`,
 `Query.tracks`, including the pagination sort) returns the effective
 value, `coalesce(override, scanned)`.
 
+## Scan errors
+
+A file that throws while being read (during a scan or a watch event) is
+recorded in `ScanErrors`, keyed by path, with a human-readable category
+and the full stack. A recorded file is **skipped on every subsequent
+scan** until it is dealt with by hand, so one broken file never gets
+re-attempted endlessly; `force` re-attempts it regardless. The row
+clears automatically when the file later scans cleanly or is deleted.
+
+`Query.libraryScanErrors` pages through the recorded errors (newest
+first). `Mutation.libraryScanErrorRetry(id)` re-reads the file —
+clearing the error on success, refreshing it on repeated failure — and
+`Mutation.libraryScanErrorDismiss(id)` drops it from the list without
+retrying.
+
+The `message` category is `"Unknown error"` for everything today;
+finer categories will be filled in (`scanner/error-category.ts`) as real
+failures surface in production.
+
 ## Deduplication
 
 The library often holds the same recording several times — a FLAC and an

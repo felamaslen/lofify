@@ -32,3 +32,18 @@ export async function erroredFilesIn(paths: string[]): Promise<Set<string>> {
     .where(inArray(scanErrors.file, paths));
   return new Set(rows.map((r) => r.file));
 }
+
+/** Look up the file path of an error row by its id, or null if the row is gone (already retried or dismissed). */
+export async function scanErrorFileById(id: string): Promise<string | null> {
+  const [row] = await db
+    .select({ file: scanErrors.file })
+    .from(scanErrors)
+    .where(eq(scanErrors.id, id))
+    .limit(1);
+  return row?.file ?? null;
+}
+
+/** Remove an error row by id, dropping it from the review list without retrying the file. */
+export async function deleteScanError(id: string): Promise<void> {
+  await db.delete(scanErrors).where(eq(scanErrors.id, id));
+}
