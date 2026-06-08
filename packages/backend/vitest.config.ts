@@ -27,7 +27,7 @@ export default defineConfig({
     silent: 'passed-only',
     globals: true,
     globalSetup: ['src/test/global-setup.ts'],
-    setupFiles: ['src/test/setup-db.ts'],
+    setupFiles: ['src/test/setup-db.ts', 'src/test/setup-library.ts'],
     env: {
       LIBRARY_PATH: libraryPath,
       DATABASE_URL: databaseUrl,
