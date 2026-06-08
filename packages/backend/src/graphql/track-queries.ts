@@ -104,8 +104,9 @@ function sortColumns(
   }
   return [
     {
-      row: sql`coalesce(${tracksTable.artistOverride}, ${tracksTable.artist}, '')`,
-      cursor: sql`coalesce(c."artistOverride", c.artist, '')`,
+      // Case-insensitive: "deadmau5" must sort next to "Deadmau5", not after every capitalised artist.
+      row: sql`lower(coalesce(${tracksTable.artistOverride}, ${tracksTable.artist}, ''))`,
+      cursor: sql`lower(coalesce(c."artistOverride", c.artist, ''))`,
     },
     {
       // Year is free text; extract its leading digits and sort numerically (2011 before 2002) rather than lexically. Negated so the otherwise-ascending order runs newest-first; untagged tracks coalesce to 0 and trail.
@@ -113,8 +114,8 @@ function sortColumns(
       cursor: sql`-coalesce(substring(coalesce(c."yearOverride", c.year, '') from '[0-9]+')::int, 0)`,
     },
     {
-      row: sql`coalesce(${tracksTable.albumOverride}, ${tracksTable.album}, '')`,
-      cursor: sql`coalesce(c."albumOverride", c.album, '')`,
+      row: sql`lower(coalesce(${tracksTable.albumOverride}, ${tracksTable.album}, ''))`,
+      cursor: sql`lower(coalesce(c."albumOverride", c.album, ''))`,
     },
     {
       row: sql`coalesce(${tracksTable.discNumberOverride}, ${tracksTable.discNumber}, 0)`,
