@@ -152,6 +152,23 @@ test('Subscription.libraryScan: errorMessage reports failed files on the final f
   expect(last.errorMessage).toBe('1 file failed to scan');
 });
 
+test('a filename containing a backslash is scanned, not mangled into a missing path', async () => {
+  // A literal backslash in a name (Windows-style paths flattened onto the NAS)
+  // used to be rewritten to a forward slash by the glob walker, yielding a path
+  // that stat() reported as missing. The direct walk preserves the bytes, so the
+  // file is found and ingested normally.
+  await copyFile(
+    path.join(fixturesDir, 'sample.flac'),
+    path.join(env.LIBRARY_PATH, 'Artist\\Album.flac'),
+  );
+
+  const { data } = await gqlRequest(app).mutate(LibraryScanStartMutation).expectNoErrors();
+  const last = (await drainScanStream(data.libraryScanStart.id)).at(-1)!;
+  expect(last.filesTotal).toBe(1);
+  expect(last.scannedTotal).toBe(1);
+  expect(last.errorsTotal).toBe(0);
+});
+
 test('a file that fails to scan is recorded once, then skipped on the next scan unless forced', async () => {
   await writeFile(path.join(env.LIBRARY_PATH, 'broken.flac'), 'not audio');
 

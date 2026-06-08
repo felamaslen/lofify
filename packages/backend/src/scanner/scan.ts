@@ -1,9 +1,7 @@
 import { stat } from 'node:fs/promises';
-import type { Readable } from 'node:stream';
 
 import { SpanStatusCode, trace } from '@opentelemetry/api';
 import { eq, inArray } from 'drizzle-orm';
-import fg, { type Entry } from 'fast-glob';
 
 import { db } from '../db/client.js';
 import { tracks } from '../db/schema/index.js';
@@ -15,7 +13,6 @@ import {
 } from '../dedup/recompute.js';
 import { env } from '../env.js';
 import { logger } from '../logger.js';
-import { AUDIO_EXTENSIONS } from './audio-extensions.js';
 import { clearFileError, erroredFilesIn, recordFileError } from './error-store.js';
 import { parseTrack } from './parse.js';
 import { AsyncPriorityQueue } from './priority-queue.js';
@@ -26,6 +23,7 @@ import {
   recordScanError,
   type ScanState,
 } from './runner.js';
+import { type FoundFile, walkAudioFiles } from './walk.js';
 
 /** Parse `file` and write the result to `Tracks`, replacing the existing row keyed by absolute path. Zero-byte files (placeholders, interrupted copies) are skipped silently rather than treated as parse failures. */
 export async function upsertTrack(file: string): Promise<void> {
@@ -102,7 +100,7 @@ const PRIORITY_CHANGED = 0;
 /** Number of discovered files classified per DB lookup. Bounds the `WHERE file IN (...)` size and the producer's working memory rather than preloading the whole library. */
 const CLASSIFY_BATCH_SIZE = 100;
 
-/** Kick off a full library scan across `roots`. Returns the initial scan state synchronously with `filesTotal: null`. Discovery (fast-glob streaming), classification and parsing/upserts run concurrently in the background. Each discovered file is classified in batches against `Tracks`: brand-new files are queued at high priority, files whose mtime changed at low priority, and unchanged files are skipped entirely. Pass `force` to re-parse every known file regardless of mtime — used to backfill columns added since the rows were last written. `filesTotal` is populated when the walk finishes; subscribers are notified on each milestone. */
+/** Kick off a full library scan across `roots`. Returns the initial scan state synchronously with `filesTotal: null`. Discovery (a recursive directory walk), classification and parsing/upserts run concurrently in the background. Each discovered file is classified in batches against `Tracks`: brand-new files are queued at high priority, files whose mtime changed at low priority, and unchanged files are skipped entirely. Pass `force` to re-parse every known file regardless of mtime — used to backfill columns added since the rows were last written. `filesTotal` is populated when the walk finishes; subscribers are notified on each milestone. */
 export function scanLibrary(roots: string[], opts: { force?: boolean } = {}): ScanState {
   const force = opts.force ?? false;
   const state = createScan();
@@ -128,7 +126,7 @@ export function scanLibrary(roots: string[], opts: { force?: boolean } = {}): Sc
   };
 
   /** Classify a batch of discovered entries against the DB in one query, queueing those that need work. Files with a recorded error are skipped until retried by hand, unless `force` is set. Skipped files (unchanged or errored) count towards `scannedTotal` so progress still reaches `filesTotal`. */
-  const classifyBatch = async (batch: Entry[]) => {
+  const classifyBatch = async (batch: FoundFile[]) => {
     if (state.abort.signal.aborted || batch.length === 0) return;
     const paths = batch.map((e) => e.path);
     const rows = await db
@@ -146,7 +144,7 @@ export function scanLibrary(roots: string[], opts: { force?: boolean } = {}): Sc
       const knownMs = known.get(entry.path);
       if (knownMs === undefined) {
         queue.push(entry.path, PRIORITY_NEW);
-      } else if (force || Math.floor(entry.stats!.mtimeMs) !== knownMs) {
+      } else if (force || Math.floor(entry.mtimeMs) !== knownMs) {
         queue.push(entry.path, PRIORITY_CHANGED);
       } else {
         state.scannedTotal += 1;
@@ -155,24 +153,7 @@ export function scanLibrary(roots: string[], opts: { force?: boolean } = {}): Sc
   };
 
   void (async () => {
-    const pattern = `**/*.{${AUDIO_EXTENSIONS.join(',')}}`;
-    const streams = roots.map(
-      (root) =>
-        fg.stream(pattern, {
-          cwd: root,
-          absolute: true,
-          onlyFiles: true,
-          caseSensitiveMatch: false,
-          suppressErrors: true,
-          stats: true,
-          objectMode: true,
-        }) as Readable,
-    );
-
-    const onAbort = () => {
-      for (const stream of streams) stream.destroy();
-      queue.close();
-    };
+    const onAbort = () => queue.close();
     if (state.abort.signal.aborted) onAbort();
     else state.abort.signal.addEventListener('abort', onAbort, { once: true });
 
@@ -186,9 +167,9 @@ export function scanLibrary(roots: string[], opts: { force?: boolean } = {}): Sc
 
     const produce = async () => {
       let discovered = 0;
-      let batch: Entry[] = [];
-      for (const stream of streams) {
-        for await (const entry of stream as AsyncIterable<Entry>) {
+      let batch: FoundFile[] = [];
+      for (const root of roots) {
+        for await (const entry of walkAudioFiles(root, state.abort.signal)) {
           if (state.abort.signal.aborted) return;
           discovered += 1;
           batch.push(entry);

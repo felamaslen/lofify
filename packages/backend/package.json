@@ -33,7 +33,6 @@
     "chokidar": "^5.0.0",
     "croner": "^10.0.1",
     "drizzle-orm": "^0.45.2",
-    "fast-glob": "^3.3.3",
     "fastify": "^5.8.5",
     "file-type": "^22.0.1",
     "graphql": "^16.14.0",
