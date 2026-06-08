@@ -6,8 +6,17 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { graphql } from '../lib/gql.ts';
 import { gqlRequest } from '../lib/gql-request.ts';
 import { subscribe } from '../lib/sse-client.ts';
+import { ScanErrorsDialog } from './scan-errors-dialog.tsx';
 import { Button } from './ui/button.tsx';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip.tsx';
+
+const LibraryScanErrorCountDocument = graphql(`
+  query LibraryScanErrorCount {
+    libraryScanErrors(first: 0) {
+      totalCount
+    }
+  }
+`);
 
 const LibraryScanProgressDocument = graphql(`
   fragment LibraryScanProgress on LibraryScan {
@@ -16,7 +25,6 @@ const LibraryScanProgressDocument = graphql(`
     scannedTotal
     errorsTotal
     isCompleted
-    errorMessage
   }
 `);
 
@@ -84,6 +92,12 @@ function percentOf(scan: Snapshot): number | null {
 
 export function RescanButton() {
   const queryClient = useQueryClient();
+  const [errorsOpen, setErrorsOpen] = useState(false);
+  const errorCountQuery = useQuery({
+    queryKey: ['libraryScanErrors', 'count'],
+    queryFn: ({ signal }) => gqlRequest(LibraryScanErrorCountDocument, {}, signal),
+  });
+  const errorCount = errorCountQuery.data?.libraryScanErrors?.totalCount ?? 0;
   const [scan, setScan] = useState<Snapshot | null>(null);
   const [force, setForce] = useState(false);
   const timer = useRef(0);
@@ -200,24 +214,28 @@ export function RescanButton() {
   const percent = scan ? percentOf(scan) : null;
   const fillPercent = phase === 'indeterminate' ? 60 : (percent ?? 0);
   const disabled = showProgress;
-  const showWarning = scan != null && scan.errorsTotal > 0;
 
   return (
     <TooltipProvider delayDuration={150}>
       <div className="flex flex-col gap-2">
         <div className="flex items-center gap-2">
-          {showWarning && (
+          {errorCount > 0 && (
             <Tooltip>
               <TooltipTrigger asChild>
-                <span
-                  role="img"
-                  aria-label="scan errors"
-                  className="inline-flex h-5 w-5 items-center justify-center text-yellow-500"
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setErrorsOpen(true)}
+                  className="text-amber-600 dark:text-amber-500"
                 >
-                  <AlertTriangle className="h-5 w-5" />
-                </span>
+                  <AlertTriangle />
+                  {errorCount}
+                </Button>
               </TooltipTrigger>
-              <TooltipContent>{scan?.errorMessage ?? 'Scan errors'}</TooltipContent>
+              <TooltipContent>
+                Review {errorCount} scan error{errorCount === 1 ? '' : 's'}
+              </TooltipContent>
             </Tooltip>
           )}
           <div className="group relative">
@@ -284,6 +302,7 @@ export function RescanButton() {
           Re-read every file (slower) — backfills newly captured details
         </label>
       </div>
+      <ScanErrorsDialog open={errorsOpen} onOpenChange={setErrorsOpen} />
     </TooltipProvider>
   );
 }

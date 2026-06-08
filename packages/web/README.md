@@ -49,7 +49,11 @@ with the active background.
 Playback is MSE-only. A gear button in the playback bar's right section
 opens a settings dialog holding the appearance, library rescan, quality
 and preferred format controls (the latter two are pill toggles —
-`ToggleGroup`):
+`ToggleGroup`). When the library holds files that failed to scan, an
+amber warning button sits beside Rescan (`components/rescan-button.tsx`)
+showing the count; it opens a paginated dialog
+(`components/scan-errors-dialog.tsx`) where each error can be retried
+(re-read the file) or dismissed (drop it from the list):
 
 - **Quality** — three modes. `Adaptive` transcodes to a lossy tier whose
   bitrate is chosen automatically from the measured connection speed,
