@@ -7,7 +7,12 @@ import fg, { type Entry } from 'fast-glob';
 
 import { db } from '../db/client.js';
 import { tracks } from '../db/schema/index.js';
-import { dedupKeyOf, deleteTrackAndRecompute, recomputeKeysInTx } from '../dedup/recompute.js';
+import {
+  dedupKeyOf,
+  deleteTrackAndRecompute,
+  lockKeysInTx,
+  recomputeKeysInTx,
+} from '../dedup/recompute.js';
 import { env } from '../env.js';
 import { logger } from '../logger.js';
 import { AUDIO_EXTENSIONS } from './audio-extensions.js';
@@ -39,18 +44,34 @@ export async function upsertTrack(file: string): Promise<void> {
     albumOverride: tracks.albumOverride,
   };
   await db.transaction(async (tx) => {
-    const before = await tx.select(keyCols).from(tracks).where(eq(tracks.file, file)).limit(1);
-    const [after] = await tx
+    const [prior] = await tx.select(keyCols).from(tracks).where(eq(tracks.file, file)).limit(1);
+    const oldKey = prior ? dedupKeyOf(prior) : null;
+    // The upsert writes only the base tags (parseTrack never sets the *Override
+    // columns), so the post-write effective key combines the freshly parsed tags
+    // with whatever overrides the row already carries.
+    const newKey = dedupKeyOf({
+      title: parsed.title ?? null,
+      titleOverride: prior?.titleOverride ?? null,
+      artist: parsed.artist ?? null,
+      artistOverride: prior?.artistOverride ?? null,
+      album: parsed.album ?? null,
+      albumOverride: prior?.albumOverride ?? null,
+    });
+    const keys = [oldKey, newKey];
+    // Lock the affected groups before writing the row. The insert takes a row
+    // lock and the recompute below locks group members; acquiring the advisory
+    // lock first makes every worker order advisory-then-row, so two workers
+    // upserting different files of the same duplicate group serialise rather
+    // than deadlock.
+    await lockKeysInTx(tx, keys);
+    await tx
       .insert(tracks)
       .values({ ...parsed, scannedAt: now, updatedAt: now })
       .onConflictDoUpdate({
         target: tracks.file,
         set: { ...parsed, scannedAt: now, updatedAt: now },
-      })
-      .returning(keyCols);
-    const oldKey = before[0] ? dedupKeyOf(before[0]) : null;
-    const newKey = after ? dedupKeyOf(after) : null;
-    await recomputeKeysInTx(tx, [oldKey, newKey]);
+      });
+    await recomputeKeysInTx(tx, keys);
   });
 }
 
