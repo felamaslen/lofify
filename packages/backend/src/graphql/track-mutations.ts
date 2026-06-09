@@ -8,7 +8,9 @@ import { storeUploadedArtwork } from '../artwork/store.js';
 import { db } from '../db/client.js';
 import { tracks as tracksTable } from '../db/schema/index.js';
 import { dedupKeyOf, recomputeDedupGroups } from '../dedup/recompute.js';
+import { defaultCache } from '../playback/cache.js';
 import { toGqlTrack, type Track } from './track.js';
+import type { Void } from './types.js';
 import type { Upload } from './upload.js';
 
 /**
@@ -87,6 +89,18 @@ export async function trackUpdate(
   const row = rows[0];
   if (!row) throw new Error('Unknown track.');
   return toGqlTrack(row);
+}
+
+/**
+ * Discard every cached transcode of one track — all formats and qualities — so the next playback request produces a fresh encode from the source.
+ *
+ * For recovering a track that was delivered as unplayable bytes: clearing the cache and re-fetching its manifest replaces them. Idempotent; succeeds whether or not anything was cached.
+ *
+ * @gqlMutationField
+ */
+export async function trackClearTranscodeCache(id: ID): Promise<Void> {
+  await defaultCache.invalidateTrack(id);
+  return {};
 }
 
 /** Collect an upload stream into memory. Size is already bounded by the multipart processor's `maxFileSize`. */
