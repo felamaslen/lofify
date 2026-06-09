@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { X } from 'lucide-react';
 import { type KeyboardEvent, useEffect, useId, useMemo, useRef, useState } from 'react';
 
 import { graphql } from '../lib/gql.ts';
@@ -71,7 +72,8 @@ function splitPath(path: string): { dir: string; base: string } {
 
 export function SearchBox() {
   const { play } = usePlayer();
-  const { setArtistFilter, setAlbumFilter } = useLibraryFilter();
+  const { artist, album, clear, setArtistFilter, setAlbumFilter } = useLibraryFilter();
+  const filterLabel = album ? `Album: ${album}` : artist ? `Artist: ${artist}` : null;
 
   const [input, setInput] = useState('');
   const [query, setQuery] = useState('');
@@ -187,22 +189,38 @@ export function SearchBox() {
 
   return (
     <div ref={containerRef} className="relative w-64 max-sm:min-w-0 max-sm:flex-1">
-      <Input
-        type="search"
-        value={input}
-        placeholder="Search…"
-        role="combobox"
-        aria-expanded={showDropdown}
-        aria-controls={listboxId}
-        aria-autocomplete="list"
-        className="h-7 text-sm max-sm:h-10 max-sm:text-base"
-        onChange={(e) => {
-          setInput(e.target.value);
-          setOpen(true);
-        }}
-        onFocus={() => setOpen(true)}
-        onKeyDown={onKeyDown}
-      />
+      <div className="flex flex-col overflow-hidden rounded-md border border-input bg-background shadow-sm ring-offset-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2">
+        <Input
+          type="search"
+          value={input}
+          placeholder="Search…"
+          role="combobox"
+          aria-expanded={showDropdown}
+          aria-controls={listboxId}
+          aria-autocomplete="list"
+          className="h-7 border-0 bg-transparent text-sm shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 max-sm:h-10 max-sm:text-base"
+          onChange={(e) => {
+            setInput(e.target.value);
+            setOpen(true);
+          }}
+          onFocus={() => setOpen(true)}
+          onKeyDown={onKeyDown}
+        />
+        {filterLabel && (
+          <div className="flex h-3 shrink-0 items-center gap-1 bg-muted px-2 leading-none text-muted-foreground text-[9px]">
+            <span className="truncate">{filterLabel}</span>
+            <button
+              type="button"
+              onClick={clear}
+              className="ml-auto shrink-0 rounded hover:text-foreground"
+              title="Clear filter"
+              aria-label="Clear filter"
+            >
+              <X className="size-2.5" />
+            </button>
+          </div>
+        )}
+      </div>
       {showDropdown && (
         <div
           id={listboxId}

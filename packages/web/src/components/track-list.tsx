@@ -412,7 +412,7 @@ export function TrackList() {
         role="row"
         className={cn(
           COLS,
-          'sticky top-10 z-20 border-b border-border bg-background py-2 text-[11px] uppercase tracking-wider text-muted-foreground max-sm:hidden',
+          'sticky top-14 z-20 border-b border-border bg-background py-2 text-[11px] uppercase tracking-wider text-muted-foreground max-sm:hidden',
           showScrubber && 'pr-8',
         )}
       >
