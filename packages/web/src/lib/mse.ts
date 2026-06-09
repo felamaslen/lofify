@@ -86,6 +86,16 @@ export type CreatePlayerOptions = {
   onReadyChange?: () => void;
   /** Called when the set of persistently-cached chunks for the playing track grows (a prefetch or playback fetch landed in the chunk cache). Like manifest growth this rides on no audio-element event; the caller reads the regions back via `currentCached()`. */
   onCached?: () => void;
+  /** Called once when MSE playback fails fatally — a decode/parse error reported by the media element or its SourceBuffer, e.g. a cached transcode the browser refuses to parse. The argument is a best-effort human-readable reason (the `MediaError` code label plus its message). The player is unusable afterwards, so the caller should dispose and rebuild (or clear the cache and reload) to recover. */
+  onError?: (reason: string) => void;
+};
+
+/** Human-readable label for a `MediaError.code`, so a surfaced failure reads as more than a bare number. */
+const MEDIA_ERROR_LABEL: Record<number, string> = {
+  1: 'Playback aborted',
+  2: 'Network error',
+  3: 'Decode error',
+  4: 'Format not supported',
 };
 
 /** First chunk index whose range covers `time`, or -1 if `time` is at/after the last chunk's end. */
@@ -278,6 +288,8 @@ export class MsePlayer {
   private observedPlayheadAt = 0;
   /** `setInterval` handle for the watchdog tick, or `null` when paused. Started/stopped via the audio element's `play`/`pause` events so a backgrounded paused player isn't burning a timer. */
   private watchdog: ReturnType<typeof setInterval> | null = null;
+  /** Set once `onError` has fired, so a fatal failure is reported at most once per instance (the element and its SourceBuffer often both signal the same error). */
+  private errorReported = false;
 
   /** In-flight range fetches, keyed by `pendingKey(trackId, chunkIndex)` (`-1` = init). */
   private pending = new Map<PendingKey, AbortController>();
@@ -318,6 +330,13 @@ export class MsePlayer {
     this.parserContentType = initialContentType;
     this.setTimestampOffsetPerChunk = initialContentType.startsWith('audio/mpeg');
     sourceBuffer.addEventListener('updateend', this.onTick);
+    // Fatal-failure signals. A malformed segment fails the parse *asynchronously* — `appendBuffer`
+    // returns without throwing, then the SourceBuffer emits `error` and the media element's
+    // `MediaError` is set — so the synchronous try/catch around the append can't see it. Both events
+    // schedule a single coalesced report (the element's MediaError carries the detail and may land a
+    // tick after the SourceBuffer event, so we read it at report time, not now).
+    sourceBuffer.addEventListener('error', this.scheduleErrorReport);
+    audio.addEventListener('error', this.scheduleErrorReport);
     audio.addEventListener('timeupdate', this.onTick);
     audio.addEventListener('seeking', this.onTick);
     // Wall-clock watchdog. Audio events stop firing during a stall (no `timeupdate` if
@@ -421,8 +440,10 @@ export class MsePlayer {
     this.audio.removeEventListener('play', this.startWatchdog);
     this.audio.removeEventListener('pause', this.stopWatchdog);
     this.audio.removeEventListener('ended', this.stopWatchdog);
+    this.audio.removeEventListener('error', this.scheduleErrorReport);
     try {
       this.sourceBuffer.removeEventListener('updateend', this.onTick);
+      this.sourceBuffer.removeEventListener('error', this.scheduleErrorReport);
     } catch {
       // SourceBuffer may already be detached from the MediaSource.
     }
@@ -650,6 +671,19 @@ export class MsePlayer {
 
   private onTick = (): void => {
     this.tick();
+  };
+
+  /** Surface a fatal media failure to the caller, once. Deferred a macrotask so that whichever of the SourceBuffer `error` / element `error` events fires first, the element's `MediaError` (which carries the descriptive message) has populated by the time we read it. */
+  private scheduleErrorReport = (): void => {
+    if (this.errorReported || this.disposed) return;
+    this.errorReported = true;
+    setTimeout(() => {
+      if (this.disposed) return;
+      const err = this.audio.error;
+      const label = err ? (MEDIA_ERROR_LABEL[err.code] ?? 'Playback error') : 'Playback error';
+      const detail = err?.message?.trim();
+      this.options.onError?.(detail ? `${label}: ${detail}` : label);
+    }, 0);
   };
 
   /** The orchestration loop, fired by `updateend`/`timeupdate`/`seeking` and by internal state transitions. Runs reconcile, advances slots on a boundary cross, kicks off the preload thunk, ends the stream when due, and reports quality changes. */

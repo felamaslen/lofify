@@ -158,6 +158,54 @@ export async function storeCachedManifest(url: string, manifest: unknown): Promi
   }
 }
 
+/**
+ * Drop every cached chunk and stored manifest belonging to a track. Used after busting the server-side transcode cache so a reload re-fetches fresh bytes instead of replaying the stale (possibly unplayable) ones.
+ *
+ * Playback URLs end in `/<trackId>` (the byte range, if any, follows a `#`), so matching that trailing segment clears every format/quality/signature variant of the track at once. The chunk byte total is decremented by what's removed. Best-effort like the rest of this module — a failure leaves the entries to be re-fetched or evicted later.
+ */
+export async function clearCachedTrack(trackId: string): Promise<void> {
+  const db = await openDb();
+  if (!db) return;
+  const suffix = `/${trackId}`;
+  const urlOf = (chunkOrUrlKey: string): string => {
+    const hash = chunkOrUrlKey.lastIndexOf('#');
+    return hash === -1 ? chunkOrUrlKey : chunkOrUrlKey.slice(0, hash);
+  };
+  try {
+    const tx = db.transaction([CHUNK_STORE, META_STORE, MANIFEST_STORE], 'readwrite');
+    const chunks = tx.objectStore(CHUNK_STORE);
+    const meta = tx.objectStore(META_STORE);
+    const manifests = tx.objectStore(MANIFEST_STORE);
+    let freed = 0;
+    await new Promise<void>((resolve, reject) => {
+      const cursorReq = chunks.openCursor();
+      cursorReq.onsuccess = () => {
+        const cursor = cursorReq.result;
+        if (!cursor) {
+          resolve();
+          return;
+        }
+        if (urlOf(cursor.key as string).endsWith(suffix)) {
+          freed += (cursor.value as ChunkRecord).size;
+          cursor.delete();
+        }
+        cursor.continue();
+      };
+      cursorReq.onerror = () => reject(cursorReq.error ?? new Error('IndexedDB cursor failed'));
+    });
+    if (freed > 0) {
+      const storedTotal = (await requested(meta.get(TOTAL_KEY))) as number | undefined;
+      await requested(meta.put(Math.max(0, (storedTotal ?? 0) - freed), TOTAL_KEY));
+    }
+    const manifestKeys = (await requested(manifests.getAllKeys())) as string[];
+    for (const key of manifestKeys) {
+      if (key.endsWith(suffix)) await requested(manifests.delete(key));
+    }
+  } catch {
+    // Best-effort; any leftover entry is re-fetched on demand or evicted under budget pressure.
+  }
+}
+
 /** Cached bytes for `[byteStart, byteEnd)` of `url`, or `null` on a miss (or any IndexedDB failure). */
 export async function readCachedChunk(
   url: string,

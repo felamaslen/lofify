@@ -9,12 +9,13 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react';
+import { toast } from 'sonner';
 
-import { PlaybackBarDocument } from '../components/playback-bar.tsx';
+import { PlaybackBarDocument } from '../components/playback-bar-fragment.ts';
 import { artworkDisplayUrl, TrackArtworkDocument } from '../components/track-artwork.tsx';
 import { getAudioElement } from '../lib/audio-element.ts';
 import { type Capabilities, capabilities, type LossyPreference } from '../lib/capabilities.ts';
-import { readCachedManifest, storeCachedManifest } from '../lib/chunk-cache.ts';
+import { clearCachedTrack, readCachedManifest, storeCachedManifest } from '../lib/chunk-cache.ts';
 import { setFaviconBadge } from '../lib/favicon.ts';
 import { graphql, type ResultOf, type VariablesOf } from '../lib/gql.ts';
 import { gqlRequest } from '../lib/gql-request.ts';
@@ -118,6 +119,14 @@ const QueueConsumeDocument = graphql(`
   mutation QueueConsume($id: ID!, $trackId: ID!) {
     queueRemove(id: $id, trackId: $trackId, index: 0) {
       id
+    }
+  }
+`);
+
+const TrackClearTranscodeCacheDocument = graphql(`
+  mutation TrackClearTranscodeCache($id: ID!) {
+    trackClearTranscodeCache(id: $id) {
+      _
     }
   }
 `);
@@ -297,8 +306,6 @@ function bufferedAheadSeconds(audio: HTMLAudioElement): number {
 }
 
 export type BufferedRange = { start: number; end: number };
-export type PlayerError = { message: string };
-
 /** Everything the UI renders. Immutable: the `Player` swaps the whole object on any change, so `useSyncExternalStore` can compare snapshots by reference. */
 type PlayerSnapshot = {
   current: TrackNode | null;
@@ -317,7 +324,6 @@ type PlayerSnapshot = {
   delivery: Delivery | null;
   /** Quality of the bytes currently under the playhead, from the playback `X-Quality` header. Trails `requestedTier` while a bitrate switch's old buffer drains. `null` until the first chunk is fetched. */
   playingQuality: Quality | null;
-  error: PlayerError | null;
 };
 
 /**
@@ -360,7 +366,6 @@ class Player {
       lossyPreference: loadStoredLossyPreference(),
       delivery: null,
       playingQuality: null,
-      error: null,
     };
   }
 
@@ -656,11 +661,6 @@ class Player {
     void this.changeFormat(this.snapshot.requestedTier, preference);
   }
 
-  /** Clear the current playback error. */
-  dismissError(): void {
-    this.set({ error: null });
-  }
-
   /** Start `track` from `startAt`, replacing whatever is queued. Reuses the existing `MsePlayer` when the codec matches (Adaptive's case — the SourceBuffer stays, the buffer gets wiped, the new track's chunks land in the same MediaSource), otherwise tears it down and creates a fresh one for the new codec. Pass `autoPlay = false` to load paused (restoring from the URL on a fresh page load, where there's no gesture to satisfy autoplay). */
   async loadTrack(track: TrackNode, startAt = 0, autoPlay = true): Promise<void> {
     // Any armed single-track loop belonged to the previous order position.
@@ -693,7 +693,7 @@ class Player {
       );
     } catch (err) {
       this.mse = null;
-      this.set({ error: { message: (err as Error).message } });
+      toast.error((err as Error).message);
       return;
     }
 
@@ -709,7 +709,44 @@ class Player {
       onTrackChange: (trackId) => this.handleTrackChange(trackId),
       onReadyChange: () => this.set({ readySeconds: this.mse?.currentTrackReadySeconds() ?? 0 }),
       onCached: () => this.set({ cachedRanges: this.readCached() }),
+      onError: (reason) => this.handlePlaybackError(reason),
     };
+  }
+
+  /** Surface a fatal MSE failure (a decode/parse error — typically an unplayable cached transcode) as an error toast. When a track is loaded the failure is recoverable, so the toast carries a persistent cache-clearing retry action for it; otherwise it auto-dismisses. */
+  private handlePlaybackError(reason: string): void {
+    const trackId = this.snapshot.current?.id;
+    if (!trackId) {
+      toast.error('Playback failed', { description: reason });
+      return;
+    }
+    toast.error('Playback failed', {
+      description: reason,
+      duration: Infinity,
+      action: {
+        label: 'Clear cache & retry',
+        onClick: () => void this.retryEncode(trackId),
+      },
+    });
+  }
+
+  /** Recover a track whose cached transcode won't play: discard the server-side transcode cache and the local chunk cache for it, then reload from the top so a fresh encode is produced and re-fetched. Driven by the error toast's retry action. */
+  private async retryEncode(trackId: string): Promise<void> {
+    // Drop the dead MediaSource first — its SourceBuffer is in an error state and can't be reused.
+    this.mse?.dispose();
+    this.mse = null;
+    try {
+      await gqlRequest(TrackClearTranscodeCacheDocument, { id: trackId });
+    } catch (err) {
+      toast.error("Couldn't clear the cache", { description: (err as Error).message });
+      return;
+    }
+    await clearCachedTrack(trackId);
+    // Drop the cached track + react-query entries so the reload re-fetches the delivery and re-opens
+    // the manifest subscription (its IndexedDB copy is now gone) against the fresh encode.
+    this.tracksById.delete(trackId);
+    void this.queryClient.invalidateQueries({ queryKey: ['track', trackId] });
+    await this.playTrack(trackId);
   }
 
   /** Assemble the `QueuedTrack` mse needs, bundling the per-track manifest-subscription factory the player owns. The factory captures `trackId` and reads `lossyPreference` live so a preference change between enqueue and a later live tier swap is picked up automatically. */
@@ -842,7 +879,7 @@ class Player {
       );
     } catch (err) {
       this.mse = null;
-      this.set({ error: { message: (err as Error).message } });
+      toast.error((err as Error).message);
       return;
     }
     // Refresh from the new instance (live-swap leaves the buffered audio in place; rebuild starts
@@ -1084,7 +1121,6 @@ type PlayerActions = {
   setQualityMode: (m: QualityMode) => void;
   setLossyPreference: (p: LossyPreference) => void;
   lossyPreferenceAvailability: Record<LossyPreference, boolean>;
-  dismissError: () => void;
   play: (id: string) => void;
   togglePlay: () => void;
   next: () => void;
@@ -1120,7 +1156,6 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       },
       setQualityMode: (m) => player.setQualityMode(m),
       setLossyPreference: (p) => player.setLossyPreference(p),
-      dismissError: () => player.dismissError(),
       play: (id) => void player.play(id),
       togglePlay: () => player.togglePlay(),
       next: () => player.next(),

@@ -311,6 +311,12 @@ type Mutation {
   """
   queueReorder(fromIndex: Int!, id: ID!, toIndex: Int!, trackId: ID!): PlaybackQueue!
   """
+  Discard every cached transcode of one track — all formats and qualities — so the next playback request produces a fresh encode from the source.
+  
+  For recovering a track that was delivered as unplayable bytes: clearing the cache and re-fetching its manifest replaces them. Idempotent; succeeds whether or not anything was cached.
+  """
+  trackClearTranscodeCache(id: ID!): Void!
+  """
   Override one or more tags on a single track. Each supplied tag is stored as an override that takes precedence over the value read from the file on disk and survives rescans — the scanner never touches it.
   
   Omit an argument to leave its current override untouched; pass an explicit `null` to clear the override and fall back to the scanned tag; pass an empty string to blank the field outright.
@@ -372,7 +378,7 @@ type PlaybackQueue {
     """
     filterAlbumIn: [String!]
     """
-    Restrict the library portion to tracks whose effective artist is one of these names. An empty or omitted list applies no filter.
+    Restrict the library portion to tracks whose effective artist shares a synonym group with one of these names. Each name may be a canonical artist or any of its registered synonyms; either way the whole group's tracks are returned. An empty or omitted list applies no filter.
     """
     filterArtistIn: [String!]
     first: Int
@@ -453,7 +459,7 @@ type Query {
     """
     filterAlbumIn: [String!]
     """
-    Restrict the result to tracks whose effective artist is one of these names. Pass the names returned by `Query.search` (not synonyms); an empty or omitted list applies no filter.
+    Restrict the result to tracks whose effective artist shares a synonym group with one of these names. Each name may be a canonical artist or any of its registered synonyms; either way the whole group's tracks are returned. An empty or omitted list applies no filter.
     """
     filterArtistIn: [String!]
     first: Int
