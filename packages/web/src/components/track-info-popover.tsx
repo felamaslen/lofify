@@ -71,12 +71,18 @@ function sourceLabel(s: {
   return parts.join(' · ');
 }
 
-export function TrackInfoButton({ track }: { track: FragmentOf<typeof TrackInfoDocument> }) {
+export function TrackInfoButton({
+  track,
+  onOpenChange,
+}: {
+  track: FragmentOf<typeof TrackInfoDocument>;
+  onOpenChange?: (open: boolean) => void;
+}) {
   const t = readFragment(TrackInfoDocument, track);
   // The row owns click/double-click (select/play); keep them from firing when interacting with the info control.
   const stop = (e: { stopPropagation: () => void }) => e.stopPropagation();
   return (
-    <Popover>
+    <Popover {...(onOpenChange ? { onOpenChange } : {})}>
       <PopoverTrigger asChild>
         <button
           type="button"

@@ -210,6 +210,13 @@ export function TrackList() {
   const anchorRef = useRef<number | null>(null);
   const [editing, setEditing] = useState(false);
 
+  // An open info preview is dismissed by Radix on the outside pointerdown, but the same tap still
+  // lands a click on the row. Snapshot whether a preview was open at the start of the gesture (in
+  // the capture phase, before Radix's bubble-phase dismiss) so the click can be swallowed: it
+  // should only close the preview, not play or change the selection.
+  const previewCountRef = useRef(0);
+  const tapClosedPreviewRef = useRef(false);
+
   // Escape clears the selection, unless the tag-edit dialog owns the key (it closes itself first).
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -463,6 +470,9 @@ export function TrackList() {
                   key={edge.cursor}
                   role="row"
                   aria-selected={isSelected}
+                  onPointerDownCapture={() => {
+                    tapClosedPreviewRef.current = previewCountRef.current > 0;
+                  }}
                   onMouseDown={(e) => {
                     // Suppress the browser's native text-selection on
                     // double-click and shift-click (range select); plain
@@ -470,6 +480,12 @@ export function TrackList() {
                     if (e.detail >= 2 || e.shiftKey) e.preventDefault();
                   }}
                   onClick={(e) => {
+                    // A tap that dismissed an open info preview should only close it — not play or
+                    // change the selection.
+                    if (tapClosedPreviewRef.current) {
+                      tapClosedPreviewRef.current = false;
+                      return;
+                    }
                     // Touch has no hover/double-click affordance, so a plain
                     // tap plays; long-press still opens the context menu.
                     if (isMobile) {
@@ -561,7 +577,12 @@ export function TrackList() {
                       {t.year ?? ''}
                     </span>
                     <span className="flex justify-end max-sm:col-start-3 max-sm:row-start-1 max-sm:self-center">
-                      <TrackInfoButton track={edge.node} />
+                      <TrackInfoButton
+                        track={edge.node}
+                        onOpenChange={(open) => {
+                          previewCountRef.current += open ? 1 : -1;
+                        }}
+                      />
                     </span>
                   </div>
                 </div>
