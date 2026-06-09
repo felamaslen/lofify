@@ -80,6 +80,8 @@ export type Cache = {
   getOrStart(req: CacheRequest): Promise<CacheEntry>;
   /** Evict completed on-disk entries least-recently-accessed-first until usage falls below the budget (no-op when `maxBytes` is unset). `targetBytes` overrides the default stop point (`maxBytes`) — emergency sweeps pass a lower value for headroom. */
   sweep(targetBytes?: number): Promise<{ freedBytes: number; evicted: string[] }>;
+  /** Discard every cached target for `trackId`: drop the in-memory handles (the LRU's dispose kills any in-progress encode and stops its live-tail), remove the on-disk entry dirs across all source-mtime generations, and delete their access rows — so the next `getOrStart` re-encodes from source. For recovering from a bad encode whose bytes are cached but unplayable. Best-effort: a per-dir filesystem or DB failure is logged, not thrown. Idempotent. */
+  invalidateTrack(trackId: string): Promise<void>;
   /** Drop all in-memory handles. On-disk cache files are left intact. Intended for tests; production callers should not need this. */
   reset(): void;
 };
@@ -544,9 +546,49 @@ export function createCache(opts: CacheOpts): Cache {
     );
   }
 
+  async function invalidateTrack(trackId: string): Promise<void> {
+    const prefix = `${trackId}-`;
+    // Drop the in-memory handles first: the LRU's dispose kills ffmpeg and stops the live-tail, so a
+    // still-encoding target isn't writing its files while we remove them below.
+    for (const key of [...lru.keys()]) {
+      if (key.startsWith(prefix)) lru.delete(key);
+    }
+    let names: string[];
+    try {
+      names = await readdir(cacheRoot);
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      // Entry dirs are `<trackId>-<sourceMtimeMs>` — match every generation of this track without
+      // catching a different track that merely shares an id prefix (the suffix must be all digits).
+      if (!name.startsWith(prefix) || !/^\d+$/.test(name.slice(prefix.length))) continue;
+      try {
+        await rm(path.join(cacheRoot, name), { recursive: true, force: true });
+      } catch (err) {
+        logger.warn(
+          `playback cache: failed to invalidate ${name}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+      lastWrittenAt.delete(name);
+      try {
+        await db.delete(playbackCacheAccess).where(eq(playbackCacheAccess.entryDir, name));
+      } catch (err) {
+        logger.warn(
+          `playback cache: failed to drop access row for ${name}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
+  }
+
   return {
     getOrStart,
     sweep,
+    invalidateTrack,
     reset(): void {
       lru.clear();
       inFlightStart.clear();

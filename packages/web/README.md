@@ -132,7 +132,16 @@ settings dialog. When `delivery.isMultiLossy`
 is set — a lossy source re-encoded to a lossy output — a small amber warning
 triangle is overlaid on the policy icon's bottom-right corner, flagging the extra
 generation of compression loss. MSE failures or unreachable endpoints raise a
-toast.
+[sonner](https://sonner.emilkowal.ski/) toast — the `Player` fires them
+imperatively (`toast.error`) and a single themed `<Toaster>`
+(`components/ui/sonner.tsx`) is mounted at the app root. A fatal decode/parse
+failure is surfaced by the `MsePlayer`'s `onError` hook off the media element's
+and SourceBuffer's `error` events, which a malformed segment trips
+_asynchronously_ after a silently-successful append. When a track is loaded the
+failure is recoverable: the toast carries a persistent **Clear cache & retry**
+action that calls `Mutation.trackClearTranscodeCache`, wipes the track's
+IndexedDB chunk cache (`clearCachedTrack`), and reloads it from a fresh encode.
+Other errors auto-dismiss.
 
 Each playback range response carries an `X-Quality` header naming the
 tier its bytes were encoded at. The player records it per fetched chunk

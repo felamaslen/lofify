@@ -345,6 +345,15 @@ recency — not LRU membership — is what stops the sweep deleting a file
 mid-stream. If everything is within the grace window we stay over
 budget rather than evict something in use.
 
+`Mutation.trackClearTranscodeCache(id)` discards every cached target for
+one track — all formats and qualities, across every source-mtime
+generation — killing any in-progress encode, removing the entry dirs,
+and dropping their `PlaybackCacheAccess` rows. The next `delivery`
+request re-encodes from source. It's the recovery path for a track whose
+cached bytes are unplayable (e.g. a source whose metadata produced a
+container a browser refuses to decode); the web client wires it to the
+playback error toast's retry button.
+
 `Track.delivery(format)` returns the resolved `{ url, mimeType,
 isPassthrough, isMultiLossy, description, tiers }` in one field, so a client
 gets the SourceBuffer MIME type and a tooltip-ready description without a

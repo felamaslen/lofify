@@ -11,6 +11,7 @@ import {
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
+import { Toaster } from './components/ui/sonner.tsx';
 import { queryClient } from './lib/query-client.ts';
 import { Home } from './routes/home.tsx';
 import { PlayerProvider } from './state/player.tsx';
@@ -48,6 +49,7 @@ createRoot(root).render(
         <PlayerProvider>
           <RouterProvider router={router} />
         </PlayerProvider>
+        <Toaster />
       </ThemeProvider>
     </QueryClientProvider>
   </StrictMode>,

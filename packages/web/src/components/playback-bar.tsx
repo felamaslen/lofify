@@ -3,12 +3,12 @@ import { AudioLines, Pause, Play, Repeat, Shuffle, SkipBack, SkipForward } from 
 import { type MouseEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 import { getAnalyser, isVisualiserSupported } from '../lib/audio-analyser.ts';
-import { graphql } from '../lib/gql.ts';
 import { useCoarsePointer } from '../lib/use-coarse-pointer.ts';
 import { usePlayer } from '../state/player.tsx';
 import { useRepeat } from '../state/repeat.tsx';
 import { useShuffle } from '../state/shuffle.tsx';
 import { useVisualiser } from '../state/visualiser.tsx';
+import { PlaybackBarDocument } from './playback-bar-fragment.ts';
 import { PlaybackFormatBadge } from './playback-format-badge.tsx';
 import { SettingsDialog } from './settings-dialog.tsx';
 import {
@@ -20,21 +20,9 @@ import {
 import { Button } from './ui/button.tsx';
 import { Slider } from './ui/slider.tsx';
 
-export const PlaybackBarDocument = graphql(
-  `
-    fragment PlaybackBar on Track {
-      title
-      artist
-      album
-      duration {
-        seconds
-        formatted
-      }
-      ...TrackArtwork
-    }
-  `,
-  [TrackArtworkDocument],
-);
+// Colocated consumers still import the fragment from here; the definition lives in its own module to
+// break the import cycle with the player (see `playback-bar-fragment.ts`).
+export { PlaybackBarDocument };
 
 /** Cover thumbnail for the playing track. Keeps the Media Session artwork in step as a download resolves — `setMediaArtwork` ignores stale and redundant calls, so the effect can fire freely. */
 function BarArtwork({ track }: { track: FragmentOf<typeof TrackArtworkDocument> }) {

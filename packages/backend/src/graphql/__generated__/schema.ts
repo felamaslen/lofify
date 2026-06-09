@@ -18,7 +18,7 @@ import { artwork as trackArtworkResolver, delivery as trackDeliveryResolver, dup
 import { tracks as playbackQueueTracksResolver, tracksQueued as playbackQueueTracksQueuedResolver, playbackQueue as queryPlaybackQueueResolver, queueAppend as mutationQueueAppendResolver, queueClear as mutationQueueClearResolver, queueRemove as mutationQueueRemoveResolver, queueReorder as mutationQueueReorderResolver } from "./../playback-queue.js";
 import { search as querySearchResolver } from "./../search.js";
 import { artworkClear as mutationArtworkClearResolver, artworkDownload as mutationArtworkDownloadResolver } from "./../artwork-mutations.js";
-import { trackUpdate as mutationTrackUpdateResolver } from "./../track-mutations.js";
+import { trackClearTranscodeCache as mutationTrackClearTranscodeCacheResolver, trackUpdate as mutationTrackUpdateResolver } from "./../track-mutations.js";
 import { trackManifestSubscription as subscriptionTrackManifestResolver } from "./../track-manifest.js";
 async function assertNonNull<T>(value: T | Promise<T>): Promise<T> {
     const awaited = await value;
@@ -1178,6 +1178,19 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
                     },
                     resolve(_source, args) {
                         return mutationQueueReorderResolver(args.id, args.trackId, args.fromIndex, args.toIndex);
+                    }
+                },
+                trackClearTranscodeCache: {
+                    description: "Discard every cached transcode of one track \u2014 all formats and qualities \u2014 so the next playback request produces a fresh encode from the source.\n\nFor recovering a track that was delivered as unplayable bytes: clearing the cache and re-fetching its manifest replaces them. Idempotent; succeeds whether or not anything was cached.",
+                    name: "trackClearTranscodeCache",
+                    type: new GraphQLNonNull(VoidType),
+                    args: {
+                        id: {
+                            type: new GraphQLNonNull(GraphQLID)
+                        }
+                    },
+                    resolve(_source, args) {
+                        return mutationTrackClearTranscodeCacheResolver(args.id);
                     }
                 },
                 trackUpdate: {
