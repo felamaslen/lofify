@@ -7,6 +7,7 @@ import { gqlRequest } from '../lib/gql-request.ts';
 import { cn } from '../lib/utils.ts';
 import { useLibraryFilter } from '../state/library-filter.tsx';
 import { usePlayer } from '../state/player.tsx';
+import { Hint } from './ui/hint.tsx';
 import { Input } from './ui/input.tsx';
 
 const SearchDocument = graphql(`
@@ -283,10 +284,19 @@ function Groups({
               )}
             >
               {item.kind === 'filename' ? (
-                <span className="flex min-w-0 items-baseline">
-                  <span className="truncate text-muted-foreground">{splitPath(item.path).dir}</span>
-                  <span className="shrink-0 font-semibold">{splitPath(item.path).base}</span>
-                </span>
+                <Hint
+                  side="bottom"
+                  content={
+                    <span className="block max-w-[min(28rem,90vw)] break-all">{item.path}</span>
+                  }
+                >
+                  <span className="flex min-w-0 items-baseline">
+                    <span className="truncate text-muted-foreground">
+                      {splitPath(item.path).dir}
+                    </span>
+                    <span className="shrink-0 font-semibold">{splitPath(item.path).base}</span>
+                  </span>
+                </Hint>
               ) : (
                 <span className="truncate">{item.label}</span>
               )}
