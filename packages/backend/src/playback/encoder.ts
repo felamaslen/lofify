@@ -129,7 +129,11 @@ function mp3CodecArgs(quality: Quality, passthrough: boolean): string[] {
 
 function buildArgs(opts: EncoderOpts): string[] {
   const { source, target, outPath, chunkDurationSeconds, passthrough = false } = opts;
-  const base = ['-hide_banner', '-loglevel', 'error', '-i', source, '-vn'];
+  // -map_metadata -1 drops all source tags. These are internal playback blobs (the app reads
+  // metadata from the DB), and a non-ASCII source title otherwise lands in the WebM TrackEntry
+  // Name, which Chromium's MSE byte-stream parser rejects ("Name must be an ASCII string"),
+  // failing the whole init segment so the track never plays.
+  const base = ['-hide_banner', '-loglevel', 'error', '-i', source, '-vn', '-map_metadata', '-1'];
   const fragDurationMicros = String(Math.round(chunkDurationSeconds * 1_000_000));
   const clusterMillis = String(Math.round(chunkDurationSeconds * 1000));
 
