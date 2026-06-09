@@ -84,7 +84,7 @@ export function TrackInfoButton({ track }: { track: FragmentOf<typeof TrackInfoD
           onClick={stop}
           onMouseDown={stop}
           onDoubleClick={stop}
-          className="inline-flex size-6 items-center justify-center rounded-sm text-muted-foreground/70 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="inline-flex size-6 items-center justify-center rounded-sm text-muted-foreground/70 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-aria-selected:text-primary-foreground/80 group-aria-selected:hover:bg-primary-foreground/20 group-aria-selected:hover:text-primary-foreground"
         >
           <Info className="size-4" />
         </button>

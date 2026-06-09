@@ -210,6 +210,17 @@ export function TrackList() {
   const anchorRef = useRef<number | null>(null);
   const [editing, setEditing] = useState(false);
 
+  // Escape clears the selection, unless the tag-edit dialog owns the key (it closes itself first).
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || editing) return;
+      setSelected((prev) => (prev.size === 0 ? prev : new Set()));
+      anchorRef.current = null;
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [editing]);
+
   // The page itself scrolls (body scroll), so the virtualizer tracks the window. `scrollMargin` is
   // how far the row container sits below the document top (the sticky app + column headers), so
   // virtual offsets map onto page scroll.
@@ -481,13 +492,17 @@ export function TrackList() {
                     // touch-pan-y: vertical scrolling stays native, but the browser never pans the
                     // view for a horizontal gesture starting on a row — that belongs to the
                     // swipe-to-enqueue handler alone.
-                    'cursor-pointer touch-pan-y text-sm hover:bg-accent/40',
+                    'group cursor-pointer touch-pan-y text-sm',
+                    !isSelected && 'hover:bg-accent',
                     // The long-press that opens the context menu must not start a native text
                     // selection; desktop keeps click-drag text selection.
                     isMobile && 'select-none',
                     !t.isLossless && !active && 'text-muted-foreground',
-                    isSelected && 'bg-accent/60',
-                    active && 'shadow-[inset_4px_0_0_0] shadow-primary text-primary',
+                    virtualRow.index % 2 === 1 && !isSelected && 'bg-muted/70',
+                    isSelected && 'bg-primary text-primary-foreground hover:bg-primary/90',
+                    active && 'shadow-[inset_4px_0_0_0]',
+                    active && !isSelected && 'shadow-primary text-primary',
+                    active && isSelected && 'shadow-primary-foreground',
                   )}
                   style={{
                     position: 'absolute',
@@ -507,7 +522,14 @@ export function TrackList() {
                       <ListPlus className="size-5" />
                     </span>
                   )}
-                  <div data-swipe-content className={cn(COLS, 'h-full', showScrubber && 'pr-8')}>
+                  <div
+                    data-swipe-content
+                    className={cn(
+                      COLS,
+                      'h-full group-aria-selected:[&>span]:text-primary-foreground',
+                      showScrubber && 'pr-8',
+                    )}
+                  >
                     <span className="text-muted-foreground tabular-nums max-sm:hidden">
                       {t.discNumber ?? ''}
                     </span>
