@@ -56,7 +56,7 @@ export function LetterScrubber({
       ref={ref}
       aria-hidden
       style={{ top }}
-      className="fixed bottom-28 right-3 z-20 flex w-6 touch-none select-none flex-col items-center justify-between py-1"
+      className="fixed bottom-28 right-3 z-20 flex w-6 touch-none select-none flex-col items-center justify-between py-1 mix-blend-difference"
       onPointerDown={(e) => {
         e.currentTarget.setPointerCapture(e.pointerId);
         handle(e);
@@ -70,8 +70,8 @@ export function LetterScrubber({
           key={label}
           className={cn(
             'text-[9px] leading-none tabular-nums transition-colors',
-            byLabel.has(label) ? 'text-muted-foreground' : 'text-muted-foreground/30',
-            activeLabel === label && 'font-bold text-primary',
+            byLabel.has(label) ? 'cursor-pointer text-white/80' : 'text-white/30',
+            activeLabel === label && 'font-bold text-white',
           )}
         >
           {label}

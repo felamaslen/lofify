@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { X } from 'lucide-react';
 import { type KeyboardEvent, useEffect, useId, useMemo, useRef, useState } from 'react';
 
 import { graphql } from '../lib/gql.ts';
@@ -9,7 +10,7 @@ import { usePlayer } from '../state/player.tsx';
 import { Input } from './ui/input.tsx';
 
 const SearchDocument = graphql(`
-  query Search($query: String!) {
+  query Search($query: String!, $skipFilename: Boolean!) {
     search(query: $query) {
       artists {
         edges {
@@ -37,9 +38,20 @@ const SearchDocument = graphql(`
           }
         }
       }
+      tracksByFilename @skip(if: $skipFilename) {
+        edges {
+          node {
+            id
+            path
+          }
+        }
+      }
     }
   }
 `);
+
+/** Filename search only kicks in from this query length; shorter queries match too much of every path to be useful. */
+const MIN_FILENAME_QUERY = 3;
 
 const DEBOUNCE_MS = 200;
 
@@ -47,11 +59,21 @@ const DEBOUNCE_MS = 200;
 type Item =
   | { kind: 'artist'; label: string; name: string }
   | { kind: 'album'; label: string; name: string; artists: string[] }
-  | { kind: 'track'; label: string; sublabel: string | null; id: string };
+  | { kind: 'track'; label: string; sublabel: string | null; id: string }
+  | { kind: 'filename'; path: string; id: string };
+
+/** Split a path into its directory prefix (with trailing slash) and its basename. */
+function splitPath(path: string): { dir: string; base: string } {
+  const i = path.lastIndexOf('/');
+  return i === -1
+    ? { dir: '', base: path }
+    : { dir: path.slice(0, i + 1), base: path.slice(i + 1) };
+}
 
 export function SearchBox() {
   const { play } = usePlayer();
-  const { setArtistFilter, setAlbumFilter } = useLibraryFilter();
+  const { artist, album, clear, setArtistFilter, setAlbumFilter } = useLibraryFilter();
+  const filterLabel = album ? `Album: ${album}` : artist ? `Artist: ${artist}` : null;
 
   const [input, setInput] = useState('');
   const [query, setQuery] = useState('');
@@ -68,7 +90,12 @@ export function SearchBox() {
 
   const { data, isFetching } = useQuery({
     queryKey: ['search', query],
-    queryFn: ({ signal }) => gqlRequest(SearchDocument, { query }, signal),
+    queryFn: ({ signal }) =>
+      gqlRequest(
+        SearchDocument,
+        { query, skipFilename: query.length < MIN_FILENAME_QUERY },
+        signal,
+      ),
     enabled: query.length > 0,
     placeholderData: (prev) => prev,
   });
@@ -95,6 +122,9 @@ export function SearchBox() {
           sublabel: e.node.artist,
           id: e.node.id,
         }),
+      ),
+      ...(search.tracksByFilename?.edges ?? []).map(
+        (e): Item => ({ kind: 'filename', path: e.node.path, id: e.node.id }),
       ),
     ];
   }, [data]);
@@ -131,6 +161,7 @@ export function SearchBox() {
         setAlbumFilter(item.name, item.artists.length === 1 ? item.artists[0]! : null);
         break;
       case 'track':
+      case 'filename':
         play(item.id);
         break;
     }
@@ -158,22 +189,38 @@ export function SearchBox() {
 
   return (
     <div ref={containerRef} className="relative w-64 max-sm:min-w-0 max-sm:flex-1">
-      <Input
-        type="search"
-        value={input}
-        placeholder="Search…"
-        role="combobox"
-        aria-expanded={showDropdown}
-        aria-controls={listboxId}
-        aria-autocomplete="list"
-        className="h-7 text-sm max-sm:h-10 max-sm:text-base"
-        onChange={(e) => {
-          setInput(e.target.value);
-          setOpen(true);
-        }}
-        onFocus={() => setOpen(true)}
-        onKeyDown={onKeyDown}
-      />
+      <div className="flex flex-col overflow-hidden rounded-md border border-input bg-background shadow-sm ring-offset-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2">
+        <Input
+          type="search"
+          value={input}
+          placeholder="Search…"
+          role="combobox"
+          aria-expanded={showDropdown}
+          aria-controls={listboxId}
+          aria-autocomplete="list"
+          className="h-7 border-0 bg-transparent text-sm shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 max-sm:h-10 max-sm:text-base"
+          onChange={(e) => {
+            setInput(e.target.value);
+            setOpen(true);
+          }}
+          onFocus={() => setOpen(true)}
+          onKeyDown={onKeyDown}
+        />
+        {filterLabel && (
+          <div className="flex h-3 shrink-0 items-center gap-1 bg-muted px-2 leading-none text-muted-foreground text-[9px]">
+            <span className="truncate">{filterLabel}</span>
+            <button
+              type="button"
+              onClick={clear}
+              className="ml-auto shrink-0 rounded hover:text-foreground"
+              title="Clear filter"
+              aria-label="Clear filter"
+            >
+              <X className="size-2.5" />
+            </button>
+          </div>
+        )}
+      </div>
       {showDropdown && (
         <div
           id={listboxId}
@@ -197,6 +244,7 @@ const GROUP_LABELS: Record<Item['kind'], string> = {
   artist: 'Artists',
   album: 'Albums',
   track: 'Tracks',
+  filename: 'Matched by filename',
 };
 
 function Groups({
@@ -234,7 +282,14 @@ function Groups({
                 index === active && 'bg-accent/60',
               )}
             >
-              <span className="truncate">{item.label}</span>
+              {item.kind === 'filename' ? (
+                <span className="flex min-w-0 items-baseline">
+                  <span className="truncate text-muted-foreground">{splitPath(item.path).dir}</span>
+                  <span className="shrink-0 font-semibold">{splitPath(item.path).base}</span>
+                </span>
+              ) : (
+                <span className="truncate">{item.label}</span>
+              )}
               {item.kind === 'track' && item.sublabel && (
                 <span className="truncate text-xs text-muted-foreground">{item.sublabel}</span>
               )}

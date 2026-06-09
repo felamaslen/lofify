@@ -10,6 +10,11 @@ Marks a field that is null only when an error has been propagated into it — ne
 directive @semanticNonNull(levels: [Int!]) on FIELD_DEFINITION
 
 """
+An instant in time, serialised as an ISO 8601 string in UTC (e.g. `2026-06-08T15:42:49.000Z`).
+"""
+scalar DateTime
+
+"""
 A file sent with the [GraphQL multipart request spec](https://github.com/jaydenseric/graphql-multipart-request-spec). The multipart hook in `app.ts` replaces the mapped variable with an instance carrying the streamed file; resolvers await its `promise` for the filename, MIME type and stream.
 """
 scalar Upload
@@ -212,6 +217,38 @@ type LibraryScan {
   scannedTotal: Int!
 }
 
+"""
+A file the scanner failed to read. It is skipped on every scan until retried or dismissed, so it stops one broken file from being re-attempted endlessly.
+"""
+type LibraryScanError {
+  """When the most recent failed attempt occurred."""
+  attemptedAt: DateTime!
+  """Absolute path of the file that failed."""
+  filename: String!
+  id: ID!
+  """Short, human-readable category of the failure."""
+  message: String!
+}
+
+"""
+One page of a Relay-style traversal over the recorded scan errors, most recent first.
+"""
+type LibraryScanErrorConnection {
+  edges: [LibraryScanErrorEdge!]!
+  pageInfo: PageInfo!
+  """Total number of recorded scan errors, ignoring pagination arguments."""
+  totalCount: Int!
+}
+
+"""A single entry in a `LibraryScanErrorConnection`."""
+type LibraryScanErrorEdge {
+  """
+  Cursor for paginating relative to this edge; equal to the error's `id`.
+  """
+  cursor: ID!
+  node: LibraryScanError!
+}
+
 type Mutation {
   """
   Register `synonym` as an alternative name for `artist`. Throws when either is blank or the pair already exists.
@@ -241,6 +278,14 @@ type Mutation {
   Requests cancellation of the named in-progress scan. No-op when the scan is unknown or already completed.
   """
   libraryScanCancel(id: ID!): Void!
+  """
+  Removes a recorded scan error from the review list without retrying its file. The file may resurface as an error if a future scan reaches it again. No-op when the error id is unknown.
+  """
+  libraryScanErrorDismiss(id: ID!): Void!
+  """
+  Re-attempts the file behind a recorded scan error. On success the file is parsed and its error cleared; on failure the error is refreshed with the latest attempt. Either way the client should refetch `libraryScanErrors`. No-op when the error id is unknown (already retried or dismissed).
+  """
+  libraryScanErrorRetry(id: ID!): Void!
   """
   Triggers a full scan of the configured library. Returns immediately with `filesTotal: null`; the file walk and parsing run in the background. Observe progress via `Subscription.libraryScan`.
   
@@ -377,6 +422,10 @@ type Query {
   The current library scan, if one is in progress or recently completed within the server's grace window. Null when no scan has run recently.
   """
   libraryScan: LibraryScan
+  """
+  The files that failed to scan and are being skipped, newest first. Page through with `first`/`after`. Returns null only when something has gone wrong; an empty library of errors yields an empty connection.
+  """
+  libraryScanErrors(after: ID, first: Int): LibraryScanErrorConnection
   """Returns the literal string `"pong"`. Useful as a liveness probe."""
   ping: String
   """
@@ -384,7 +433,7 @@ type Query {
   """
   playbackQueue(id: ID): PlaybackQueue @semanticNonNull
   """
-  Search the library for artists, albums and tracks whose name matches `query` as a case-insensitive prefix. Returns `null` for a blank query.
+  Search the library for artists, albums and tracks whose name matches `query` as a case-insensitive prefix, plus tracks whose file path contains `query` as a substring. Returns `null` for a blank query.
   """
   search(query: String!): Search
   """
@@ -392,7 +441,7 @@ type Query {
   """
   track(id: ID!): Track
   """
-  List the library in Relay-cursor pagination order: by `artist`, `album`, `discNumber`, `trackNumber`, then `id` for stability. Supply exactly one of `first`/`last` and at most one of `after`/`before`.
+  List the library in Relay-cursor pagination order: by `artist`, `year` (descending), `album`, `discNumber`, `trackNumber`, then `id` for stability. Supply exactly one of `first`/`last` and at most one of `after`/`before`.
   
   Pass `offset` instead to fetch an arbitrary window (`first` rows from that zero-based index) in the same order — used for index-addressed scrolling (e.g. the letter scrubber jumping anywhere without paging through the gaps). When `offset` is set, the cursor arguments are ignored.
   """
@@ -434,6 +483,15 @@ type Search {
   artists: ArtistConnection!
   """Tracks whose title matches the query, in library order."""
   tracks: TrackConnection!
+  """
+  Tracks whose file path contains the query, matched as a substring rather than a prefix, ordered by path. Surfaces recordings whose tags are missing or wrong but whose filename carries the query. Paginated (default page size 10), since a substring path match can be broad.
+  """
+  tracksByFilename(
+    """Continue after this cursor — a track `id` from a previous page's edge."""
+    after: ID
+    """Maximum number of rows to return. Defaults to 10."""
+    first: Int
+  ): TrackConnection!
 }
 
 type Subscription {

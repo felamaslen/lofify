@@ -96,16 +96,23 @@ async function assignGroup(tx: Tx, key: DedupKey): Promise<void> {
   }
 }
 
-/** Distinct non-null keys, in first-seen order. */
+/** Distinct non-null keys in a deterministic order (by `keyId`). The stable order matters: when more than one group is locked in a single transaction, every transaction must acquire those locks in the same order or two of them can deadlock acquiring each other's locks. */
 function uniqueKeys(keys: (DedupKey | null)[]): DedupKey[] {
   const byId = new Map<string, DedupKey>();
   for (const key of keys) {
     if (key) byId.set(keyId(key), key);
   }
-  return [...byId.values()];
+  return [...byId.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([, key]) => key);
 }
 
-/** Recompute every distinct group in `keys` within an existing transaction. */
+/** Acquire the advisory locks for every distinct group in `keys`, in deterministic order, without touching any rows. Callers that write a row in the same transaction (e.g. an upsert) must lock first so the lock order is always advisory-then-row; otherwise a row write that precedes the lock deadlocks against another worker recomputing the same group. */
+export async function lockKeysInTx(tx: Tx, keys: (DedupKey | null)[]): Promise<void> {
+  for (const key of uniqueKeys(keys)) {
+    await lockGroup(tx, key);
+  }
+}
+
+/** Recompute every distinct group in `keys` within an existing transaction. Re-acquiring a lock already held by the transaction (e.g. taken earlier via `lockKeysInTx`) is a no-op, so it is safe to call after pre-locking. */
 export async function recomputeKeysInTx(tx: Tx, keys: (DedupKey | null)[]): Promise<void> {
   for (const key of uniqueKeys(keys)) {
     await lockGroup(tx, key);

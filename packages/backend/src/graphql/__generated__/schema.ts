@@ -4,11 +4,13 @@
  */
 
 import type { GqlScalar } from "grats";
+import type { DateTime as DateTimeInternal } from "./../date-time.js";
 import type { Upload as UploadInternal } from "./../upload.js";
-import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, GraphQLInt, GraphQLList, specifiedDirectives, GraphQLObjectType, GraphQLString, GraphQLBoolean, GraphQLID, GraphQLUnionType, GraphQLInterfaceType, GraphQLEnumType, GraphQLInputObjectType, GraphQLScalarType, GraphQLFloat } from "graphql";
+import { GraphQLSchema, GraphQLDirective, DirectiveLocation, GraphQLNonNull, GraphQLInt, GraphQLList, specifiedDirectives, GraphQLObjectType, GraphQLString, GraphQLBoolean, GraphQLID, GraphQLScalarType, GraphQLUnionType, GraphQLInterfaceType, GraphQLEnumType, GraphQLInputObjectType, GraphQLFloat } from "graphql";
 import { artistIndex as queryArtistIndexResolver, track as queryTrackResolver, tracks as queryTracksResolver } from "./../track-queries.js";
 import { isUpdateAvailable as queryIsUpdateAvailableResolver, ping as queryPingResolver, noop as mutationNoopResolver } from "./../root.js";
 import { libraryScan as queryLibraryScanResolver, libraryScanCancel as mutationLibraryScanCancelResolver, libraryScanStart as mutationLibraryScanStartResolver, libraryScanSubscription as subscriptionLibraryScanResolver } from "./../library-scan.js";
+import { libraryScanErrors as queryLibraryScanErrorsResolver, libraryScanErrorDismiss as mutationLibraryScanErrorDismissResolver, libraryScanErrorRetry as mutationLibraryScanErrorRetryResolver } from "./../library-scan-errors.js";
 import { artistSynonyms as trackArtistSynonymsResolver, artistSynonymCreate as mutationArtistSynonymCreateResolver, artistSynonymDelete as mutationArtistSynonymDeleteResolver, artistSynonymUpdate as mutationArtistSynonymUpdateResolver } from "./../artist-synonyms.js";
 import { Image as ImageClass } from "./../media.js";
 import { Artwork as ArtworkClass, ArtworkStatus as ArtworkStatusClass } from "./../artwork.js";
@@ -26,6 +28,7 @@ async function assertNonNull<T>(value: T | Promise<T>): Promise<T> {
 }
 export type SchemaConfig = {
     scalars: {
+        DateTime: GqlScalar<DateTimeInternal>;
         Upload: GqlScalar<UploadInternal>;
     };
 };
@@ -80,6 +83,104 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
                 scannedTotal: {
                     description: "Files successfully parsed and upserted so far.",
                     name: "scannedTotal",
+                    type: new GraphQLNonNull(GraphQLInt)
+                }
+            };
+        }
+    });
+    const DateTimeType: GraphQLScalarType = new GraphQLScalarType({
+        description: "An instant in time, serialised as an ISO 8601 string in UTC (e.g. `2026-06-08T15:42:49.000Z`).",
+        name: "DateTime",
+        ...config.scalars.DateTime
+    });
+    const LibraryScanErrorType: GraphQLObjectType = new GraphQLObjectType({
+        name: "LibraryScanError",
+        description: "A file the scanner failed to read. It is skipped on every scan until retried or dismissed, so it stops one broken file from being re-attempted endlessly.",
+        fields() {
+            return {
+                attemptedAt: {
+                    description: "When the most recent failed attempt occurred.",
+                    name: "attemptedAt",
+                    type: new GraphQLNonNull(DateTimeType)
+                },
+                filename: {
+                    description: "Absolute path of the file that failed.",
+                    name: "filename",
+                    type: new GraphQLNonNull(GraphQLString)
+                },
+                id: {
+                    name: "id",
+                    type: new GraphQLNonNull(GraphQLID)
+                },
+                message: {
+                    description: "Short, human-readable category of the failure.",
+                    name: "message",
+                    type: new GraphQLNonNull(GraphQLString)
+                }
+            };
+        }
+    });
+    const LibraryScanErrorEdgeType: GraphQLObjectType = new GraphQLObjectType({
+        name: "LibraryScanErrorEdge",
+        description: "A single entry in a `LibraryScanErrorConnection`.",
+        fields() {
+            return {
+                cursor: {
+                    description: "Cursor for paginating relative to this edge; equal to the error's `id`.",
+                    name: "cursor",
+                    type: new GraphQLNonNull(GraphQLID)
+                },
+                node: {
+                    name: "node",
+                    type: new GraphQLNonNull(LibraryScanErrorType)
+                }
+            };
+        }
+    });
+    const PageInfoType: GraphQLObjectType = new GraphQLObjectType({
+        name: "PageInfo",
+        description: "Boundary metadata for a `TrackConnection`.",
+        fields() {
+            return {
+                endCursor: {
+                    description: "Cursor of the last edge on the current page, or `null` for an empty page.",
+                    name: "endCursor",
+                    type: GraphQLID
+                },
+                hasNextPage: {
+                    description: "True when more tracks exist after the current page in the sort order.",
+                    name: "hasNextPage",
+                    type: new GraphQLNonNull(GraphQLBoolean)
+                },
+                hasPreviousPage: {
+                    description: "True when more tracks exist before the current page in the sort order.",
+                    name: "hasPreviousPage",
+                    type: new GraphQLNonNull(GraphQLBoolean)
+                },
+                startCursor: {
+                    description: "Cursor of the first edge on the current page, or `null` for an empty page.",
+                    name: "startCursor",
+                    type: GraphQLID
+                }
+            };
+        }
+    });
+    const LibraryScanErrorConnectionType: GraphQLObjectType = new GraphQLObjectType({
+        name: "LibraryScanErrorConnection",
+        description: "One page of a Relay-style traversal over the recorded scan errors, most recent first.",
+        fields() {
+            return {
+                edges: {
+                    name: "edges",
+                    type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(LibraryScanErrorEdgeType)))
+                },
+                pageInfo: {
+                    name: "pageInfo",
+                    type: new GraphQLNonNull(PageInfoType)
+                },
+                totalCount: {
+                    description: "Total number of recorded scan errors, ignoring pagination arguments.",
+                    name: "totalCount",
                     type: new GraphQLNonNull(GraphQLInt)
                 }
             };
@@ -442,34 +543,6 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
             };
         }
     });
-    const PageInfoType: GraphQLObjectType = new GraphQLObjectType({
-        name: "PageInfo",
-        description: "Boundary metadata for a `TrackConnection`.",
-        fields() {
-            return {
-                endCursor: {
-                    description: "Cursor of the last edge on the current page, or `null` for an empty page.",
-                    name: "endCursor",
-                    type: GraphQLID
-                },
-                hasNextPage: {
-                    description: "True when more tracks exist after the current page in the sort order.",
-                    name: "hasNextPage",
-                    type: new GraphQLNonNull(GraphQLBoolean)
-                },
-                hasPreviousPage: {
-                    description: "True when more tracks exist before the current page in the sort order.",
-                    name: "hasPreviousPage",
-                    type: new GraphQLNonNull(GraphQLBoolean)
-                },
-                startCursor: {
-                    description: "Cursor of the first edge on the current page, or `null` for an empty page.",
-                    name: "startCursor",
-                    type: GraphQLID
-                }
-            };
-        }
-    });
     const TrackConnectionType: GraphQLObjectType = new GraphQLObjectType({
         name: "TrackConnection",
         description: "One page of a Relay-style traversal over the track library.",
@@ -517,7 +590,7 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
                             type: new GraphQLList(new GraphQLNonNull(GraphQLString))
                         },
                         filterArtistIn: {
-                            description: "Restrict the library portion to tracks whose effective artist is one of these names. An empty or omitted list applies no filter.",
+                            description: "Restrict the library portion to tracks whose effective artist shares a synonym group with one of these names. Each name may be a canonical artist or any of its registered synonyms; either way the whole group's tracks are returned. An empty or omitted list applies no filter.",
                             type: new GraphQLList(new GraphQLNonNull(GraphQLString))
                         },
                         first: {
@@ -690,6 +763,24 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
                     description: "Tracks whose title matches the query, in library order.",
                     name: "tracks",
                     type: new GraphQLNonNull(TrackConnectionType)
+                },
+                tracksByFilename: {
+                    description: "Tracks whose file path contains the query, matched as a substring rather than a prefix, ordered by path. Surfaces recordings whose tags are missing or wrong but whose filename carries the query. Paginated (default page size 10), since a substring path match can be broad.",
+                    name: "tracksByFilename",
+                    type: new GraphQLNonNull(TrackConnectionType),
+                    args: {
+                        after: {
+                            description: "Continue after this cursor \u2014 a track `id` from a previous page's edge.",
+                            type: GraphQLID
+                        },
+                        first: {
+                            description: "Maximum number of rows to return. Defaults to 10.",
+                            type: GraphQLInt
+                        }
+                    },
+                    resolve(source, args) {
+                        return source.tracksByFilename(args.first, args.after);
+                    }
                 }
             };
         }
@@ -739,6 +830,22 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
                         return queryLibraryScanResolver();
                     }
                 },
+                libraryScanErrors: {
+                    description: "The files that failed to scan and are being skipped, newest first. Page through with `first`/`after`. Returns null only when something has gone wrong; an empty library of errors yields an empty connection.",
+                    name: "libraryScanErrors",
+                    type: LibraryScanErrorConnectionType,
+                    args: {
+                        after: {
+                            type: GraphQLID
+                        },
+                        first: {
+                            type: GraphQLInt
+                        }
+                    },
+                    resolve(_source, args) {
+                        return queryLibraryScanErrorsResolver(args);
+                    }
+                },
                 ping: {
                     description: "Returns the literal string `\"pong\"`. Useful as a liveness probe.",
                     name: "ping",
@@ -761,7 +868,7 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
                     }
                 },
                 search: {
-                    description: "Search the library for artists, albums and tracks whose name matches `query` as a case-insensitive prefix. Returns `null` for a blank query.",
+                    description: "Search the library for artists, albums and tracks whose name matches `query` as a case-insensitive prefix, plus tracks whose file path contains `query` as a substring. Returns `null` for a blank query.",
                     name: "search",
                     type: SearchType,
                     args: {
@@ -802,7 +909,7 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
                             type: new GraphQLList(new GraphQLNonNull(GraphQLString))
                         },
                         filterArtistIn: {
-                            description: "Restrict the result to tracks whose effective artist is one of these names. Pass the names returned by `Query.search` (not synonyms); an empty or omitted list applies no filter.",
+                            description: "Restrict the result to tracks whose effective artist shares a synonym group with one of these names. Each name may be a canonical artist or any of its registered synonyms; either way the whole group's tracks are returned. An empty or omitted list applies no filter.",
                             type: new GraphQLList(new GraphQLNonNull(GraphQLString))
                         },
                         first: {
@@ -954,6 +1061,32 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
                     },
                     resolve(_source, args) {
                         return mutationLibraryScanCancelResolver(args);
+                    }
+                },
+                libraryScanErrorDismiss: {
+                    description: "Removes a recorded scan error from the review list without retrying its file. The file may resurface as an error if a future scan reaches it again. No-op when the error id is unknown.",
+                    name: "libraryScanErrorDismiss",
+                    type: new GraphQLNonNull(VoidType),
+                    args: {
+                        id: {
+                            type: new GraphQLNonNull(GraphQLID)
+                        }
+                    },
+                    resolve(_source, args) {
+                        return mutationLibraryScanErrorDismissResolver(args);
+                    }
+                },
+                libraryScanErrorRetry: {
+                    description: "Re-attempts the file behind a recorded scan error. On success the file is parsed and its error cleared; on failure the error is refreshed with the latest attempt. Either way the client should refetch `libraryScanErrors`. No-op when the error id is unknown (already retried or dismissed).",
+                    name: "libraryScanErrorRetry",
+                    type: new GraphQLNonNull(VoidType),
+                    args: {
+                        id: {
+                            type: new GraphQLNonNull(GraphQLID)
+                        }
+                    },
+                    resolve(_source, args) {
+                        return mutationLibraryScanErrorRetryResolver(args);
                     }
                 },
                 libraryScanStart: {
@@ -1282,7 +1415,7 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
         query: QueryType,
         mutation: MutationType,
         subscription: SubscriptionType,
-        types: [UploadType, MediaSizeType, QualityType, TrackArtworkType, MediaType, TrackFormatType, AlbumType, AlbumConnectionType, AlbumEdgeType, ArtistType, ArtistConnectionType, ArtistEdgeType, ArtistInitialType, ArtistSynonymType, ArtworkType, ArtworkStatusType, DeliveryTierType, DurationType, ImageType, ImageSourceType, LibraryScanType, MutationType, PageInfoType, PlaybackQueueType, QueryType, SearchType, SubscriptionType, TrackType, TrackConnectionType, TrackDeliveryType, TrackEdgeType, TrackManifestType, TrackManifestChunkType, TrackManifestInitType, VoidType]
+        types: [DateTimeType, UploadType, MediaSizeType, QualityType, TrackArtworkType, MediaType, TrackFormatType, AlbumType, AlbumConnectionType, AlbumEdgeType, ArtistType, ArtistConnectionType, ArtistEdgeType, ArtistInitialType, ArtistSynonymType, ArtworkType, ArtworkStatusType, DeliveryTierType, DurationType, ImageType, ImageSourceType, LibraryScanType, LibraryScanErrorType, LibraryScanErrorConnectionType, LibraryScanErrorEdgeType, MutationType, PageInfoType, PlaybackQueueType, QueryType, SearchType, SubscriptionType, TrackType, TrackConnectionType, TrackDeliveryType, TrackEdgeType, TrackManifestType, TrackManifestChunkType, TrackManifestInitType, VoidType]
     });
 }
 const typeNameMap = new Map();

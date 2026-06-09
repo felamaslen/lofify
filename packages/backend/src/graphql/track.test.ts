@@ -453,6 +453,21 @@ test('Query.tracks offset returns an arbitrary window without paging through the
   expect(data.tracks!.pageInfo).toEqual({ hasNextPage: true, hasPreviousPage: true });
 });
 
+test('Query.tracks sorts artists case-insensitively', async () => {
+  await seedArtists(['Zebra', 'apple', 'Banana', 'aardvark']);
+
+  const { data } = await gqlRequest(app)
+    .query(OffsetTracksQuery)
+    .variables({ first: 10, offset: 0 })
+    .expectNoErrors();
+  expect(data.tracks!.edges.map((e) => e.node.artist)).toEqual([
+    'aardvark',
+    'apple',
+    'Banana',
+    'Zebra',
+  ]);
+});
+
 test('Query.artistIndex buckets by first letter with the offset each begins at', async () => {
   // The untagged track sorts first (empty effective artist) under the `#` bucket.
   await seedArtists([null, 'Alpha', 'Apex', 'Beta', 'Zeta']);

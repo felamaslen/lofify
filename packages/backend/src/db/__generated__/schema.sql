@@ -28,6 +28,14 @@ CREATE TABLE "PlaybackCacheAccess" (
   "sizeBytes" bigint DEFAULT 0 NOT NULL
 );
 
+CREATE TABLE "ScanErrors" (
+  "id" uuid PRIMARY KEY DEFAULT uuidv7() NOT NULL,
+  "file" text NOT NULL,
+  "message" text NOT NULL,
+  "stack" text NOT NULL,
+  "attemptedAt" timestamp with time zone DEFAULT now() NOT NULL
+);
+
 CREATE TABLE "Tracks" (
   "id" uuid PRIMARY KEY DEFAULT uuidv7() NOT NULL,
   "createdAt" timestamp with time zone DEFAULT now() NOT NULL,
@@ -78,6 +86,8 @@ CREATE UNIQUE INDEX "AlbumArt_albumArtist_album_unq" ON "AlbumArt" USING btree (
 CREATE INDEX "ArtistSynonyms_synonym_idx" ON "ArtistSynonyms" USING btree ("synonym");
 
 CREATE INDEX "PlaybackCacheAccess_lastAccess_idx" ON "PlaybackCacheAccess" USING btree ("lastAccess");
+
+CREATE UNIQUE INDEX "ScanErrors_file_unq" ON "ScanErrors" USING btree ("file");
 
 CREATE INDEX "Tracks_artist_idx" ON "Tracks" USING btree ("artist");
 

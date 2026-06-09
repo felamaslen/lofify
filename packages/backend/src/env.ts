@@ -61,6 +61,12 @@ const Schema = z.object({
 
   /** Git commit SHA this server was built from, baked in at image build time. Compared against the client's build SHA by `Query.isUpdateAvailable`. The `dev` default means "unknown", which suppresses the client's update prompt during local development. */
   GIT_SHA: z.string().default('dev'),
+
+  /** Log every SQL statement Drizzle issues, with its bound parameters, through the application logger. Off by default; intended for local debugging. Set to `true` or `1` to enable. */
+  DB_QUERY_LOG: z
+    .string()
+    .optional()
+    .transform((v) => v === 'true' || v === '1'),
 });
 
 export const env = Schema.parse(process.env);

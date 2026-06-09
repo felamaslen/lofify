@@ -49,7 +49,11 @@ with the active background.
 Playback is MSE-only. A gear button in the playback bar's right section
 opens a settings dialog holding the appearance, library rescan, quality
 and preferred format controls (the latter two are pill toggles —
-`ToggleGroup`):
+`ToggleGroup`). When the library holds files that failed to scan, an
+amber warning button sits beside Rescan (`components/rescan-button.tsx`)
+showing the count; it opens a paginated dialog
+(`components/scan-errors-dialog.tsx`) where each error can be retried
+(re-read the file) or dismissed (drop it from the list):
 
 - **Quality** — three modes. `Adaptive` transcodes to a lossy tier whose
   bitrate is chosen automatically from the measured connection speed,
@@ -409,9 +413,13 @@ worker pick up the new app shell. In development `VITE_GIT_SHA` is `dev` (see
 ## Search
 
 The search box in the header runs `Query.search` as you type (debounced),
-showing a keyboard-navigable dropdown grouped into artists, albums, and
-tracks (↑/↓ to move, Enter to choose, Esc to close). Choosing a track
-plays it; choosing an artist or album sets a library filter — held in a
+showing a keyboard-navigable dropdown grouped into artists, albums,
+tracks, and — once the query reaches three characters — a "Matched by
+filename" group of tracks whose file path contains the query (the
+`tracksByFilename` connection, gated client-side with `@skip` and shown
+as the path with its basename bold). ↑/↓ to move, Enter to choose, Esc
+to close. Choosing a track plays it; choosing an artist or album sets a
+library filter — held in a
 `LibraryFilterProvider` context that the track list reads into its
 `tracks(filterArtistIn:/filterAlbumIn:)` query. Choosing an album pins
 its artist only when the album is credited to exactly one. The active

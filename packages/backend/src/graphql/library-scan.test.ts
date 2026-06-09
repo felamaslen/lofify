@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 import { app } from '../app.js';
 import { db } from '../db/client.js';
-import { tracks } from '../db/schema/index.js';
+import { scanErrors, tracks } from '../db/schema/index.js';
 import { env } from '../env.js';
 import { TEST__clearScans } from '../scanner/runner.js';
 import { graphql, type ResultOf } from '../test/gql.js';
@@ -26,6 +26,7 @@ async function clearLibrary() {
 
 beforeEach(async () => {
   await db.delete(tracks);
+  await db.delete(scanErrors);
   await clearLibrary();
   TEST__clearScans();
 });
@@ -33,11 +34,25 @@ beforeEach(async () => {
 afterEach(async () => {
   await clearLibrary();
   await db.delete(tracks);
+  await db.delete(scanErrors);
 });
 
 const LibraryScanStartMutation = graphql(`
   mutation LibraryScanStart {
     libraryScanStart {
+      id
+      filesTotal
+      scannedTotal
+      errorsTotal
+      isCompleted
+      errorMessage
+    }
+  }
+`);
+
+const LibraryScanStartForceMutation = graphql(`
+  mutation LibraryScanStartForce($force: Boolean) {
+    libraryScanStart(force: $force) {
       id
       filesTotal
       scannedTotal
@@ -135,6 +150,50 @@ test('Subscription.libraryScan: errorMessage reports failed files on the final f
   expect(last.isCompleted).toBe(true);
   expect(last.errorsTotal).toBe(1);
   expect(last.errorMessage).toBe('1 file failed to scan');
+});
+
+test('a filename containing a backslash is scanned, not mangled into a missing path', async () => {
+  // A literal backslash in a name (Windows-style paths flattened onto the NAS)
+  // used to be rewritten to a forward slash by the glob walker, yielding a path
+  // that stat() reported as missing. The direct walk preserves the bytes, so the
+  // file is found and ingested normally.
+  await copyFile(
+    path.join(fixturesDir, 'sample.flac'),
+    path.join(env.LIBRARY_PATH, 'Artist\\Album.flac'),
+  );
+
+  const { data } = await gqlRequest(app).mutate(LibraryScanStartMutation).expectNoErrors();
+  const last = (await drainScanStream(data.libraryScanStart.id)).at(-1)!;
+  expect(last.filesTotal).toBe(1);
+  expect(last.scannedTotal).toBe(1);
+  expect(last.errorsTotal).toBe(0);
+});
+
+test('a file that fails to scan is recorded once, then skipped on the next scan unless forced', async () => {
+  await writeFile(path.join(env.LIBRARY_PATH, 'broken.flac'), 'not audio');
+
+  // First scan: the file fails to parse and is counted as an error, never a track.
+  const { data: first } = await gqlRequest(app).mutate(LibraryScanStartMutation).expectNoErrors();
+  const firstLast = (await drainScanStream(first.libraryScanStart.id)).at(-1)!;
+  expect(firstLast.filesTotal).toBe(1);
+  expect(firstLast.scannedTotal).toBe(0);
+  expect(firstLast.errorsTotal).toBe(1);
+
+  // Second scan: the recorded error makes the scanner skip the file (counted as
+  // scanned, not re-attempted), so no error recurs.
+  const { data: second } = await gqlRequest(app).mutate(LibraryScanStartMutation).expectNoErrors();
+  const secondLast = (await drainScanStream(second.libraryScanStart.id)).at(-1)!;
+  expect(secondLast.filesTotal).toBe(1);
+  expect(secondLast.scannedTotal).toBe(1);
+  expect(secondLast.errorsTotal).toBe(0);
+
+  // A forced scan bypasses the skip and re-attempts the file, so the error surfaces again.
+  const { data: forced } = await gqlRequest(app)
+    .mutate(LibraryScanStartForceMutation)
+    .variables({ force: true })
+    .expectNoErrors();
+  const forcedLast = (await drainScanStream(forced.libraryScanStart.id)).at(-1)!;
+  expect(forcedLast.errorsTotal).toBe(1);
 });
 
 const LibraryScanCancelMutation = graphql(`

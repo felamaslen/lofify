@@ -1,5 +1,4 @@
 import { useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
-import { X } from 'lucide-react';
 import { useRef } from 'react';
 
 import { ErrorToast } from '../components/error-toast.tsx';
@@ -49,23 +48,6 @@ const HomeDocument = graphql(
   [ArtistIndexDocument, TrackWindowDocument, UpdateIndicatorDocument],
 );
 
-function FilterChip() {
-  const { artist, album, clear } = useLibraryFilter();
-  if (!artist && !album) return null;
-  const label = album ? `Album: ${album}` : `Artist: ${artist}`;
-  return (
-    <button
-      type="button"
-      onClick={clear}
-      className="flex items-center gap-1 rounded-full bg-accent/60 px-2 py-0.5 text-xs text-foreground hover:bg-accent"
-      title="Clear filter"
-    >
-      <span className="max-w-48 truncate">{label}</span>
-      <X className="size-3 shrink-0" />
-    </button>
-  );
-}
-
 function HomeLayout() {
   const { active } = useVisualiser();
   const { artist, album } = useLibraryFilter();
@@ -105,14 +87,17 @@ function HomeLayout() {
   });
   return (
     <div className="flex min-h-screen flex-col">
-      <header className="sticky top-0 z-30 flex h-10 items-center gap-3 border-b border-border bg-background px-3 max-sm:h-auto max-sm:py-1.5">
-        <QueuePanel />
-        <h1 className="m-0 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Lofify
-        </h1>
+      <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-border bg-background px-3 max-sm:h-16">
+        <div className="flex flex-1 items-center gap-3 max-sm:flex-none">
+          <QueuePanel />
+          <h1 className="m-0 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Lofify
+          </h1>
+        </div>
         <SearchBox />
-        <FilterChip />
-        <UpdateIndicator />
+        <div className="flex flex-1 items-center justify-end max-sm:flex-none">
+          <UpdateIndicator />
+        </div>
       </header>
       {active ? <Visualiser /> : <TrackList />}
       <div className="sticky bottom-0 z-30">

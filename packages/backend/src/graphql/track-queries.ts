@@ -2,7 +2,10 @@ import { asc, desc, eq, inArray, isNull, ne, or, type SQL, sql } from 'drizzle-o
 import type { ID, Int } from 'grats';
 
 import { db } from '../db/client.js';
-import { tracks as tracksTable } from '../db/schema/index.js';
+import {
+  artistSynonyms as artistSynonymsTable,
+  tracks as tracksTable,
+} from '../db/schema/index.js';
 import { toGqlTrack, type Track } from './track.js';
 
 /**
@@ -64,8 +67,25 @@ function buildFilterClause(
 ): SQL | null {
   const clauses: SQL[] = [];
   if (filterArtistIn && filterArtistIn.length > 0) {
+    const effectiveArtist = sql`coalesce(${tracksTable.artistOverride}, ${tracksTable.artist})`;
+    const a = artistSynonymsTable;
+    // Match every track sharing a synonym group with a requested name, regardless of which form
+    // the request takes: a requested name may be the canonical artist or any of its synonyms.
+    // Resolve the requests to their canonical artists, then match every name in those groups —
+    // the canonicals plus all their synonyms (so a requested synonym also pulls in the canonical
+    // and its sibling synonyms).
+    const requestedMatch = or(
+      inArray(a.artist, filterArtistIn),
+      inArray(a.synonym, filterArtistIn),
+    )!;
+    const relatedCanonicals = db.select({ name: a.artist }).from(a).where(requestedMatch);
+    const groupNames = db
+      .select({ name: a.artist })
+      .from(a)
+      .where(requestedMatch)
+      .union(db.select({ name: a.synonym }).from(a).where(inArray(a.artist, relatedCanonicals)));
     clauses.push(
-      inArray(sql`coalesce(${tracksTable.artistOverride}, ${tracksTable.artist})`, filterArtistIn),
+      or(inArray(effectiveArtist, filterArtistIn), inArray(effectiveArtist, groupNames))!,
     );
   }
   if (filterAlbumIn && filterAlbumIn.length > 0) {
@@ -104,8 +124,9 @@ function sortColumns(
   }
   return [
     {
-      row: sql`coalesce(${tracksTable.artistOverride}, ${tracksTable.artist}, '')`,
-      cursor: sql`coalesce(c."artistOverride", c.artist, '')`,
+      // Case-insensitive: "deadmau5" must sort next to "Deadmau5", not after every capitalised artist.
+      row: sql`lower(coalesce(${tracksTable.artistOverride}, ${tracksTable.artist}, ''))`,
+      cursor: sql`lower(coalesce(c."artistOverride", c.artist, ''))`,
     },
     {
       // Year is free text; extract its leading digits and sort numerically (2011 before 2002) rather than lexically. Negated so the otherwise-ascending order runs newest-first; untagged tracks coalesce to 0 and trail.
@@ -113,8 +134,8 @@ function sortColumns(
       cursor: sql`-coalesce(substring(coalesce(c."yearOverride", c.year, '') from '[0-9]+')::int, 0)`,
     },
     {
-      row: sql`coalesce(${tracksTable.albumOverride}, ${tracksTable.album}, '')`,
-      cursor: sql`coalesce(c."albumOverride", c.album, '')`,
+      row: sql`lower(coalesce(${tracksTable.albumOverride}, ${tracksTable.album}, ''))`,
+      cursor: sql`lower(coalesce(c."albumOverride", c.album, ''))`,
     },
     {
       row: sql`coalesce(${tracksTable.discNumberOverride}, ${tracksTable.discNumber}, 0)`,
@@ -195,7 +216,7 @@ export async function tracks(
   last?: Int | null,
   after?: ID | null,
   before?: ID | null,
-  /** Restrict the result to tracks whose effective artist is one of these names. Pass the names returned by `Query.search` (not synonyms); an empty or omitted list applies no filter. */
+  /** Restrict the result to tracks whose effective artist shares a synonym group with one of these names. Each name may be a canonical artist or any of its registered synonyms; either way the whole group's tracks are returned. An empty or omitted list applies no filter. */
   filterArtistIn?: string[] | null,
   /** Restrict the result to tracks whose effective album is one of these names. An empty or omitted list applies no filter. */
   filterAlbumIn?: string[] | null,

@@ -210,6 +210,24 @@ export function TrackList() {
   const anchorRef = useRef<number | null>(null);
   const [editing, setEditing] = useState(false);
 
+  // An open info preview is dismissed by Radix on the outside pointerdown, but the same tap still
+  // lands a click on the row. Snapshot whether a preview was open at the start of the gesture (in
+  // the capture phase, before Radix's bubble-phase dismiss) so the click can be swallowed: it
+  // should only close the preview, not play or change the selection.
+  const previewCountRef = useRef(0);
+  const tapClosedPreviewRef = useRef(false);
+
+  // Escape clears the selection, unless the tag-edit dialog owns the key (it closes itself first).
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || editing) return;
+      setSelected((prev) => (prev.size === 0 ? prev : new Set()));
+      anchorRef.current = null;
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [editing]);
+
   // The page itself scrolls (body scroll), so the virtualizer tracks the window. `scrollMargin` is
   // how far the row container sits below the document top (the sticky app + column headers), so
   // virtual offsets map onto page scroll.
@@ -401,7 +419,7 @@ export function TrackList() {
         role="row"
         className={cn(
           COLS,
-          'sticky top-10 z-20 border-b border-border bg-background py-2 text-[11px] uppercase tracking-wider text-muted-foreground max-sm:hidden',
+          'sticky top-14 z-20 border-b border-border bg-background py-2 text-[11px] uppercase tracking-wider text-muted-foreground max-sm:hidden',
           showScrubber && 'pr-8',
         )}
       >
@@ -452,6 +470,9 @@ export function TrackList() {
                   key={edge.cursor}
                   role="row"
                   aria-selected={isSelected}
+                  onPointerDownCapture={() => {
+                    tapClosedPreviewRef.current = previewCountRef.current > 0;
+                  }}
                   onMouseDown={(e) => {
                     // Suppress the browser's native text-selection on
                     // double-click and shift-click (range select); plain
@@ -459,6 +480,12 @@ export function TrackList() {
                     if (e.detail >= 2 || e.shiftKey) e.preventDefault();
                   }}
                   onClick={(e) => {
+                    // A tap that dismissed an open info preview should only close it — not play or
+                    // change the selection.
+                    if (tapClosedPreviewRef.current) {
+                      tapClosedPreviewRef.current = false;
+                      return;
+                    }
                     // Touch has no hover/double-click affordance, so a plain
                     // tap plays; long-press still opens the context menu.
                     if (isMobile) {
@@ -481,13 +508,17 @@ export function TrackList() {
                     // touch-pan-y: vertical scrolling stays native, but the browser never pans the
                     // view for a horizontal gesture starting on a row — that belongs to the
                     // swipe-to-enqueue handler alone.
-                    'cursor-pointer touch-pan-y text-sm hover:bg-accent/40',
+                    'group cursor-pointer touch-pan-y text-sm',
+                    !isSelected && 'hover:bg-accent',
                     // The long-press that opens the context menu must not start a native text
                     // selection; desktop keeps click-drag text selection.
                     isMobile && 'select-none',
                     !t.isLossless && !active && 'text-muted-foreground',
-                    isSelected && 'bg-accent/60',
-                    active && 'shadow-[inset_4px_0_0_0] shadow-primary text-primary',
+                    virtualRow.index % 2 === 1 && !isSelected && 'bg-muted/70',
+                    isSelected && 'bg-primary text-primary-foreground hover:bg-primary/90',
+                    active && 'shadow-[inset_4px_0_0_0]',
+                    active && !isSelected && 'shadow-primary text-primary',
+                    active && isSelected && 'shadow-primary-foreground',
                   )}
                   style={{
                     position: 'absolute',
@@ -507,7 +538,14 @@ export function TrackList() {
                       <ListPlus className="size-5" />
                     </span>
                   )}
-                  <div data-swipe-content className={cn(COLS, 'h-full', showScrubber && 'pr-8')}>
+                  <div
+                    data-swipe-content
+                    className={cn(
+                      COLS,
+                      'h-full group-aria-selected:[&>span]:text-primary-foreground',
+                      showScrubber && 'pr-8',
+                    )}
+                  >
                     <span className="text-muted-foreground tabular-nums max-sm:hidden">
                       {t.discNumber ?? ''}
                     </span>
@@ -539,7 +577,12 @@ export function TrackList() {
                       {t.year ?? ''}
                     </span>
                     <span className="flex justify-end max-sm:col-start-3 max-sm:row-start-1 max-sm:self-center">
-                      <TrackInfoButton track={edge.node} />
+                      <TrackInfoButton
+                        track={edge.node}
+                        onOpenChange={(open) => {
+                          previewCountRef.current += open ? 1 : -1;
+                        }}
+                      />
                     </span>
                   </div>
                 </div>

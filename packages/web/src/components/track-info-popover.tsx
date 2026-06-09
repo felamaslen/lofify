@@ -71,12 +71,18 @@ function sourceLabel(s: {
   return parts.join(' · ');
 }
 
-export function TrackInfoButton({ track }: { track: FragmentOf<typeof TrackInfoDocument> }) {
+export function TrackInfoButton({
+  track,
+  onOpenChange,
+}: {
+  track: FragmentOf<typeof TrackInfoDocument>;
+  onOpenChange?: (open: boolean) => void;
+}) {
   const t = readFragment(TrackInfoDocument, track);
   // The row owns click/double-click (select/play); keep them from firing when interacting with the info control.
   const stop = (e: { stopPropagation: () => void }) => e.stopPropagation();
   return (
-    <Popover>
+    <Popover {...(onOpenChange ? { onOpenChange } : {})}>
       <PopoverTrigger asChild>
         <button
           type="button"
@@ -84,7 +90,7 @@ export function TrackInfoButton({ track }: { track: FragmentOf<typeof TrackInfoD
           onClick={stop}
           onMouseDown={stop}
           onDoubleClick={stop}
-          className="inline-flex size-6 items-center justify-center rounded-sm text-muted-foreground/70 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="inline-flex size-6 items-center justify-center rounded-sm text-muted-foreground/70 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-aria-selected:text-primary-foreground/80 group-aria-selected:hover:bg-primary-foreground/20 group-aria-selected:hover:text-primary-foreground"
         >
           <Info className="size-4" />
         </button>

@@ -3,7 +3,7 @@ import chokidar, { type FSWatcher } from 'chokidar';
 
 import { logger } from '../logger.js';
 import { AUDIO_EXTENSION_RE } from './audio-extensions.js';
-import { deleteTrackByFile, upsertTrack } from './scan.js';
+import { deleteTrackByFile, upsertTrackTracked } from './scan.js';
 
 const tracer = trace.getTracer('lofify.scanner');
 
@@ -43,7 +43,7 @@ export function watchLibrary(roots: string[]): FSWatcher {
     if (!AUDIO_EXTENSION_RE.test(file)) return;
     withSpan(`scanner.watch.${kind}`, file, async () => {
       logger.info('[watch] Upserting file', { file });
-      await upsertTrack(file);
+      await upsertTrackTracked(file);
     });
   };
 

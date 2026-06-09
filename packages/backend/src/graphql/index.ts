@@ -16,6 +16,13 @@ export function buildSchema() {
             throw new GraphQLError('Upload value must come from a multipart request.');
           },
         },
+        DateTime: {
+          serialize(value: unknown) {
+            if (value instanceof Date) return value.toISOString();
+            if (typeof value === 'string') return value;
+            throw new GraphQLError('DateTime must serialize a Date.');
+          },
+        },
       },
     }),
   );

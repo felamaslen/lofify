@@ -293,7 +293,7 @@ export function ArtworkTile({
         className="flex size-full items-center justify-center rounded-md bg-muted/40 ring-1 ring-border"
         aria-label="Fetching album art"
       >
-        <Loader2 className={cn('animate-spin text-muted-foreground/70', iconClassName)} />
+        <Loader2 className={cn('animate-spin text-muted-foreground', iconClassName)} />
       </div>
     );
   } else if (artwork?.__typename === 'Artwork') {
@@ -334,7 +334,7 @@ export function ArtworkTile({
         aria-label={failed ? 'Retry album art download' : 'Download album art'}
         className={cn(
           'group flex size-full items-center justify-center rounded-md border border-dashed border-border text-muted-foreground/50 transition-colors hover:border-solid hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-          failed && 'text-destructive-foreground/70 hover:text-destructive-foreground',
+          failed && 'text-destructive/70 hover:text-destructive',
         )}
       >
         {failed ? (

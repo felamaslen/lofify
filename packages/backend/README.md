@@ -19,7 +19,9 @@ src/
                 walks every library root, classifies discovered files
                 against `Tracks` in batches, and feeds a priority queue:
                 new files are parsed first, changed files next, and
-                unchanged files are skipped.
+                unchanged files are skipped. Files that failed a previous
+                read are recorded in `ScanErrors` and skipped until
+                retried by hand; `force` re-attempts them.
   playback/     `/play/...` HTTP route, HMAC-signed URLs, unified
                 per-entry encoded cache (.bin + .idx live-tail), and
                 ffmpeg encoder.
@@ -91,6 +93,25 @@ columns, so overrides survive rescans. Every read (`Query.track`,
 `Query.tracks`, including the pagination sort) returns the effective
 value, `coalesce(override, scanned)`.
 
+## Scan errors
+
+A file that throws while being read (during a scan or a watch event) is
+recorded in `ScanErrors`, keyed by path, with a human-readable category
+and the full stack. A recorded file is **skipped on every subsequent
+scan** until it is dealt with by hand, so one broken file never gets
+re-attempted endlessly; `force` re-attempts it regardless. The row
+clears automatically when the file later scans cleanly or is deleted.
+
+`Query.libraryScanErrors` pages through the recorded errors (newest
+first). `Mutation.libraryScanErrorRetry(id)` re-reads the file —
+clearing the error on success, refreshing it on repeated failure — and
+`Mutation.libraryScanErrorDismiss(id)` drops it from the list without
+retrying.
+
+The `message` category is `"Unknown error"` for everything today;
+finer categories will be filled in (`scanner/error-category.ts`) as real
+failures surface in production.
+
 ## Deduplication
 
 The library often holds the same recording several times — a FLAC and an
@@ -120,7 +141,12 @@ default; pass `includeDuplicates: true` to include every copy.
 (start of string) against the effective artist, album, and title, and
 returns three relay-style connections: `artists`, `albums`, and
 `tracks`. Each group is resolved independently and capped (no
-pagination — it backs a top-N dropdown). A blank query returns `null`.
+pagination — it backs a top-N dropdown). A fourth group,
+`tracksByFilename`, matches `query` as a **substring** of the file path
+(not a prefix) — surfacing recordings whose tags are missing or wrong
+but whose path carries the query — and unlike the others is genuinely
+paginated (`first`/`after`, default page size 10), since a substring
+path match can be broad. A blank query returns `null`.
 An `Album` carries every artist credited across its tracks (`artists`),
 so a multi-artist album isn't collapsed to one. `artists` also matches
 on registered synonyms (see below), always returning the canonical
@@ -361,3 +387,4 @@ true` snapshot and complete.
 | `DISK_CACHE_SWEEP_GRACE_SECONDS` | `300`                                         | Grace window during which a recently-accessed entry is never evicted, even when over budget — protects entries an in-flight playback session still depends on. Must exceed 60s.                               |
 | `WEB_DIST_PATH`                  | `packages/web/dist`                           | Built web client served as an SPA catch-all when present.                                                                                                                                                     |
 | `GIT_SHA`                        | `dev`                                         | Git commit the image was built from (baked in by the Dockerfile, not set by hand). Backs `Query.isUpdateAvailable`, which the client polls to detect a newer deployment. `dev` suppresses the prompt locally. |
+| `DB_QUERY_LOG`                   | _(unset)_                                     | Set to `true`/`1` to log every SQL statement Drizzle issues, with bound parameters, through the application logger. For local debugging; leave unset in production.                                           |

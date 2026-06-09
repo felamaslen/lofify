@@ -1,5 +1,5 @@
-import { inArray, sql } from 'drizzle-orm';
-import type { Int } from 'grats';
+import { ilike, inArray, type SQL, sql } from 'drizzle-orm';
+import type { ID, Int } from 'grats';
 
 import { db } from '../db/client.js';
 import {
@@ -7,15 +7,27 @@ import {
   tracks as tracksTable,
 } from '../db/schema/index.js';
 import { toGqlTrack } from './track.js';
-import type { TrackConnection, TrackEdge } from './track-queries.js';
+import { clampLimit, type TrackConnection, type TrackEdge } from './track-queries.js';
 
-/** Most matches of each kind returned for a single search; the UI shows a top-N dropdown rather than paginating. */
+/** Most matches of each kind returned for a single search; the name groups show a top-N dropdown rather than paginating. */
 const SEARCH_LIMIT = 20;
 
-/** Turn a user's raw query into a case-insensitive prefix `ILIKE` pattern (matches the start of the string), escaping the wildcard metacharacters so a literal `%` or `_` matches itself. */
+/** Default page size for the paginated filename group; smaller than `SEARCH_LIMIT` because a substring path match can be broad. */
+const FILENAME_PAGE_SIZE = 10;
+
+/** Escape the `ILIKE` wildcard metacharacters in a raw query so a literal `%` or `_` matches itself. */
+function escapeLike(query: string): string {
+  return query.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+
+/** A case-insensitive prefix `ILIKE` pattern (matches the start of the string). */
 function likePattern(query: string): string {
-  const escaped = query.replace(/[\\%_]/g, (c) => `\\${c}`);
-  return `${escaped}%`;
+  return `${escapeLike(query)}%`;
+}
+
+/** A case-insensitive substring `ILIKE` pattern (matches anywhere), for fields where anchoring to the start is too strict — e.g. a file path the user only remembers a fragment of. */
+function containsPattern(query: string): string {
+  return `%${escapeLike(query)}%`;
 }
 
 /** The effective (override-aware) artist of a track. */
@@ -99,12 +111,20 @@ export type AlbumConnection = {
  * @gqlType
  */
 export class Search {
-  constructor(private readonly pattern: string) {}
+  /** Prefix pattern, for name matches (artist/album/title). */
+  private readonly pattern: string;
+  /** Substring pattern, for file-path matches. */
+  private readonly filenamePattern: string;
+
+  constructor(query: string) {
+    this.pattern = likePattern(query);
+    this.filenamePattern = containsPattern(query);
+  }
 
   /** Distinct artists whose name — or one of their registered synonyms — matches the query. A synonym match contributes its canonical artist, so the result is always a real artist name (never a synonym), suitable for `filterArtistIn`. @gqlField */
   async artists(): Promise<ArtistConnection> {
-    const directMatch = sql`${artistName} ilike ${this.pattern} escape '\\'`;
-    const synonymMatch = sql`${artistSynonymsTable.synonym} ilike ${this.pattern} escape '\\'`;
+    const directMatch = ilike(artistName, this.pattern);
+    const synonymMatch = ilike(artistSynonymsTable.synonym, this.pattern);
     // `union` dedupes, so an artist matched both directly and via a synonym appears once.
     const matches = sql`
       select distinct ${artistName} as name from ${tracksTable} where ${directMatch}
@@ -125,7 +145,7 @@ export class Search {
 
   /** Distinct albums whose title matches the query, each carrying its credited artists. @gqlField */
   async albums(): Promise<AlbumConnection> {
-    const match = sql`${albumName} ilike ${this.pattern} escape '\\'`;
+    const match = ilike(albumName, this.pattern);
     const nameRows = await db
       .selectDistinct({ name: albumName })
       .from(tracksTable)
@@ -166,15 +186,33 @@ export class Search {
   /** Tracks whose title matches the query, in library order. @gqlField */
   async tracks(): Promise<TrackConnection> {
     const title = sql`coalesce(${tracksTable.titleOverride}, ${tracksTable.title})`;
-    const match = sql`${title} ilike ${this.pattern} escape '\\'`;
+    const match = ilike(title, this.pattern);
+    return trackConnection(match, [title, sql`${tracksTable.file}`]);
+  }
+
+  /** Tracks whose file path contains the query, matched as a substring rather than a prefix, ordered by path. Surfaces recordings whose tags are missing or wrong but whose filename carries the query. Paginated (default page size 10), since a substring path match can be broad. @gqlField */
+  async tracksByFilename(
+    /** Maximum number of rows to return. Defaults to 10. */
+    first?: Int | null,
+    /** Continue after this cursor — a track `id` from a previous page's edge. */
+    after?: ID | null,
+  ): Promise<TrackConnection> {
+    const limit = clampLimit(first) ?? FILENAME_PAGE_SIZE;
+    const match = ilike(tracksTable.file, this.filenamePattern);
+    // `file` is unique, so a single-column keyset on it is a total order.
+    const keyset =
+      after != null
+        ? sql`${tracksTable.file} > (select c.file from ${tracksTable} c where c.id = ${after})`
+        : null;
+    const where = keyset ? sql`${match} and ${keyset}` : match;
     const rows = await db
       .select()
       .from(tracksTable)
-      .where(match)
-      .orderBy(title, tracksTable.file)
-      .limit(SEARCH_LIMIT + 1);
-    const hasMore = rows.length > SEARCH_LIMIT;
-    const slice = hasMore ? rows.slice(0, SEARCH_LIMIT) : rows;
+      .where(where)
+      .orderBy(tracksTable.file)
+      .limit(limit + 1);
+    const hasMore = rows.length > limit;
+    const slice = hasMore ? rows.slice(0, limit) : rows;
     const edges: TrackEdge[] = slice.map((row) => ({ node: toGqlTrack(row), cursor: row.id }));
     const totalRow = await db
       .select({ count: sql<number>`count(*)::int` })
@@ -184,7 +222,7 @@ export class Search {
       edges,
       pageInfo: {
         hasNextPage: hasMore,
-        hasPreviousPage: false,
+        hasPreviousPage: after != null,
         startCursor: edges[0]?.cursor ?? null,
         endCursor: edges.at(-1)?.cursor ?? null,
       },
@@ -193,13 +231,40 @@ export class Search {
   }
 }
 
+/** Build a capped `TrackConnection` of the tracks satisfying `match`, ordered by `orderBy`. Backs the title group: a top-N slice, not a paginated page. */
+async function trackConnection(match: SQL, orderBy: SQL[]): Promise<TrackConnection> {
+  const rows = await db
+    .select()
+    .from(tracksTable)
+    .where(match)
+    .orderBy(...orderBy)
+    .limit(SEARCH_LIMIT + 1);
+  const hasMore = rows.length > SEARCH_LIMIT;
+  const slice = hasMore ? rows.slice(0, SEARCH_LIMIT) : rows;
+  const edges: TrackEdge[] = slice.map((row) => ({ node: toGqlTrack(row), cursor: row.id }));
+  const totalRow = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(tracksTable)
+    .where(match);
+  return {
+    edges,
+    pageInfo: {
+      hasNextPage: hasMore,
+      hasPreviousPage: false,
+      startCursor: edges[0]?.cursor ?? null,
+      endCursor: edges.at(-1)?.cursor ?? null,
+    },
+    totalCount: totalRow[0]?.count ?? 0,
+  };
+}
+
 /**
- * Search the library for artists, albums and tracks whose name matches `query` as a case-insensitive prefix. Returns `null` for a blank query.
+ * Search the library for artists, albums and tracks whose name matches `query` as a case-insensitive prefix, plus tracks whose file path contains `query` as a substring. Returns `null` for a blank query.
  *
  * @gqlQueryField
  */
 export async function search(query: string): Promise<Search | null> {
   const trimmed = query.trim();
   if (trimmed === '') return null;
-  return new Search(likePattern(trimmed));
+  return new Search(trimmed);
 }
