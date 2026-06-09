@@ -1,7 +1,6 @@
 import { useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
 import { useRef } from 'react';
 
-import { ErrorToast } from '../components/error-toast.tsx';
 import { PlaybackBar } from '../components/playback-bar.tsx';
 import { QueuePanel } from '../components/queue-panel.tsx';
 import { QueueToast } from '../components/queue-toast.tsx';
@@ -103,7 +102,6 @@ function HomeLayout() {
       <div className="sticky bottom-0 z-30">
         <PlaybackBar />
       </div>
-      <ErrorToast />
       <QueueToast />
     </div>
   );
