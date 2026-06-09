@@ -590,7 +590,7 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
                             type: new GraphQLList(new GraphQLNonNull(GraphQLString))
                         },
                         filterArtistIn: {
-                            description: "Restrict the library portion to tracks whose effective artist is one of these names. An empty or omitted list applies no filter.",
+                            description: "Restrict the library portion to tracks whose effective artist shares a synonym group with one of these names. Each name may be a canonical artist or any of its registered synonyms; either way the whole group's tracks are returned. An empty or omitted list applies no filter.",
                             type: new GraphQLList(new GraphQLNonNull(GraphQLString))
                         },
                         first: {
@@ -909,7 +909,7 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
                             type: new GraphQLList(new GraphQLNonNull(GraphQLString))
                         },
                         filterArtistIn: {
-                            description: "Restrict the result to tracks whose effective artist is one of these names. Pass the names returned by `Query.search` (not synonyms); an empty or omitted list applies no filter.",
+                            description: "Restrict the result to tracks whose effective artist shares a synonym group with one of these names. Each name may be a canonical artist or any of its registered synonyms; either way the whole group's tracks are returned. An empty or omitted list applies no filter.",
                             type: new GraphQLList(new GraphQLNonNull(GraphQLString))
                         },
                         first: {

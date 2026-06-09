@@ -10,7 +10,7 @@ export const artistSynonyms = pgTable(
   {
     /** Canonical artist name, matching the effective artist on `Tracks`. */
     artist: text('artist').notNull(),
-    /** Alternative name that should surface `artist` in search. Never fed to `filterArtistIn`. */
+    /** Alternative name that should surface `artist` in search and, when passed to `filterArtistIn`, filter to the whole group. */
     synonym: text('synonym').notNull(),
   },
   (t) => [

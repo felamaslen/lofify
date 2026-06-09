@@ -119,7 +119,7 @@ export async function tracks(
   last?: Int | null,
   after?: ID | null,
   before?: ID | null,
-  /** Restrict the library portion to tracks whose effective artist is one of these names. An empty or omitted list applies no filter. */
+  /** Restrict the library portion to tracks whose effective artist shares a synonym group with one of these names. Each name may be a canonical artist or any of its registered synonyms; either way the whole group's tracks are returned. An empty or omitted list applies no filter. */
   filterArtistIn?: string[] | null,
   /** Restrict the library portion to tracks whose effective album is one of these names. An empty or omitted list applies no filter. */
   filterAlbumIn?: string[] | null,

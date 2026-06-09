@@ -58,6 +58,20 @@ const SearchArtistsQuery = graphql(`
   }
 `);
 
+const TracksByArtistQuery = graphql(`
+  query TracksByArtist($filterArtistIn: [String!]) {
+    tracks(first: 50, filterArtistIn: $filterArtistIn) {
+      totalCount
+      edges {
+        node {
+          id
+          artist
+        }
+      }
+    }
+  }
+`);
+
 const trackId = '01934567-89ab-7cde-8123-456789abcdef';
 
 async function seedTrack(artist: string | null, id = trackId) {
@@ -196,6 +210,44 @@ test('Query.search.artists includes artists matched only by a synonym, as the ca
     .expectNoErrors();
   expect(data.search!.artists.totalCount).toBe(1);
   expect(data.search!.artists.edges.map((e) => e.node.name)).toEqual([KANJI_ARTIST]);
+});
+
+// One canonical artist tagged three ways across the library, plus an unrelated track. Whichever
+// form of the name is filtered on, the whole group should come back.
+async function seedSynonymGroup() {
+  await seedTrack(KANJI_ARTIST, '01934567-89ab-7cde-8123-000000000001');
+  await seedTrack('Maki Asakawa', '01934567-89ab-7cde-8123-000000000002');
+  await seedTrack('Asakawa Maki', '01934567-89ab-7cde-8123-000000000003');
+  await seedTrack('Someone Else', '01934567-89ab-7cde-8123-000000000004');
+  for (const synonym of ['Maki Asakawa', 'Asakawa Maki']) {
+    await gqlRequest(app).mutate(CreateMutation).variables({ artist: KANJI_ARTIST, synonym });
+  }
+}
+
+const GROUP = ['Asakawa Maki', 'Maki Asakawa', KANJI_ARTIST];
+
+test('Query.tracks filtered by a canonical artist also returns tracks tagged with its synonyms', async () => {
+  await seedSynonymGroup();
+
+  const { data } = await gqlRequest(app)
+    .query(TracksByArtistQuery)
+    .variables({ filterArtistIn: [KANJI_ARTIST] })
+    .expectNoErrors();
+
+  expect(data.tracks!.totalCount).toBe(3);
+  expect(data.tracks!.edges.map((e) => e.node.artist).sort()).toEqual(GROUP);
+});
+
+test('Query.tracks filtered by a synonym returns the canonical artist and its sibling synonyms', async () => {
+  await seedSynonymGroup();
+
+  const { data } = await gqlRequest(app)
+    .query(TracksByArtistQuery)
+    .variables({ filterArtistIn: ['Maki Asakawa'] })
+    .expectNoErrors();
+
+  expect(data.tracks!.totalCount).toBe(3);
+  expect(data.tracks!.edges.map((e) => e.node.artist).sort()).toEqual(GROUP);
 });
 
 test('Query.search.artists dedupes an artist matched both directly and via a synonym', async () => {
