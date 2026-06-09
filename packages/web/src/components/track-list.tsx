@@ -560,7 +560,10 @@ export function TrackList() {
                     >
                       {t.title ?? (
                         <>
-                          (untitled) <span className="text-muted-foreground/60">{t.path}</span>
+                          (untitled){' '}
+                          <span className="text-muted-foreground/60 group-aria-selected:text-primary-foreground/70">
+                            {t.path}
+                          </span>
                         </>
                       )}
                     </span>
