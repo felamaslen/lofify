@@ -24,6 +24,9 @@ import { Slider } from './ui/slider.tsx';
 // break the import cycle with the player (see `playback-bar-fragment.ts`).
 export { PlaybackBarDocument };
 
+const activeGlow =
+  'text-primary hover:text-primary [&_svg]:drop-shadow-[0_0_6px_hsl(var(--primary)/0.9)]';
+
 /** Cover thumbnail for the playing track. Keeps the Media Session artwork in step as a download resolves — `setMediaArtwork` ignores stale and redundant calls, so the effect can fire freely. */
 function BarArtwork({ track }: { track: FragmentOf<typeof TrackArtworkDocument> }) {
   const { id, artwork: initial } = readFragment(TrackArtworkDocument, track);
@@ -124,8 +127,9 @@ export function PlaybackBar() {
       <div className="mx-auto flex w-full max-w-[640px] flex-col items-center gap-1.5 max-sm:contents">
         <div className="flex items-center gap-1 max-sm:col-span-2 max-sm:row-start-2 max-sm:justify-center">
           <Button
-            variant={shuffleEnabled ? 'secondary' : 'ghost'}
+            variant="ghost"
             size="icon"
+            className={shuffleEnabled ? activeGlow : undefined}
             onClick={() => toggleShuffle(current?.id ?? null)}
             aria-label="Shuffle"
             aria-pressed={shuffleEnabled}
@@ -154,8 +158,9 @@ export function PlaybackBar() {
             <SkipForward />
           </Button>
           <Button
-            variant={repeatEnabled ? 'secondary' : 'ghost'}
+            variant="ghost"
             size="icon"
+            className={repeatEnabled ? activeGlow : undefined}
             onClick={toggleRepeat}
             aria-label="Repeat"
             aria-pressed={repeatEnabled}
@@ -164,8 +169,9 @@ export function PlaybackBar() {
           </Button>
           {showVisualiser && (
             <Button
-              variant={visualiserActive ? 'secondary' : 'ghost'}
+              variant="ghost"
               size="icon"
+              className={visualiserActive ? activeGlow : undefined}
               onClick={onToggleVisualiser}
               disabled={!current}
               aria-label="Visualiser"
