@@ -14,6 +14,7 @@ import { registerArtworkRoute } from './artwork/route.js';
 import { registerAssetRoute } from './asset/route.js';
 import { ensureDiskCacheWritable, migrateDiskCacheLayout } from './disk-cache.js';
 import { env, libraryPaths } from './env.js';
+import type { GraphQLContext } from './graphql/context.js';
 import { buildSchema } from './graphql/index.js';
 import { defaultCache } from './playback/cache.js';
 import { registerPlaybackRoute } from './playback/route.js';
@@ -29,7 +30,9 @@ async function buildApp(): Promise<FastifyInstance> {
   await ensureDiskCacheWritable();
   await migrateDiskCacheLayout();
 
-  const app = Fastify({ logger: false });
+  // trustProxy makes `request.ip` resolve through `X-Forwarded-For`, so analytics record the real
+  // client rather than the reverse proxy in front of us.
+  const app = Fastify({ logger: false, trustProxy: true });
 
   const allow = env.CORS_ALLOW_ORIGINS.split(',')
     .map((s) => s.trim())
@@ -45,7 +48,7 @@ async function buildApp(): Promise<FastifyInstance> {
   app.get('/healthz', async () => ({ status: 'ok' }));
 
   const schema = buildSchema();
-  const apollo = new ApolloServer({
+  const apollo = new ApolloServer<GraphQLContext>({
     schema,
     plugins: [fastifyApolloDrainPlugin(app)],
   });
@@ -64,7 +67,10 @@ async function buildApp(): Promise<FastifyInstance> {
     });
   });
 
-  await app.register(fastifyApollo(apollo), { path: '/graphql' });
+  await app.register(fastifyApollo(apollo), {
+    path: '/graphql',
+    context: async (request) => ({ clientIp: request.ip }),
+  });
 
   app.get('/graphql/schema.graphql', async (_req, reply) => {
     const sdl = await readFile(SCHEMA_SDL_PATH, 'utf8');
