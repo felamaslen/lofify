@@ -7,6 +7,7 @@ import { gqlRequest } from '../lib/gql-request.ts';
 import { cn } from '../lib/utils.ts';
 import { useLibraryFilter } from '../state/library-filter.tsx';
 import { usePlayer } from '../state/player.tsx';
+import { clearSharedTrack } from './shared-track.tsx';
 import { Hint } from './ui/hint.tsx';
 import { Input } from './ui/input.tsx';
 
@@ -154,11 +155,14 @@ export function SearchBox() {
   const choose = (item: Item) => {
     switch (item.kind) {
       case 'artist':
+        // Applying a library filter navigates away from a shared-track landing, so dismiss it.
+        clearSharedTrack();
         setArtistFilter(item.name);
         break;
       case 'album':
         // Pin the artist only when the album is credited to exactly one, so a
         // multi-artist album (compilation, split) isn't narrowed to one of them.
+        clearSharedTrack();
         setAlbumFilter(item.name, item.artists.length === 1 ? item.artists[0]! : null);
         break;
       case 'track':

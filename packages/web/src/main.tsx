@@ -25,7 +25,17 @@ const indexRoute = createRoute({
   component: Home,
 });
 
-const routeTree = rootRoute.addChildren([indexRoute]);
+// A shared link (`/share/<trackId>`) renders the same screen; `Home` reads the
+// id off the path and shows the focused landing for it. The id is read straight
+// from the URL (like every other URL state here) rather than the route param,
+// so it stays consistent with the player's raw History-API writes.
+const shareRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/share/$trackId',
+  component: Home,
+});
+
+const routeTree = rootRoute.addChildren([indexRoute, shareRoute]);
 // The page scrolls (body scroll), so the router would otherwise reset window
 // scroll to the top on every navigation — including the player's ~2s playhead
 // writes to the URL. Scroll restoration preserves position per history entry

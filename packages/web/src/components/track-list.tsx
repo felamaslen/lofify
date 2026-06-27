@@ -4,6 +4,7 @@ import { useWindowVirtualizer } from '@tanstack/react-virtual';
 import { readFragment } from 'gql.tada';
 import { ListPlus } from 'lucide-react';
 import { type MouseEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { toast } from 'sonner';
 
 import { useIsMobile } from '../hooks/use-is-mobile.ts';
 import { type FragmentOf, graphql, type ResultOf } from '../lib/gql.ts';
@@ -25,6 +26,22 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from './ui/context-menu.tsx';
+
+/** Share a single track: on touch devices with the Web Share API the native share sheet, otherwise the link copied to the clipboard. The link (`/share/<id>`) opens a focused landing for the track. Both APIs need a secure context — run the dev server over HTTPS to exercise them (see the web README). */
+async function shareTrack(id: string, isMobile: boolean): Promise<void> {
+  const url = `${window.location.origin}/share/${id}`;
+  if (isMobile && typeof navigator.share === 'function') {
+    // A cancelled share sheet rejects; that's not an error to surface.
+    await navigator.share({ url }).catch(() => undefined);
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(url);
+    toast.success('Link copied');
+  } catch {
+    toast.error("Couldn't copy the link");
+  }
+}
 
 const QueueAppendDocument = graphql(`
   mutation QueueAppend($trackId: ID!, $queueId: ID) {
@@ -599,6 +616,15 @@ export function TrackList() {
           </ContextMenuItem>
           <ContextMenuItem disabled={selected.size === 0} onSelect={() => setEditing(true)}>
             Edit tags{selected.size > 1 ? ` (${selected.size})` : ''}
+          </ContextMenuItem>
+          <ContextMenuItem
+            disabled={selected.size !== 1}
+            onSelect={() => {
+              const id = selectedIdsInRowOrder()[0];
+              if (id) void shareTrack(id, isMobile);
+            }}
+          >
+            Share
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>

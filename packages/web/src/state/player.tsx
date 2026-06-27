@@ -290,6 +290,16 @@ function loadStoredLossyPreference(): LossyPreference {
 
 const URL_TRACK_PARAM = 'track';
 const URL_TIME_PARAM = 't';
+/** A shared link path (`/share/<id>`) names the track to load, paused, with no playhead — handled here so a fresh load resumes it exactly like a remembered `track`. */
+const SHARE_PATH_PREFIX = '/share/';
+
+/** The track id a shared link path carries, or null on any other path. */
+function shareTrackIdFromPath(): string | null {
+  const { pathname } = window.location;
+  if (!pathname.startsWith(SHARE_PATH_PREFIX)) return null;
+  const id = decodeURIComponent(pathname.slice(SHARE_PATH_PREFIX.length).split('/')[0] ?? '');
+  return id.length > 0 ? id : null;
+}
 /** Throttle for writing the playhead to the URL during playback; a pause flushes immediately. */
 const URL_WRITE_THROTTLE_MS = 2000;
 
@@ -297,7 +307,7 @@ const URL_WRITE_THROTTLE_MS = 2000;
 function readPlaybackFromUrl(): { trackId: string; startAt: number } | null {
   if (typeof window === 'undefined') return null;
   const params = new URLSearchParams(window.location.search);
-  const trackId = params.get(URL_TRACK_PARAM);
+  const trackId = params.get(URL_TRACK_PARAM) ?? shareTrackIdFromPath();
   if (!trackId) return null;
   const t = Number(params.get(URL_TIME_PARAM));
   const startAt = Number.isFinite(t) && t > 0 ? t : 0;

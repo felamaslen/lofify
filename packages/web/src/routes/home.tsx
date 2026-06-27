@@ -5,6 +5,7 @@ import { PlaybackBar } from '../components/playback-bar.tsx';
 import { QueuePanel } from '../components/queue-panel.tsx';
 import { QueueToast } from '../components/queue-toast.tsx';
 import { SearchBox } from '../components/search-box.tsx';
+import { SharedTrack, useSharedTrack } from '../components/shared-track.tsx';
 import {
   ArtistIndexDocument,
   PAGE_SIZE,
@@ -49,6 +50,7 @@ const HomeDocument = graphql(
 
 function HomeLayout() {
   const { active } = useVisualiser();
+  const { shareTrackId, clear: clearShareTrack } = useSharedTrack();
   const { artist, album } = useLibraryFilter();
   const { showDuplicates } = useShowDuplicates();
   // The view the page opened on, captured once: filter changes mustn't re-run
@@ -84,6 +86,12 @@ function HomeLayout() {
       return data;
     },
   });
+  const browse = active ? <Visualiser /> : <TrackList />;
+  const content = shareTrackId ? (
+    <SharedTrack id={shareTrackId} onBrowse={clearShareTrack} />
+  ) : (
+    browse
+  );
   return (
     <div className="flex min-h-screen flex-col">
       <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-border bg-background px-3 max-sm:h-16">
@@ -98,7 +106,7 @@ function HomeLayout() {
           <UpdateIndicator />
         </div>
       </header>
-      {active ? <Visualiser /> : <TrackList />}
+      {content}
       <div className="sticky bottom-0 z-30">
         <PlaybackBar />
       </div>
