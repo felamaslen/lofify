@@ -53,6 +53,9 @@ const Schema = z.object({
   /** Absolute path to the built web client (`vite build` output). When unset, defaults to the workspace's `packages/web/dist`. The backend serves these as a catch-all SPA route when the directory exists. */
   WEB_DIST_PATH: z.string().optional(),
 
+  /** Dev only: URL of the dev server's `index.html`. With no built client, the `/share/:id` route fetches this shell to inject Open Graph metadata into (the dev client proxies `/share` here). Defaults to `http://localhost:5173/index.html`; point it at the web service under Docker. */
+  WEB_DEV_SHELL_URL: z.string().url().optional(),
+
   /** OTLP/HTTP base URL. Receivers expose `/v1/traces`, `/v1/logs`, `/v1/metrics` under it. */
   OTEL_EXPORTER_OTLP_ENDPOINT: z.string().url().default('http://otel-lgtm:4318'),
 

@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { ApolloServer } from '@apollo/server';
@@ -21,10 +22,21 @@ import { registerPlaybackRoute } from './playback/route.js';
 import { startCacheSweepSchedule } from './playback/sweep.js';
 import { startScanSchedule } from './scanner/cron.js';
 import { watchLibrary } from './scanner/watch.js';
+import { buildShareTrackHtml } from './share/og.js';
 
 const SCHEMA_SDL_PATH = fileURLToPath(
   new URL('./graphql/__generated__/schema.graphql', import.meta.url),
 );
+
+/** Fetch a URL as text, or null on any failure — used to pull the dev server's shell for `/share` metadata injection. */
+async function fetchText(url: string): Promise<string | null> {
+  try {
+    const res = await fetch(url);
+    return res.ok ? await res.text() : null;
+  } catch {
+    return null;
+  }
+}
 
 async function buildApp(): Promise<FastifyInstance> {
   await ensureDiskCacheWritable();
@@ -90,8 +102,37 @@ async function buildApp(): Promise<FastifyInstance> {
   const webDistPath = env.WEB_DIST_PATH
     ? env.WEB_DIST_PATH
     : fileURLToPath(new URL('../../web/dist', import.meta.url));
-  if (existsSync(webDistPath)) {
+  const webDistExists = existsSync(webDistPath);
+
+  // A shared link (`/share/<id>`) is unfurled by chat apps and crawlers that never run the SPA's JS,
+  // so its metadata has to be in the served HTML. We own this route in both environments — in dev
+  // the client proxies `/share` here — so the Open Graph / Twitter injection lives in one place
+  // (`share/og.ts`); the tags' absolute URLs come from `PUBLIC_URL`, so set it to the
+  // externally-visible origin (e.g. your tunnel URL) when testing unfurls.
+  //
+  // The shell injected into differs by environment. `WEB_DEV_SHELL_URL` (set in dev) forces the
+  // dev path — fetch the dev server's transformed shell — and takes precedence over any stale local
+  // build. Otherwise a built client means prod (serve it as the SPA catch-all and inject into it),
+  // and its absence means dev against the conventional local dev-server URL.
+  const devShellUrl =
+    env.WEB_DEV_SHELL_URL ?? (webDistExists ? null : 'http://localhost:5173/index.html');
+  const serveSpa = webDistExists && !devShellUrl;
+  const localShell = serveSpa ? await readFile(join(webDistPath, 'index.html'), 'utf8') : null;
+
+  if (devShellUrl || localShell) {
+    app.get<{ Params: { id: string } }>('/share/:id', async (req, reply) => {
+      const shell = devShellUrl ? await fetchText(devShellUrl) : localShell;
+      if (shell == null) {
+        return reply.code(502).type('text/plain').send('share shell unavailable');
+      }
+      const html = (await buildShareTrackHtml(shell, req.params.id)) ?? shell;
+      return reply.type('text/html').send(html);
+    });
+  }
+
+  if (serveSpa) {
     await app.register(fastifyStatic, { root: webDistPath, wildcard: false });
+
     app.setNotFoundHandler((req, reply) => {
       const isApi =
         req.url.startsWith('/graphql') ||

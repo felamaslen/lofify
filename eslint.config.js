@@ -94,4 +94,13 @@ export default [
     },
   },
   prettier,
+  {
+    // Build tooling that runs in Node (Vite config, dev-server plugins, scripts).
+    files: ['packages/web/vite.config.ts'],
+    languageOptions: {
+      globals: {
+        ...globals.node,
+      },
+    },
+  },
 ];

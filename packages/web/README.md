@@ -498,10 +498,78 @@ immediately via `artistSynonym{Create,Update,Delete}` (independently of the
 tag form's Save); the section is hidden when the selection spans more than
 one artist.
 
+## Share
+
+The track list's context menu carries a **Share** item, enabled when
+exactly one row is selected (sharing is single-track, unlike the
+multi-capable queue/edit items). On touch devices with the Web Share API
+it opens the native share sheet; otherwise it copies the link to the
+clipboard and confirms with a toast (`components/track-list.tsx`).
+
+The link is `/share/<track-id>` — a real path (registered as a route in
+`main.tsx`) rather than a query param, which messaging apps copy and
+unfurl more reliably. Opening it shows a focused landing — a full-bleed
+hero with the cover (blurred as the backdrop), title, artist/album and a
+source-quality badge, plus a **Browse library** button
+(`components/shared-track.tsx`). The player loads the track **paused** on a
+fresh page load: `readPlaybackFromUrl` in `state/player.tsx` reads the id
+off the `/share/` path the same way it reads a remembered `track` param
+(no playhead, so it starts at 0), so a shared link resumes the same way a
+previous session does. The landing is driven by `useSharedTrack`, a small
+external store reading the path live (so the landing and the search box
+share one value); **Browse library** returns to `/` while keeping the
+`track`/`t` query the player wrote (so the track stays loaded) and reveals
+the normal list. Choosing an artist or album from search also dismisses
+the landing (via `clearSharedTrack`), since applying a library filter
+navigates away from it. The id is read straight from the URL rather than
+the route param, to stay consistent with the player's raw History-API
+writes. An unknown id renders a "track not found" state.
+
+Link previews are server-rendered by the **backend** in both environments,
+since unfurlers never run this JS — so the Open Graph / Twitter Card tags
+(title, artist/album, cover) live in one place (`share/og.ts`). The dev
+proxy forwards `/share` to the backend like the other paths; in dev the
+backend has no built shell to inject into, so it fetches this dev server's
+`index.html` (`WEB_DEV_SHELL_URL`) and injects the tags into that. The
+tags' absolute URLs are built from the backend's `PUBLIC_URL`, so set it to
+the externally-visible origin — your tunnel URL (e.g. ngrok) — when testing
+unfurls; with `PUBLIC_URL` on the same origin the page is served from, the
+cover resolves back through the `/asset` proxy. See the
+[backend README](../backend/README.md).
+
+The Web Share API and the Clipboard API both require a secure context, so
+the Share action only works over HTTPS (or `localhost`). Set `DEV_HTTPS=1`
+to have the Vite dev server present a self-signed cert
+(`@vitejs/plugin-basic-ssl`), served with TLS on the usual port (`5173`,
+not `443`) — useful for exercising the share sheet from a phone on the
+LAN; the browser shows a one-time certificate warning. In production the
+backend should be served over HTTPS for the same reason.
+
+## Dev proxy
+
+The dev server proxies the backend's paths (`/graphql` — which covers the
+`/graphql/stream` SSE endpoint — plus `/play`, `/artwork`, `/asset`, and
+`/share` for server-rendered link metadata) to `BACKEND_PROXY_TARGET`
+(default `http://localhost:4000`; in Docker the web container sets
+`http://backend:4000`). The client therefore talks to the
+backend with **relative, same-origin URLs**, which means no CORS and —
+crucially under `DEV_HTTPS` — nothing blocked as mixed content (an HTTPS
+page may not load `http://` GraphQL/audio). `VITE_GRAPHQL_URL` and
+`VITE_GRAPHQL_STREAM_URL` are relative by default for this reason; only set
+them to absolute URLs to bypass the proxy and hit a backend directly.
+
+Artwork and `/asset` image URLs are absolute, built from the backend's
+`PUBLIC_URL`. For them to be same-origin too (and so reachable over HTTPS),
+point `PUBLIC_URL` at the dev origin — `http://localhost:5173`, or
+`https://localhost:5173` under `DEV_HTTPS`. The `/asset` route resolves its
+source in-process, so this never causes the backend to fetch itself.
+
 ## Env
 
 | Variable                  | Purpose                                                                                                                                                                                    |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `VITE_GRAPHQL_URL`        | Backend GraphQL endpoint (default `/graphql`)                                                                                                                                              |
+| `VITE_GRAPHQL_URL`        | Backend GraphQL endpoint (default `/graphql`, proxied to the backend — see [Dev proxy](#dev-proxy))                                                                                        |
 | `VITE_GRAPHQL_STREAM_URL` | SSE endpoint (default `/graphql/stream`)                                                                                                                                                   |
 | `VITE_GIT_SHA`            | Git commit this bundle was built from, baked in at build time (default `dev`). Sent to `Query.isUpdateAvailable` to detect a newer deployment — see [Update indicator](#update-indicator). |
+| `BACKEND_PROXY_TARGET`    | Dev-server only. Where the proxy forwards backend paths (default `http://localhost:4000`; Docker: `http://backend:4000`) — see [Dev proxy](#dev-proxy).                                    |
+| `DEV_HTTPS`               | Dev-server only. `1`/`true` serves the dev client over HTTPS with a self-signed cert — see [Share](#share).                                                                                |

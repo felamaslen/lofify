@@ -25,7 +25,7 @@ services:
       - '4318:4318' # OTLP HTTP
 
   backend:
-    # Build from the local Dockerfile so dev and prod share the same base image, apt deps, and pinned ffmpeg 8.1.1. Source is mounted over `/app` and the command is overridden to run the tsx-watch dev server instead of the prod start command.
+    # Build from the local Dockerfile so dev and prod share the same base image, apt deps, and pinned ffmpeg 8.1.2. Source is mounted over `/app` and the command is overridden to run the tsx-watch dev server instead of the prod start command.
     build:
       context: .
       target: backend
@@ -42,7 +42,14 @@ services:
       TRANSCODE_MAX_PARALLEL: ${TRANSCODE_MAX_PARALLEL:-4}
       DISK_CACHE_DIR: /disk-cache
       DISK_CACHE_MAX_BYTES: 1073741824
-      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:4000}
+      # The browser-facing origin, used to build artwork/asset URLs and the shared-link Open Graph
+      # tags. Pointed at the web dev origin so those URLs resolve through Vite's proxy (same origin
+      # as the page). Switch to https://localhost:5173 under DEV_HTTPS=1, or to your tunnel URL
+      # (e.g. an ngrok https URL) when testing link unfurls externally.
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:5173}
+      # Dev shell the /share route fetches to inject Open Graph metadata into (the web client proxies
+      # /share here). The web service serves it; reachable by service name on the compose network.
+      WEB_DEV_SHELL_URL: ${WEB_DEV_SHELL_URL:-http://web:5173/index.html}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-lgtm:4318
       OTEL_SERVICE_NAME: lofify-backend
     ports:
@@ -80,8 +87,16 @@ services:
     working_dir: /app
     command: sh -c "corepack enable && pnpm install && pnpm --filter ./packages/web dev --host 0.0.0.0"
     environment:
-      VITE_GRAPHQL_URL: ${GRAPHQL_URL:-http://localhost:4000/graphql}
-      VITE_GRAPHQL_STREAM_URL: ${GRAPHQL_STREAM_URL:-http://localhost:4000/graphql/stream}
+      # Relative URLs so the browser talks to the dev server's own origin; Vite proxies these paths
+      # (and /play, /artwork, /asset) to the backend (see BACKEND_PROXY_TARGET). Same origin means no
+      # CORS and nothing blocked as mixed content when DEV_HTTPS is on.
+      VITE_GRAPHQL_URL: ${GRAPHQL_URL:-/graphql}
+      VITE_GRAPHQL_STREAM_URL: ${GRAPHQL_STREAM_URL:-/graphql/stream}
+      BACKEND_PROXY_TARGET: ${BACKEND_PROXY_TARGET:-http://backend:4000}
+      # Set DEV_HTTPS=1 to serve the dev client over HTTPS (self-signed) on 5173 — needed for the
+      # secure-context Web Share / Clipboard APIs the track Share action uses. When you do, also set
+      # PUBLIC_URL=https://localhost:5173 (below) so artwork URLs match the HTTPS origin.
+      DEV_HTTPS: ${DEV_HTTPS:-}
     ports:
       - '5173:5173'
     volumes:

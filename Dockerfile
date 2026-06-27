@@ -31,13 +31,16 @@ FROM node:24-bookworm-slim AS backend
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
 
-# ffmpeg 8.1.1 (LGPL static builds from BtbN — Debian Bookworm only ships 5.x). When bumping versions, pick a matching `autobuild-YYYY-MM-DD-HH-MM` release at https://github.com/BtbN/FFmpeg-Builds/releases and refresh both file names + SHA256s.
+# ffmpeg 8.1.2 (LGPL static builds from BtbN — Debian Bookworm only ships 5.x). BtbN rotates out old
+# `autobuild-*` releases (a stale pin 404s the download), so when the build fails to fetch — or when
+# bumping versions — pick a current `autobuild-YYYY-MM-DD-HH-MM` release at
+# https://github.com/BtbN/FFmpeg-Builds/releases and refresh both file names + SHA256s.
 ARG TARGETARCH
-ARG FFMPEG_BUILD=autobuild-2026-05-26-13-56
-ARG FFMPEG_FILE_AMD64=ffmpeg-n8.1.1-8-gb21e00eda5-linux64-lgpl-8.1.tar.xz
-ARG FFMPEG_SHA256_AMD64=d07266cd9f743d8c09bfaf2cdda47b767d1183573ff3e03262e449028219cbda
-ARG FFMPEG_FILE_ARM64=ffmpeg-n8.1.1-8-gb21e00eda5-linuxarm64-lgpl-8.1.tar.xz
-ARG FFMPEG_SHA256_ARM64=32efd99c91849269055649487bd807bcbd6a746975ca2660c1e3d327a2068bb5
+ARG FFMPEG_BUILD=autobuild-2026-06-27-13-21
+ARG FFMPEG_FILE_AMD64=ffmpeg-n8.1.2-linux64-lgpl-8.1.tar.xz
+ARG FFMPEG_SHA256_AMD64=e4b3e7a92ff8a0713f961e2fa99d2a70fcabb26ca22f354a88d2973c226f94d4
+ARG FFMPEG_FILE_ARM64=ffmpeg-n8.1.2-linuxarm64-lgpl-8.1.tar.xz
+ARG FFMPEG_SHA256_ARM64=eabf197f1815f638f9f62c9220154e857dcadc9888f8e006d33d230e85a11e18
 
 RUN corepack enable \
  && apt-get update && apt-get install -y --no-install-recommends \
