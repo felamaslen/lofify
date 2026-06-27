@@ -11,6 +11,10 @@ import { VitePWA } from 'vite-plugin-pwa';
 // untrusted, so the browser shows a one-time warning.
 const useHttps = process.env.DEV_HTTPS === '1' || process.env.DEV_HTTPS === 'true';
 
+// Where the dev proxy forwards backend paths. Default suits a backend on the host; in Docker the
+// web container reaches the backend by service name (set BACKEND_PROXY_TARGET=http://backend:4000).
+const backendTarget = process.env.BACKEND_PROXY_TARGET ?? 'http://localhost:4000';
+
 export default defineConfig(async (): Promise<UserConfig> => {
   // `@vitejs/plugin-basic-ssl` generates and caches a self-signed cert; assign it straight to
   // `server.https` so Vite's dev server speaks TLS on its port (one PEM holds both cert and key).
@@ -56,6 +60,18 @@ export default defineConfig(async (): Promise<UserConfig> => {
       port: 5173,
       host: '0.0.0.0',
       ...(cert ? { https: { cert, key: cert } } : {}),
+      // Forward the backend's paths to it, so the client can talk to it with same-origin relative
+      // URLs (`/graphql`, `/play`, …). That keeps everything on the dev server's origin — no CORS,
+      // and nothing is blocked as mixed content when the dev server runs over HTTPS. `/graphql`
+      // also covers the `/graphql/stream` SSE endpoint. `/share/<id>` is proxied too so the backend
+      // injects its Open Graph metadata (it fetches this dev server's shell to do so). For artwork to
+      // be same-origin, point the backend's `PUBLIC_URL` at this dev origin (see the web README).
+      proxy: Object.fromEntries(
+        ['/graphql', '/play', '/artwork', '/asset', '/share'].map((prefix) => [
+          prefix,
+          { target: backendTarget, changeOrigin: true },
+        ]),
+      ),
     },
   };
 });

@@ -279,15 +279,23 @@ a trustworthy `X-Forwarded-For`.
 
 ### Shared-link metadata
 
-When `WEB_DIST_PATH` exists the backend serves the built web client as an
-SPA catch-all. A shared track link (`GET /share/:id`) is unfurled by chat
-apps and crawlers that never run the SPA's JS, so the backend serves that
-path itself with per-track Open Graph / Twitter Card tags — title,
+A shared track link (`GET /share/:id`) is unfurled by chat apps and
+crawlers that never run the SPA's JS, so the backend serves that path
+itself with per-track Open Graph / Twitter Card tags — title,
 `Artist — Album`, and the 500px cover (the same `/asset` render the UI
 uses) — injected into the app shell's `<head>` (`share/og.ts`). It reuses
 the `track`/`artwork` resolvers and falls back to the unmodified shell for
-an unknown id (the SPA then renders its own "not found" landing). Every
-other path still falls through to the SPA catch-all.
+an unknown id (the SPA then renders its own "not found" landing). The tags'
+absolute URLs come from `PUBLIC_URL`, which must be the externally-visible
+origin for unfurls to resolve.
+
+The same handler runs in dev and prod; only the shell it injects into
+differs. In prod it's the built `index.html` (served alongside the SPA
+catch-all when `WEB_DIST_PATH` exists). In dev there is no built client, so
+it fetches the dev server's transformed shell from `WEB_DEV_SHELL_URL`
+(default `http://localhost:5173/index.html`) — the dev client proxies
+`/share` to the backend for exactly this. Every other path falls through to
+the SPA catch-all in prod.
 
 ### Playback
 
