@@ -25,7 +25,7 @@ services:
       - '4318:4318' # OTLP HTTP
 
   backend:
-    # Build from the local Dockerfile so dev and prod share the same base image, apt deps, and pinned ffmpeg 8.1.1. Source is mounted over `/app` and the command is overridden to run the tsx-watch dev server instead of the prod start command.
+    # Build from the local Dockerfile so dev and prod share the same base image, apt deps, and pinned ffmpeg 8.1.2. Source is mounted over `/app` and the command is overridden to run the tsx-watch dev server instead of the prod start command.
     build:
       context: .
       target: backend
