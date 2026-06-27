@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { ApolloServer } from '@apollo/server';
@@ -21,6 +22,7 @@ import { registerPlaybackRoute } from './playback/route.js';
 import { startCacheSweepSchedule } from './playback/sweep.js';
 import { startScanSchedule } from './scanner/cron.js';
 import { watchLibrary } from './scanner/watch.js';
+import { buildShareTrackHtml } from './share/og.js';
 
 const SCHEMA_SDL_PATH = fileURLToPath(
   new URL('./graphql/__generated__/schema.graphql', import.meta.url),
@@ -91,7 +93,19 @@ async function buildApp(): Promise<FastifyInstance> {
     ? env.WEB_DIST_PATH
     : fileURLToPath(new URL('../../web/dist', import.meta.url));
   if (existsSync(webDistPath)) {
+    const shellHtml = await readFile(join(webDistPath, 'index.html'), 'utf8');
+
+    // A shared link (`/share/<id>`) is unfurled by chat apps and crawlers that never run the SPA's
+    // JS, so the static shell carries no per-track metadata. Serve this path ourselves with the
+    // track's Open Graph / Twitter tags injected; an unknown id falls back to the plain shell, and
+    // the SPA renders the same screen either way.
+    app.get<{ Params: { id: string } }>('/share/:id', async (req, reply) => {
+      const html = (await buildShareTrackHtml(shellHtml, req.params.id)) ?? shellHtml;
+      return reply.type('text/html').send(html);
+    });
+
     await app.register(fastifyStatic, { root: webDistPath, wildcard: false });
+
     app.setNotFoundHandler((req, reply) => {
       const isApi =
         req.url.startsWith('/graphql') ||

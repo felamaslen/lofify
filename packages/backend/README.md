@@ -277,6 +277,18 @@ a trustworthy `X-Forwarded-For`.
   cache header (a new download is a new row, hence a new URL). 404 for
   ids with no image yet.
 
+### Shared-link metadata
+
+When `WEB_DIST_PATH` exists the backend serves the built web client as an
+SPA catch-all. A shared track link (`GET /share/:id`) is unfurled by chat
+apps and crawlers that never run the SPA's JS, so the backend serves that
+path itself with per-track Open Graph / Twitter Card tags — title,
+`Artist — Album`, and the 500px cover (the same `/asset` render the UI
+uses) — injected into the app shell's `<head>` (`share/og.ts`). It reuses
+the `track`/`artwork` resolvers and falls back to the unmodified shell for
+an unknown id (the SPA then renders its own "not found" landing). Every
+other path still falls through to the SPA catch-all.
+
 ### Playback
 
 `GET /play/:signature/c:<container>/a:<codec>/q:<min|l|m|h|max>/:id`
