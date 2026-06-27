@@ -36,6 +36,16 @@ CREATE TABLE "ScanErrors" (
   "attemptedAt" timestamp with time zone DEFAULT now() NOT NULL
 );
 
+CREATE TABLE "TrackAnalytics" (
+  "id" uuid PRIMARY KEY DEFAULT uuidv7() NOT NULL,
+  "trackId" uuid NOT NULL,
+  "clientIp" text NOT NULL,
+  "playTimeSeconds" integer NOT NULL,
+  "requestedMode" text NOT NULL,
+  "outputCodec" text NOT NULL,
+  "createdAt" timestamp with time zone DEFAULT now() NOT NULL
+);
+
 CREATE TABLE "Tracks" (
   "id" uuid PRIMARY KEY DEFAULT uuidv7() NOT NULL,
   "createdAt" timestamp with time zone DEFAULT now() NOT NULL,
@@ -75,6 +85,9 @@ CREATE TABLE "Tracks" (
   )
 );
 
+ALTER TABLE "TrackAnalytics"
+ADD CONSTRAINT "TrackAnalytics_trackId_Tracks_id_fk" FOREIGN KEY ("trackId") REFERENCES "public"."Tracks" ("id") ON DELETE CASCADE ON UPDATE NO ACTION;
+
 ALTER TABLE "Tracks"
 ADD CONSTRAINT "Tracks_albumArtId_AlbumArt_id_fk" FOREIGN KEY ("albumArtId") REFERENCES "public"."AlbumArt" ("id") ON DELETE SET NULL ON UPDATE NO ACTION;
 
@@ -88,6 +101,8 @@ CREATE INDEX "ArtistSynonyms_synonym_idx" ON "ArtistSynonyms" USING btree ("syno
 CREATE INDEX "PlaybackCacheAccess_lastAccess_idx" ON "PlaybackCacheAccess" USING btree ("lastAccess");
 
 CREATE UNIQUE INDEX "ScanErrors_file_unq" ON "ScanErrors" USING btree ("file");
+
+CREATE INDEX "TrackAnalytics_trackId_idx" ON "TrackAnalytics" USING btree ("trackId");
 
 CREATE INDEX "Tracks_artist_idx" ON "Tracks" USING btree ("artist");
 
