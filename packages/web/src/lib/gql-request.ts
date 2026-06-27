@@ -27,6 +27,20 @@ export async function gqlRequest<TResult, TVars>(
 }
 
 /**
+ * Fire-and-forget an operation during page unload via `navigator.sendBeacon`, so the request outlives the teardown an in-flight `fetch` wouldn't survive. The `application/json` body satisfies Apollo's CSRF check. Returns whether the beacon was queued.
+ */
+export function gqlBeacon<TResult, TVars>(
+  document: TadaDocumentNode<TResult, TVars>,
+  variables: TVars,
+): boolean {
+  if (typeof navigator === 'undefined' || typeof navigator.sendBeacon !== 'function') return false;
+  const body = new Blob([JSON.stringify({ query: print(document), variables })], {
+    type: 'application/json',
+  });
+  return navigator.sendBeacon(GRAPHQL_URL, body);
+}
+
+/**
  * Run an operation whose variables include `File` values, as a [GraphQL multipart request](https://github.com/jaydenseric/graphql-multipart-request-spec). Files are lifted out of the variables into mapped form-data parts; everything else behaves like `gqlRequest`.
  */
 export async function gqlUpload<TResult, TVars extends Record<string, unknown>>(

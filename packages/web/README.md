@@ -224,6 +224,19 @@ the cache and needs the network, the in-flight prefetch is aborted
 first, so the urgent fetch gets the whole pipe and its downscale
 samples aren't diluted by a parallel transfer.
 
+## Playback analytics
+
+The player reports listening to the backend via fire-and-forget
+`trackAnalyticsCollect` calls (`state/player.tsx`). It accrues real play
+time from `timeupdate` advances — capped per tick so a seek isn't counted
+and never accruing while paused — and sends a sample at play start (zero
+seconds), once every 15s of accrued playback, and a final partial sample
+on pause, on switching tracks, and on page unload (the last via
+`sendBeacon` so it outlives teardown). Each sample carries the delta
+since the last one, the current playback mode, and the delivered codec
+(`delivery.mimeType`), so the backend can sum true listen time and count
+plays. Dropped samples are ignored — analytics never disturb playback.
+
 ## Shuffle
 
 A shuffle button (`Shuffle`) leads the playback bar's transport row, just
