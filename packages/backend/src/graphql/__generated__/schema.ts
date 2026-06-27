@@ -18,6 +18,7 @@ import { artwork as trackArtworkResolver, delivery as trackDeliveryResolver, dup
 import { tracks as playbackQueueTracksResolver, tracksQueued as playbackQueueTracksQueuedResolver, playbackQueue as queryPlaybackQueueResolver, queueAppend as mutationQueueAppendResolver, queueClear as mutationQueueClearResolver, queueRemove as mutationQueueRemoveResolver, queueReorder as mutationQueueReorderResolver } from "./../playback-queue.js";
 import { search as querySearchResolver } from "./../search.js";
 import { artworkClear as mutationArtworkClearResolver, artworkDownload as mutationArtworkDownloadResolver } from "./../artwork-mutations.js";
+import { trackAnalyticsCollect as mutationTrackAnalyticsCollectResolver } from "./../track-analytics-mutations.js";
 import { trackClearTranscodeCache as mutationTrackClearTranscodeCacheResolver, trackUpdate as mutationTrackUpdateResolver } from "./../track-mutations.js";
 import { trackManifestSubscription as subscriptionTrackManifestResolver } from "./../track-manifest.js";
 async function assertNonNull<T>(value: T | Promise<T>): Promise<T> {
@@ -1178,6 +1179,30 @@ export function getSchema(config: SchemaConfig): GraphQLSchema {
                     },
                     resolve(_source, args) {
                         return mutationQueueReorderResolver(args.id, args.trackId, args.fromIndex, args.toIndex);
+                    }
+                },
+                trackAnalyticsCollect: {
+                    description: "Record one playback-analytics sample for a track: the seconds actually played since the caller's previous sample (0 when sent at play start), the listener's selected playback mode, and the MIME type of the audio being delivered. Fire-and-forget from the player \u2014 a dropped sample never disturbs playback.",
+                    name: "trackAnalyticsCollect",
+                    type: new GraphQLNonNull(VoidType),
+                    args: {
+                        outputCodec: {
+                            description: "MIME type of the bytes the player is receiving, which carries the output codec.",
+                            type: new GraphQLNonNull(GraphQLString)
+                        },
+                        playTimeSeconds: {
+                            type: new GraphQLNonNull(GraphQLInt)
+                        },
+                        requestedMode: {
+                            description: "Playback mode the listener has selected (`SMART`, `ORIGINAL` or `ADAPTIVE`).",
+                            type: new GraphQLNonNull(GraphQLString)
+                        },
+                        trackId: {
+                            type: new GraphQLNonNull(GraphQLID)
+                        }
+                    },
+                    resolve(_source, args, context) {
+                        return mutationTrackAnalyticsCollectResolver(args.trackId, args.playTimeSeconds, args.requestedMode, args.outputCodec, context);
                     }
                 },
                 trackClearTranscodeCache: {

@@ -311,6 +311,21 @@ type Mutation {
   """
   queueReorder(fromIndex: Int!, id: ID!, toIndex: Int!, trackId: ID!): PlaybackQueue!
   """
+  Record one playback-analytics sample for a track: the seconds actually played since the caller's previous sample (0 when sent at play start), the listener's selected playback mode, and the MIME type of the audio being delivered. Fire-and-forget from the player — a dropped sample never disturbs playback.
+  """
+  trackAnalyticsCollect(
+    """
+    MIME type of the bytes the player is receiving, which carries the output codec.
+    """
+    outputCodec: String!
+    playTimeSeconds: Int!
+    """
+    Playback mode the listener has selected (`SMART`, `ORIGINAL` or `ADAPTIVE`).
+    """
+    requestedMode: String!
+    trackId: ID!
+  ): Void!
+  """
   Discard every cached transcode of one track — all formats and qualities — so the next playback request produces a fresh encode from the source.
   
   For recovering a track that was delivered as unplayable bytes: clearing the cache and re-fetching its manifest replaces them. Idempotent; succeeds whether or not anything was cached.

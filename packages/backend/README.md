@@ -246,6 +246,24 @@ and are served by `GET /artwork/:id`.
 `message` when `inProgress` is false — retry by calling
 `artworkDownload` again). Null means art was never requested.
 
+## Playback analytics
+
+The web player reports how much of each track is actually heard.
+`Mutation.trackAnalyticsCollect(trackId, playTimeSeconds, requestedMode,
+outputCodec)` appends one row to `TrackAnalytics`: `playTimeSeconds` is
+the **delta** of real playback since the caller's previous sample (0 for
+the sample the player sends at play start), so summing it for a track
+gives true total listen time, and counting the zero-second start samples
+gives its play count. Each sample also records the listener's playback
+mode (`SMART`/`ORIGINAL`/`ADAPTIVE`) and the delivered MIME type (the
+output codec). Calls are fire-and-forget — a dropped sample never
+disturbs playback.
+
+`clientIp` is taken from `request.ip`. The app runs with Fastify's
+`trustProxy` on, so behind a reverse proxy this is the real client from
+`X-Forwarded-For` rather than the proxy address — set the proxy to send
+a trustworthy `X-Forwarded-For`.
+
 ## Endpoints
 
 - `GET /healthz` — liveness probe; returns `{ "status": "ok" }`.

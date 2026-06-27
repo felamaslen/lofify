@@ -18,7 +18,7 @@ import { type Capabilities, capabilities, type LossyPreference } from '../lib/ca
 import { clearCachedTrack, readCachedManifest, storeCachedManifest } from '../lib/chunk-cache.ts';
 import { setFaviconBadge } from '../lib/favicon.ts';
 import { graphql, type ResultOf, type VariablesOf } from '../lib/gql.ts';
-import { gqlRequest } from '../lib/gql-request.ts';
+import { gqlBeacon, gqlRequest } from '../lib/gql-request.ts';
 import { type CreatePlayerOptions, MsePlayer, type QueuedTrack } from '../lib/mse.ts';
 import { subscribe as subscribeToStream } from '../lib/sse-client.ts';
 import { libraryFilterVars } from './library-filter.tsx';
@@ -130,6 +130,29 @@ const TrackClearTranscodeCacheDocument = graphql(`
     }
   }
 `);
+
+const TrackAnalyticsCollectDocument = graphql(`
+  mutation TrackAnalyticsCollect(
+    $trackId: ID!
+    $playTimeSeconds: Int!
+    $requestedMode: String!
+    $outputCodec: String!
+  ) {
+    trackAnalyticsCollect(
+      trackId: $trackId
+      playTimeSeconds: $playTimeSeconds
+      requestedMode: $requestedMode
+      outputCodec: $outputCodec
+    ) {
+      __typename
+    }
+  }
+`);
+
+/** Send a playback-analytics sample once this many seconds of actual playback have accrued since the last one. */
+const ANALYTICS_INTERVAL_S = 15;
+/** Cap on a single `timeupdate`'s playhead advance counted as listening, so a seek's jump isn't mistaken for play time. */
+const ANALYTICS_MAX_STEP_S = 4;
 
 /** Derived from the `TrackById` variables so the frontend's enum strings can't drift from the GraphQL schema. */
 export type TrackFormat = NonNullable<VariablesOf<typeof TrackByIdDocument>['format']>;
@@ -350,6 +373,16 @@ class Player {
   /** In-flight queue-head consumption. Later steps and successor resolutions await it, so they never read the queue with a consumed head still present (which would replay it — and the same-id loop guard would misfire). */
   private pendingConsumption: Promise<void> | null = null;
 
+  /** The track the current analytics play-session is measuring, or null when none is open. */
+  private analyticsTrackId: string | null = null;
+  /** Playback mode and delivered codec captured when the session opened, so a sample reports the track's own values even after the snapshot has moved to the next track. */
+  private analyticsMode: QualityMode = 'SMART';
+  private analyticsCodec = '';
+  /** Seconds of actual playback accrued since the last sample, flushed at `ANALYTICS_INTERVAL_S`. */
+  private analyticsAccrued = 0;
+  /** Playhead at the previous `timeupdate`, to measure the next advance against. */
+  private analyticsLastPosition = 0;
+
   constructor(
     private readonly audio: HTMLAudioElement,
     private readonly queryClient: QueryClient,
@@ -403,6 +436,9 @@ class Player {
         this.mse?.refreshNext();
       }),
     );
+    const onPageHide = () => this.flushAnalyticsBeacon();
+    window.addEventListener('pagehide', onPageHide);
+    this.detachers.push(() => window.removeEventListener('pagehide', onPageHide));
     this.setupMediaSession();
     void this.restoreFromUrl();
     return () => this.dispose();
@@ -444,16 +480,21 @@ class Player {
     this.on('play', () => {
       this.set({ isPlaying: true });
       this.setMediaPlaybackState('playing');
+      const trackId = this.snapshot.current?.id;
+      if (trackId) this.beginAnalyticsPlay(trackId);
     });
     this.on('pause', () => {
       this.set({ isPlaying: false });
       this.setMediaPlaybackState('paused');
       this.flushUrl();
+      this.flushAnalytics();
     });
     this.on('timeupdate', () => {
-      this.set({ positionSeconds: this.mse?.currentPosition() ?? 0 });
+      const position = this.mse?.currentPosition() ?? 0;
+      this.set({ positionSeconds: position });
       this.updateMediaPosition();
       this.scheduleUrlWrite();
+      this.accrueAnalytics(position);
     });
     const onBuffered = () =>
       this.set({
@@ -698,7 +739,12 @@ class Player {
     }
 
     this.updateMediaPosition();
-    if (autoPlay) await this.audio.play().catch(() => undefined);
+    if (autoPlay) {
+      // Selecting a track while another is already playing reuses the element without a fresh
+      // `play` event, so open the session here; the guard makes the duplicate from `play` a no-op.
+      this.beginAnalyticsPlay(track.id);
+      await this.audio.play().catch(() => undefined);
+    }
   }
 
   /** Bundle of construction-time callbacks the player gives mse. Stable across `init` calls — same hooks apply whether mse reuses or rebuilds. */
@@ -835,6 +881,63 @@ class Player {
     });
     this.updateMediaMetadata(track);
     writePlaybackToUrl(track.id, position);
+    // Gapless auto-advance plays on without a fresh `play` event, so open the new track's
+    // analytics session here (which also closes the one that just ended).
+    this.beginAnalyticsPlay(track.id);
+  }
+
+  /** Open an analytics play-session for `trackId`, finalising any open one first and sending the immediate play-start sample. A no-op when that track's session is already open, so a resume after pause continues the same session rather than recounting the play. */
+  private beginAnalyticsPlay(trackId: string): void {
+    if (this.analyticsTrackId === trackId) return;
+    this.flushAnalytics();
+    this.analyticsTrackId = trackId;
+    this.analyticsMode = this.snapshot.qualityMode;
+    this.analyticsCodec = this.snapshot.delivery?.mimeType ?? '';
+    this.analyticsAccrued = 0;
+    this.analyticsLastPosition = this.snapshot.positionSeconds;
+    this.collectAnalytics(trackId, 0);
+  }
+
+  /** Fold one `timeupdate`'s playhead advance into the accrued play time and flush a sample once a full interval has built up. Backward and outsized jumps (seeks) are dropped, so only real listening counts. */
+  private accrueAnalytics(position: number): void {
+    if (this.analyticsTrackId == null) return;
+    const delta = position - this.analyticsLastPosition;
+    this.analyticsLastPosition = position;
+    if (delta > 0 && delta <= ANALYTICS_MAX_STEP_S) this.analyticsAccrued += delta;
+    if (this.analyticsAccrued >= ANALYTICS_INTERVAL_S) this.flushAnalytics();
+  }
+
+  /** Send the play time accrued since the last sample (rounded), if any. Drives the per-interval samples and the partial sample on pause or track change. */
+  private flushAnalytics(): void {
+    if (this.analyticsTrackId == null) return;
+    const seconds = Math.round(this.analyticsAccrued);
+    if (seconds <= 0) return;
+    this.collectAnalytics(this.analyticsTrackId, seconds);
+    this.analyticsAccrued -= seconds;
+  }
+
+  /** Send the accrued partial sample during page unload via a beacon, which outlives the teardown a `fetch` wouldn't. */
+  private flushAnalyticsBeacon(): void {
+    if (this.analyticsTrackId == null) return;
+    const seconds = Math.round(this.analyticsAccrued);
+    if (seconds <= 0) return;
+    gqlBeacon(TrackAnalyticsCollectDocument, {
+      trackId: this.analyticsTrackId,
+      playTimeSeconds: seconds,
+      requestedMode: this.analyticsMode,
+      outputCodec: this.analyticsCodec,
+    });
+    this.analyticsAccrued -= seconds;
+  }
+
+  /** Fire-and-forget one analytics sample for the current session; a dropped sample never disturbs playback. */
+  private collectAnalytics(trackId: string, playTimeSeconds: number): void {
+    void gqlRequest(TrackAnalyticsCollectDocument, {
+      trackId,
+      playTimeSeconds,
+      requestedMode: this.analyticsMode,
+      outputCodec: this.analyticsCodec,
+    }).catch(() => {});
   }
 
   /** Re-target the playing track at a new tier/preference. `MsePlayer.init` decides internally whether the change is a live tier swap (same id, same codec — no gap) or a codec-crossing rebuild (different codec) — we just hand it the freshly-resolved delivery, then refresh snapshot state from the new mse and resume playback if it was running. */
